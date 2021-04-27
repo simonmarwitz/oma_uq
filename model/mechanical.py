@@ -491,7 +491,7 @@ class Mechanical(object):
 
         if num_modes is None:
             num_modes = max(1, int(np.floor(num_nodes / 10) - 1))  # choose at least 1 mode
-            logging.debug(f'Choosing num_modes as {num_modes} based on the number of nodes {num_nodes}')
+            logging.info(f'Choosing num_modes as {num_modes} based on the number of nodes {num_nodes}')
         assert num_modes <= num_nodes - 1
         if num_modes > num_nodes / 10:
             logging.warning(f'The number of modes {num_modes} should be less/equal than 0.1 x number of nodes (= {num_nodes}).')
@@ -1033,6 +1033,8 @@ class Mechanical(object):
             quant_ind = ['d', 'v', 'a'].index(out_quant[0])
 
             ref_nodes, imp_forces, imp_times, imp_durs = impulses
+            for ref_node in ref_nodes:
+                assert isinstance(ref_node, (int,np.int64))
             num_impulses = len(ref_nodes)
             num_ref_nodes = len(ref_nodes)
             num_meas_nodes = len(self.meas_nodes)
@@ -3379,7 +3381,7 @@ def student_data_part2(jid, result_dir, omega, zeta, dt_fact, num_cycles, f_scal
     power = np.mean(array[:, 1] ** 2)
 
     # decimate
-    array = array[1::6, :]
+    array = array[1::6, :] # why start at 1 here?
     N = array.shape[0]
     # add noise
     noise_power = power / snr
@@ -3666,9 +3668,9 @@ def generate_mdof_time_hist(ansys, num_nodes=None, damping=None, nl_stiff=None, 
     elif num_meas_nodes is not None and meas_nodes is None:
         # step = int(np.floor(num_nodes/num_meas_nodes))
         # meas_nodes = np.concatenate(([1],np.arange(step,num_nodes+1,step)))
-        meas_nodes = np.rint(np.linspace(1, num_nodes, int(num_meas_nodes)))
+        meas_nodes = np.rint(np.linspace(1, num_nodes, int(num_meas_nodes + 1))).astype(int)
         if len(meas_nodes) != (num_meas_nodes + 1):
-            print(f'Warning number of meas_nodes generated {len(meas_nodes)} differs from number of meas_nodes specified {num_meas_nodes}')
+            print(f'Warning number of meas_nodes generated {len(meas_nodes)} differs from number of meas_nodes specified {num_meas_nodes+1}')
     elif num_meas_nodes is not None and meas_nodes is not None:
         raise RuntimeError(f'You cannot provide meas_nodes {meas_nodes} and num_meas_nodes {num_meas_nodes} at the same time')
 
@@ -4403,15 +4405,17 @@ def verify_numerical_accuracy(ansys, m=None, d=1, r=1):
 
 def IRF_to_ssi(ansys=None, jid=None, **kwargs):
 
-    from SSICovRef import BRSSICovRef
+    from core.SSICovRef import BRSSICovRef
 
-    from PreprocessingTools import PreprocessData, GeometryProcessor
+    from core.PreprocessingTools import PreprocessData, GeometryProcessor
 
     # Modal Analysis PostProcessing Class e.g. Stabilization Diagram
-    from StabilDiagram import StabilCalc, StabilPlot, StabilGUI, start_stabil_gui
+    from core.StabilDiagram import StabilCalc, StabilPlot
+    from GUI.StabilGUI import StabilGUI, start_stabil_gui
 
     # Modeshape Plot
-    from PlotMSH import ModeShapePlot, start_msh_gui
+    from core.PlotMSH import ModeShapePlot
+    from GUI.PlotMSHGUI import start_msh_gui
 
     if ansys is not None:
         omega_d = np.pi / 2

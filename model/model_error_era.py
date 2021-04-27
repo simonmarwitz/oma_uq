@@ -1,17 +1,15 @@
 import numpy as np
 import matplotlib
-matplotlib.use('qt5Agg')
-import matplotlib.pyplot as plot
-# plot.ioff()
+import matplotlib.pyplot as plt
 import os
 import logging
-logging.basicConfig(level=logging.INFO)
-
 from model.mechanical import generate_mdof_time_hist, start_ansys
 from model.acquisition import Acquire
-from SSICovRef import BRSSICovRef
-from PreprocessingTools import PreprocessData, GeometryProcessor
+from core.SSICovRef import BRSSICovRef
+from core.PreprocessingTools import PreprocessData, GeometryProcessor
 
+matplotlib.use('qt5Agg')
+logging.basicConfig(level=logging.INFO)
 # Modal Analysis PostProcessing Class e.g. Stabilization Diagram
 #from StabilDiagram import StabilCalc, StabilPlot, StabilGUI, start_stabil_gui
 
@@ -19,37 +17,38 @@ from PreprocessingTools import PreprocessData, GeometryProcessor
 #from PlotMSH import ModeShapePlot, start_msh_gui
 
 
-print_context_dict = {'text.usetex':True,
-                     'text.latex.preamble':"\\usepackage{siunitx}\n \\usepackage{xfrac}",
-                     'font.size':10,
-                     'legend.fontsize':10,
-                     'xtick.labelsize':10,
-                     'ytick.labelsize':10,
-                     'axes.labelsize':10,
-                     'font.family':'serif',
-                     'legend.labelspacing':0.1,
-                     'axes.linewidth':0.5,
-                     'xtick.major.width':0.2,
-                     'ytick.major.width':0.2,
-                     'xtick.major.width':0.5,
-                     'ytick.major.width':0.5,
-                     'figure.figsize':(5.906, 5.906 / 1.618),
-                     'figure.dpi':100}
+print_context_dict = {'text.usetex': True,
+                      'text.latex.preamble': "\\usepackage{siunitx}\n \\usepackage{xfrac}",
+                      'font.size': 10,
+                      'legend.fontsize': 10,
+                      'xtick.labelsize': 10,
+                      'ytick.labelsize': 10,
+                      'axes.labelsize': 10,
+                      'font.family': 'serif',
+                      'legend.labelspacing': 0.1,
+                      'axes.linewidth': 0.5,
+                      'xtick.major.width': 0.2,
+                      'ytick.major.width': 0.2,
+                      'xtick.major.width': 0.5,
+                      'ytick.major.width': 0.5,
+                      'figure.figsize': (5.906, 5.906 / 1.618),
+                      'figure.dpi': 100}
 
 # must be manually set due to some matplotlib bugs
 if print_context_dict['text.usetex']:
     # plt.rc('text.latex',unicode=True)
-    plot.rc('text', usetex=True)
-    plot.rc('text.latex', preamble="\\usepackage{siunitx}\n \\usepackage{xfrac}")
+    plt.rc('text', usetex=True)
+    plt.rc('text.latex', preamble="\\usepackage{siunitx}\n \\usepackage{xfrac}")
 
 
-def model_error_ERA_SSI(jid, result_dir, working_dir, 
+def model_error_ERA_SSI(jid, result_dir, working_dir,
                         num_nodes, num_modes, damping, freq_scale,
-                        imp_scale, 
+                        imp_scale,
                         dt_fact, num_cycles, num_ref_nodes, num_meas_nodes,
                         nl_stiff=None, out_quant=['d'],
-                        snr_db, dec_fact, 
-                        model_order,
+                        snr_db=0, dec_fact=1,
+                        model_order=None,
+                        skip_existing=True,
                         **kwargs):
     '''
     A function to evaluate the model error from numerical structural 
@@ -121,7 +120,6 @@ def model_error_ERA_SSI(jid, result_dir, working_dir,
             s     timesteps
             
     
-    
     postprocessing outside of this function might include: 
         frequency differences, 
         damping differences, 
@@ -132,32 +130,74 @@ def model_error_ERA_SSI(jid, result_dir, working_dir,
     
     CONTINUE HERE: Implement acqusition, test/verify
     '''
+    ref_nodes = np.rint(np.linspace(2, num_nodes, int(num_ref_nodes))).astype(int)
+     # start at 2 since 1 usually is the constrained node
+    
+    if not os.path.exists(os.path.join(result_dir, 'mechanical.npz')) or not skip_existing:
+        ansys = start_ansys(working_dir, jid)
+    
+        mech = generate_mdof_time_hist(ansys, num_nodes=num_nodes, num_modes=num_modes,
+                                       damping=damping, freq_scale=freq_scale,
+                                       num_meas_nodes=num_meas_nodes,
+                                       nl_stiff=nl_stiff,
+                                       just_build=True)
         
-    ansys = start_ansys(working_dir, jid)
-
-    mech = generate_mdof_time_hist(ansys, num_nodes=num_nodes, num_modes=num_modes, 
-                                   damping=damping, freq_scale=freq_scale, 
-                                   num_meas_nodes=num_meas_nodes,
-                                   nl_stiff=nl_stiff,
-                                   just_build=True)
+        dt_fact, deltat, num_cycles, timesteps, _ = mech.signal_parameters(dt_fact=dt_fact, num_cycles=num_cycles)
     
-    dt_fact, deltat, num_cycles, timesteps, _ = mech.signal_parameters(dt_fact=dt_fact, num_cycles=num_cycles)
-
+        
+        imp_forces = np.ones((num_ref_nodes,)) * imp_scale
+        imp_times = np.ones((num_ref_nodes,)) * deltat
+        imp_durs = np.ones((num_ref_nodes,)) * timesteps * deltat
+        
+        t_vals, IRF_matrix, F_matrix, ener_mat, amp_mat = mech.impulse_response([ref_nodes, imp_forces, imp_times, imp_durs], form='step', mode='matrix', deltat=deltat, dt_fact=dt_fact, timesteps=timesteps, num_cycles=num_cycles, out_quant=out_quant, **kwargs)
+        tau_max = timesteps
+        frequencies_comp, damping_comp, modeshapes_comp = mech.numerical_response_parameters()
+        meas_nodes = mech.meas_nodes
+        
+        savedict = {'dt_fact': dt_fact,
+                    'deltat': deltat,
+                    'num_cycles': num_cycles,
+                    'timesteps': timesteps,
+                    't_vals': t_vals,
+                    'IRF_matrix': IRF_matrix,
+                    'F_matrix': F_matrix,
+                    'ener_mat': ener_mat,
+                    'amp_mat': amp_mat,
+                    'tau_max': tau_max,
+                    'frequencies_comp': frequencies_comp,
+                    'damping_comp': damping_comp,
+                    'modeshapes_comp': modeshapes_comp,
+                    'meas_nodes': meas_nodes}
+        np.savez(os.path.join(result_dir, 'mechanical.npz'), **savedict)
+    else:
+        arr = np.load(os.path.join(result_dir, 'mechanical.npz'))
+        dt_fact = arr['dt_fact']
+        deltat = arr['deltat']
+        num_cycles = arr['num_cycles']
+        timesteps = arr['timesteps']
+        t_vals = arr['t_vals']
+        IRF_matrix = arr['IRF_matrix']
+        F_matrix = arr['F_matrix']
+        ener_mat = arr['ener_mat']
+        amp_mat = arr['amp_mat']
+        tau_max = arr['tau_max']
+        frequencies_comp = arr['frequencies_comp']
+        damping_comp = arr['damping_comp']
+        modeshapes_comp = arr['modeshapes_comp']
+        meas_nodes = arr['meas_nodes']
     
-    ref_nodes =  np.rint(np.linspace(1, num_nodes, int(num_ref_nodes)))
-    imp_forces = np.ones((num_ref_nodes,))*imp_scale
-    imp_times = np.ones((num_ref_nodes,))*deltat
-    imp_durs = np.ones((num_ref_nodes,))*timesteps * deltat
+    # for rnode_ind, rnod in enumerate(ref_nodes):
+        # plt.figure()
+        # for mnode_ind, mnode in enumerate(meas_nodes):
+            # if not mnode_ind: continue
+            #
+            # plt.plot(t_vals,IRF_matrix[mnode_ind,rnode_ind,:], label=f'{rnod}-{mnode}')
+    # plt.legend()
+    # plt.show()
     
-    t_vals, IRF_matrix, F_matrix, ener_mat, amp_mat = mech.impulse_response([ref_nodes, imp_forces, imp_times, imp_durs], form='step', mode='matrix', deltat=deltat, dt_fact=dt_fact, timesteps=timesteps, num_cycles=num_cycles, out_quant=out_quant, **kwargs)
-    tau_max = timesteps
-    frequencies_comp, damping_comp, modeshapes_comp = mech.numerical_response_parameters()
-    meas_nodes = mech.meas_nodes
-
-
     acquisition = Acquire(t_vals, IRF_matrix=IRF_matrix)
     power_signal, power_noise = acquisition.add_noise(snr_db)
-    dt,_ = acquisition.sample(f_max=frequencies_comp[-1], fs_factor=2.5, filt_type='bessel', filt_ord=4)
+    dt,_ = acquisition.sample(f_max=frequencies_comp[-1], fs_factor=2.5)
     t_vals,IRF_matrix = acquisition.get_signal()
     
     
@@ -210,23 +250,53 @@ def model_error_ERA_SSI(jid, result_dir, working_dir,
 
     return frequencies_comp, damping_comp, modeshapes_comp, mech.k_vals, mech.eps_duff_vals, mech.sl_force_vals, mech.hyst_vals,ener_mat, power_signal, power_noise, frequencies_id, damping_id, modeshapes_id, modal_contributions, deltat, timesteps
 
-    plot.figure()
-    plot.plot(frequencies_comp, ls='none', marker='+')
-    plot.plot(frequencies_id, ls='none', marker='x')
-    plot.figure()
-    plot.plot(damping * 100, ls='none', marker='+')
-    plot.plot(damping_id, ls='none', marker='x')
-    plot.figure()
-    plot.plot(modeshapes_comp)
-    plot.plot(modeshapes_id, ls='dotted')
-    plot.figure()
+    plt.figure()
+    plt.plot(frequencies_comp, ls='none', marker='+')
+    plt.plot(frequencies_id, ls='none', marker='x')
+    plt.figure()
+    plt.plot(damping * 100, ls='none', marker='+')
+    plt.plot(damping_id, ls='none', marker='x')
+    plt.figure()
+    plt.plot(modeshapes_comp)
+    plt.plot(modeshapes_id, ls='dotted')
+    plt.figure()
     total_energy = np.sum(ener_mat)
-    plot.plot(frequencies_comp, np.sum(ener_mat, axis=0) / total_energy, ls='none', marker='+')
-    plot.plot(frequencies_id, modal_contributions, ls='none', marker='x')
-    plot.show()
+    plt.plot(frequencies_comp, np.sum(ener_mat, axis=0) / total_energy, ls='none', marker='+')
+    plt.plot(frequencies_id, modal_contributions, ls='none', marker='x')
+    plt.show()
 
 def main():
-    pass
+    import uuid
+    
+    working_dir = '/dev/shm/womo1998/'
+    os.makedirs(working_dir, exist_ok=True)
+    jid = str(uuid.uuid4()).split('-')[-1]
+    result_dir = '/vegas/scratch/womo1998/modal_uq/model_error_era/'
+    num_nodes = 10
+    num_modes = 3
+    damping = 0.01
+    freq_scale = 1
+    
+    num_cycles = 15
+    dt_fact = 0.02
+    imp_scale = 1e8
+    num_ref_nodes = 3
+    num_meas_nodes = 8
+    nl_stiff=None
+    out_quant = ['d']
+    snr_db = 20
+    dec_fact = 2.5/dt_fact
+    model_order = 3*num_nodes
+        
+    model_error_ERA_SSI(jid, result_dir, working_dir, 
+                        num_nodes, num_modes, damping, freq_scale, 
+                        imp_scale, 
+                        dt_fact, num_cycles, 
+                        num_ref_nodes, num_meas_nodes, 
+                        nl_stiff, out_quant, 
+                        snr_db, dec_fact, 
+                        model_order,
+                        skip_existing=True)
 
 if __name__ == '__main__':
     main()
