@@ -2,18 +2,44 @@
 models the signal acquisition:
 
 
+
+
 '''
 
 import numpy as np
-#import scipy.signal
+import scipy.signal
 import matplotlib.pyplot as plt
+import os
 
 
 class Acquire(object):
-
-    def __init__(self, t_vals, signal=None, IRF_matrix=None):
+    '''
+    A class for processing a signal, simulating ADC signal acquisition:
+        apply sensor FRFs
+        add measurement noise
+        sample (apply lowpass AA filter and downsample)
+    
+    Additionally, characteristics of the generating system and the signal
+    itself are modified according to the respective operations:
+        - number of modes -> changes due to downsampling
+        - modal frequencies -> reduces to new number of modes
+        - modal damping -> reduces to new number of modes, might change due to windowing?
+        - mode shapes -> reduces to new number of modes, should not be affected, because operators are applied equally to all channels
+        - modal amplitudes -> reduces to new number of modes, changes according to sensor frf and SNR
+        - signal-to-noise ratio -> changes according to the amount of noise added
+        - decimation noise -> results from imperfect filtering before sample reduction
+        - signal energies -> might change due to frf, noise and sampling
+        - ...
+        
+    '''
+    def __init__(self, t_vals, signal=None, IRF_matrix=None, 
+                 modal_frequencies=None, modal_damping=None, mode_shapes=None
+                 ):
         '''
         input a synthethised signal (ambient response, impulse response) and corresponding t_vals 
+        
+        
+        
         '''
         if IRF_matrix is not None:
             assert signal is None
@@ -28,12 +54,98 @@ class Acquire(object):
         self.num_channels = signal.shape[0]
         self.num_timesteps = signal.shape[1]
         
+        self.deltat = np.mean(np.diff(t_vals))
+        
         assert self.num_timesteps == len(t_vals)
         
         self.t_vals = t_vals
         self.signal = signal
         
+        if modal_frequencies is not None:
+            assert isinstance(modal_frequencies, (list, tuple, np.ndarray))
+            assert len(modal_frequencies.shape) == 1
+            
+            self.modal_frequencies = modal_frequencies
+            self.num_modes = modal_frequencies.size
+        
+        if modal_damping is not None:
+            assert isinstance(modal_damping, (list, tuple, np.ndarray))
+            assert len(modal_damping.shape) == 1
+            
+            self.modal_damping = modal_damping
+            self.num_modes = modal_damping.size
+            
+        if mode_shapes is not None:
+            assert isinstance(mode_shapes, (list, tuple, np.ndarray))
+            assert len(mode_shapes.shape) == 2 # needs reduced mode shapes (channel,mode) type, not (node, dof, mode) 3D type
+            
+            self.mode_shapes = mode_shapes
+            self.num_modes = mode_shapes.shape[1]
+            assert mode_shapes.shape[0] == self.num_channels
+            
+        return cls
     
+    @classmethod
+    def init_from_mech(cls, mech):
+        
+        '''
+        Extract the relevant parameters from a mechanical object
+        and keeps a reference to that object?
+        
+        That assumes, only one type of signal (free decay, ambient, impulse)
+        is present in the mechanical object (uses the first encountered type)
+        
+        '''
+        
+        if mech.state[5]:
+            modal_frequencies = mech.frequencies_comp
+            modal_damping = mech.modal_damping_comp
+            mode_shapes = mech.mode_shapes_comp
+        elif mech.state[4]:
+            modal_frequencies = mech.damped_frequencies
+            modal_damping = mech.modal_damping
+            mode_shapes = mech.damped_mode_shapes
+        else:
+            modal_frequencies = None
+            modal_damping = None
+            mode_shapes = None
+        
+        if mech.state[1]:
+            t_vals = mech.t_vals_decay
+            signal = mech.resp_hist_decay
+            acqui = cls(t_vals, signal, None, modal_frequencies, modal_damping, mode_shapes)
+            
+        if mech.state[2]:
+            #mech.inp_hist_amb
+            t_vals = mech.t_vals_amb
+            signal = mech.resp_hist_amb
+            acqui = cls(t_vals, signal, None, modal_frequencies, modal_damping, mode_shapes)
+
+        if mech.state[3]:
+            #mech.inp_hist_imp
+            t_vals = mech.t_vals_imp
+            signal = mech.resp_hist_imp
+            modal_energies = mech.modal_imp_energies
+            modal_amplitudes = mech.modal_imp_amplitudes
+            acqui = cls(t_vals, signal, None, modal_frequencies, modal_damping, mode_shapes)
+            
+        if mech.state[6]:
+            t_vals = mech.t_vals_imp
+            IRF_matrix = mech.IRF_matrix
+            #mech.imp_hist_imp_matrix
+            modal_energies = mech.modal_imp_energy_matrix
+            modal_amplitudes = mech.modal_imp_amplitude_matrix
+            acqui = cls(t_vals, None, IRF_matrix, modal_frequencies, modal_damping, mode_shapes)
+        
+        #mech.trans_params
+        assert acqui.deltat == mech.deltat
+        assert acqui.num_timesteps == mech.timesteps
+                
+        if mech.state[4] or mech.state[5]:
+            assert acqui.num_modes == mech.num_modes
+        
+        return acqui
+            
     def apply_FRF(self, type=None):
         '''
         (- apply sensor FRF (get frfs from our real sensors: 10V/g, 5V/g, small ones, geophones, laser-vib, won't use displacement) by discrete convolution in time domain)
@@ -312,6 +424,88 @@ def uq_dec_noise():
         dm.post_process_samples(db='merged',scales = ['log','linear','linear','linear','linear'])
         dm.clear_locks()
         
+        
+def main():
+    from model import mechanical
+    
+    skip_existing = True
+    working_dir = '/dev/shm/womo1998/'
+    result_dir = '/vegas/scratch/womo1998/modal_uq/'
+    jid = 'filter_example'
+    #jid='acquire_example'
+    
+    ansys = mechanical.Mechanical.start_ansys(working_dir, jid)
+    
+    num_nodes = 21
+    damping = 0.01
+    num_modes = 20
+    dt_fact = 0.01
+    num_cycles = 10
+    meas_nodes = list(range(1, 22))
+    
+    # load/generate  mechanical object:
+    if True:
+        # ambient response of a 20 dof rod,
+        f_scale = 1000
+        d0 = None
+        savefolder = os.path.join(result_dir, jid, 'ambient')
+    else:
+        # impulse response of a 20 dof rod
+        f_scale = None
+        d0 = 1
+        savefolder = os.path.join(result_dir, jid, 'impulse')
+        
+    if not os.path.exists(os.path.join(savefolder, f'{jid}_mechanical.npz')) or not skip_existing:
+        mech = mechanical.generate_mdof_time_hist(ansys=ansys, num_nodes=num_nodes, damping=damping,
+                                                  num_modes=num_modes, d0=d0, f_scale=f_scale,
+                                                  dt_fact=dt_fact, num_cycles=num_cycles,
+                                                  meas_nodes=meas_nodes,)
+        mech.save(savefolder)
+    else:
+        mech = mechanical.Mechanical.load(jid, savefolder)
+                
+    # pass mechanical object to acquire
+    acqui = Acquire(mech)
+    
+    if True:
+        # pass to PreProcessingTools and create filter example with it
+        from core import PreprocessingTools
+        figt, axest = plt.subplots(2, 2, sharex=True, sharey=True)
+        axest = axest.flat
+        figf, axesf = plt.subplots(2, 2, sharex=True, sharey=True)
+        axesf = axesf.flat
+        for filt, order, cutoff, ax1, ax2 in [('moving_average', 5, 58.19, axest[0], axesf[0]),
+                                                ('brickwall', 5, 58.19, axest[1], axesf[1]),
+                                                ('butterworth', 5, 58.19, axest[2], axesf[2]),
+                                                ('cheby1', 5, 58.19, axest[3], axesf[3])]:
+            
+            prep_data = PreprocessingTools.PreprocessData(**acqui.to_preprocessdata())
+            prep_data.filter_data(filt,order,cutoff)
+            prep_data.plot_data(ax1)
+            prep_data.plot_psd(ax2)
+        
+        
+        
+        
+    else:
+        # apply sensor frf
+        acqui.apply_FRF(type)
+        
+        # add sensor / cabling  noise
+        acqui.add_noise(snr_db, noise_power)
+        
+        # decimate and estimate decimation noise / quantization noise
+        acqui.sample(f_max, fs_factor)
+        
+        prep_data = PreprocessingTools.PreprocessData(**acqui.to_preprocessdata())
+        
+        nodes, lines, chan_dofs = mech.get_geometry()
+        
+        geometry = PreprocessingTools.GeometryProcessor(nodes, lines)
+        
+    
+    # 
+        
 if __name__ == '__main__':
     # N=8192
     # dec_fact=4
@@ -319,5 +513,6 @@ if __name__ == '__main__':
     # nyq_rat=2.5
     # system_signal_decimate(N,dec_fact, numtap_fact,nyq_rat, True)
     # plt.show()
-    uq_dec_noise()
+    # uq_dec_noise()
+    main()
     
