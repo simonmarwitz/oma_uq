@@ -648,8 +648,8 @@ class DataManager(object):
             names = data.keys()
             #print(numdata,numvars,names)
             
-            fig, axes = plt.subplots(nrows=numvars, ncols=numvars, figsize=(
-                10, 10), sharex='col', sharey='row', squeeze=False)
+            fig, axes = plt.subplots(nrows=numvars, ncols=numvars, figsize=
+                                     kwargs.pop('figsize',(10, 10)), sharex='col', sharey='row', squeeze=False)
 
             for ax in axes.flat:
                 # Hide all ticks and labels
@@ -664,7 +664,7 @@ class DataManager(object):
                     ax.xaxis.set_ticks_position('bottom')
                     ax.xaxis.set_visible(True)
 
-            data_ranges = data.max()-data.min()
+            data_limits = {}
             
             all_bins={}
             
@@ -690,12 +690,15 @@ class DataManager(object):
                     bin_widths = (bin_centers[1:] - bin_centers[:-1]) / 2
                     bins = np.concatenate(
                         (bin_centers[0:1] - bin_widths[0:1], bin_centers[:-1] + bin_widths, bin_centers[-1:] + bin_widths[-1:]))
+                    range_ = None
                 else:
+                    data_limits[name] = np.nanquantile(data[name], [0.02, 0.98])
                     bin_centers=None
                     bins = nbins
+                    range_ = data_limits[name]
                     
                 sample_counts, bins_gen, _ = ax.hist(
-                    data[name], bins=bins, density=False, zorder=-10, facecolor='lightgrey', edgecolor='dimgrey', alpha=.5)
+                    data[name], bins=bins, range=range_, density=False, zorder=-10, facecolor='lightgrey', edgecolor='dimgrey', alpha=.5)
                 # sns.distplot may be another alternative to hist
                 #print(name,sample_counts, bin_centers)
                 # save for later to assign boxplot widths
@@ -711,7 +714,7 @@ class DataManager(object):
                 namey = names[y]
                 logger.debug(f'scatter {namex},{namey}')
                 
-                this_data = data[[namex, namey]].dropna() 
+                this_data = data[[namex, namey]].dropna()
                 # categorical (i.e. integer) data should be displayed as box
                 # plots rather than scatter plots
                 if namex in all_categories and namey in all_categories:  # both categorical -> draw bubbles
@@ -785,10 +788,17 @@ class DataManager(object):
                         xscale='linear'
                         yscale='linear'
                     
+                    limsx = data_limits[namex]
+                    limsy = data_limits[namey]
+                    
+                    selx = np.logical_and(this_data[namex] >= limsx[0], this_data[namex] <= limsx[1])
+                    sely = np.logical_and(this_data[namey] >= limsy[0], this_data[namey] <= limsy[1])
+                    sel = np.logical_and(selx, sely)
+                    
                     if draft:
-                        axes[y, x].scatter(this_data[namex], this_data[namey],marker='.', c='dimgrey', edgecolors='none',s=1, )
+                        axes[y, x].scatter(this_data[namex][sel], this_data[namey][sel],marker='.', c='dimgrey', edgecolors='none',s=1, )
                     else:
-                        axes[y, x].hexbin(this_data[namex], this_data[namey], gridsize=200, bins='log', cmap=cmap,
+                        axes[y, x].hexbin(this_data[namex][sel], this_data[namey][sel], gridsize=200, bins='log', cmap=cmap,
                                       xscale=xscale, yscale=yscale,
                                       edgecolors='face')
 
@@ -802,11 +812,20 @@ class DataManager(object):
 
             # Label the diagonal subplots...
             for i, label in enumerate(labels):
-                if "_" in label and matplotlib.rcParams["text.usetex"] is True:
+                if "_" in label and not '$' in label and matplotlib.rcParams["text.usetex"] is True:
                     # might want to use pylatexenc in the future
                     label = label.replace("_", "\_")
                 ab = axes[i, i].annotate(label, (0.5, 0.5), xycoords='axes fraction',
                                          ha='center', va='center', zorder=10, backgroundcolor='#FFFFFFAA')
+            # print(data_limits)
+            # # set the data limits
+            # for i, name in enumerate(names):
+                # if name not in all_categories:
+                    # continue
+                    # lims = data_limits[name]
+                    # axes[-1, i].set_xlim(lims)
+                    # axes[i, 0].set_ylim(lims)
+                
 
             if scales is not None:
                 for i, scale in enumerate(scales):
@@ -965,32 +984,34 @@ class DataManager(object):
         #g._map_bivariate(func, indices) # for categorical data
         # plt.show()
         logger.info(f'Creating the scatterplot matrix... ')
-        logger.debug(f'{df}')
-        logger.debug(f'{all_categories}')
-        logger.debug(f'{kwargs.get("scales",None)}{draft}')
+        #logger.debug(f'{df}')
+        #logger.debug(f'{all_categories}')
+        #logger.debug(f'{kwargs.get("scales",None)}{draft}')
         if labels is None:
             labels=names
         else:
             assert len(labels)==len(names)
             
-        scatterplot_matrix(data=df,
+        fig = scatterplot_matrix(data=df,
                            all_categories=all_categories,
                            scales=kwargs.pop('scales', None),
                            draft=draft,
                            labels=labels,
                            **kwargs)
         
-        plt.show()
+        return fig
 
     @classmethod
     def from_existing(cls, dbfile_in,
-                      result_dir='/usr/scratch4/sima9999/work/modal_uq/'):
+                      result_dir='/usr/scratch4/sima9999/work/modal_uq/',
+                      working_dir=None):
         assert os.path.exists(os.path.join(result_dir, dbfile_in))
 
         cls.result_dir = result_dir
         cls.dbfile_in = dbfile_in
         with cls.get_database(cls) as ds:
-            working_dir = ds.attrs['working_dir']
+            if working_dir is None:
+                working_dir = ds.attrs['working_dir']
             if not os.path.exists(working_dir):
                 logger.warning(f'Working directory {working_dir} does not exist. Creating!')
                 os.makedirs(working_dir)

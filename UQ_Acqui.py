@@ -15,12 +15,16 @@ import matplotlib.pyplot as plt
 #import ray
 
 
+
+
+
 def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
                              num_nodes=101, num_modes=10, damping=0.01, freq_scale=1.0, num_meas_nodes=20, # structural properties
                              f_scale=1000, dt_fact=0.01, num_cycles=500,  # time integration properties
                              num_sensors=10, lumped=False, quant='a',  # sensor placement / properties
                              snr_db=-30.0, noise_power=0.0, ref_sig='channel',  # acquisition noise properties
-                             sample_dur=None, margin=None, bits=16, duration=None,  # sampling properties
+                             nyq_rat=2.5, numtaps_fact=21, # sampling_properties
+                             sample_dur=None, margin=None, bits=16, duration=None,  # quantization properties
                              decimate_factor=None, tau_max=100, window='None',  # signal processing parameters
                              order_factor=2,  # system identification parameters
                              ):
@@ -34,7 +38,7 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
     # load/generate  mechanical object:
     # ambient response of a n dof rod,
     if not os.path.exists(os.path.join(savefolder, f'{jid}_mechanical.npz')) or not skip_existing:
-        if True:
+        if False:
             mech = Mechanical(ansys=ansys, jobname=jid, wdir=working_dir)
             mech.example_rod(num_nodes=num_nodes, damping=damping, num_modes=num_modes, freq_scale=freq_scale, num_meas_nodes=num_meas_nodes)
             mech.ambient_ifrf(f_scale, None, dt_fact, None, num_cycles, [quant], ['uz'], seed=jid_int)
@@ -111,7 +115,7 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
         -> bits, margin_quant_norm
     
     '''
-    fs, numtaps, cutoff = acqui.sample_helper(f_max=frequencies_n[-1])
+    fs, numtaps, cutoff = acqui.sample_helper(f_max=frequencies_n[-1], nyq_rat=nyq_rat, numtaps_fact=numtaps_fact)
     dec_rate, sim_timesteps = int(1 / (acqui.deltat * fs)), acqui.num_timesteps
     meas_range = acqui.estimate_meas_range(sample_dur=sample_dur, margin=margin)
     _, _, snr_alias, snr_quant, margin_quant_norm = acqui.sample(fs, numtaps, cutoff, bits, meas_range, duration)
@@ -196,10 +200,10 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
             )
     
     
-def uq_acqui(step=3):
+def uq_acqui(step, working_dir, result_dir):
     
-    if step == 0 or not os.path.exists(os.path.join('/usr/scratch4/sima9999/work/modal_uq/uq_acqui/', 'uq_acqui.nc')):
-        data_manager = DataManager(title='uq_acqui', working_dir='/run/user/30980/work/', result_dir='/usr/scratch4/sima9999/work/modal_uq/uq_acqui/')
+    if step == 0 or not os.path.exists(os.path.join(result_dir, 'uq_acqui2.nc')):
+        data_manager = DataManager(title='uq_acqui2', working_dir=working_dir, result_dir=result_dir)
         
         #num_nodes=101,
         #num_meas_nodes = 100,
@@ -212,7 +216,7 @@ def uq_acqui(step=3):
         #margin=None,
         #duration=None,
         #decimate_factor=None,
-       
+        #nyq_rat
         # data_manager.generate_sample_inputs(names=['num_modes',
         #                                            'damping',
         #                                            'freq_scale',
@@ -233,16 +237,24 @@ def uq_acqui(step=3):
         #                                            ('integers', (50, 501)),
         #                                            ],
         #                             num_samples=1000)
-        data_manager.generate_sample_inputs(names=['window',
-                                                   'order_factor'],
-                                    distributions=[('choice',(['None','hann'],)),
-                                                   ('integers',(2,11)),
+        # data_manager.generate_sample_inputs(names=['window',
+                                                   # 'order_factor'],
+                                    # distributions=[('choice',(['None','hann'],)),
+                                                   # ('integers',(2,11)),
+                                                    # ],
+                                    # num_samples=1000)
+        data_manager.generate_sample_inputs(names=['bits',
+                                                    'nyq_rat',
+                                                   'numtaps_fact'],
+                                    distributions=[('integers',(8,33)),
+                                                    ('uniform',(2, 4)),
+                                                   ('integers',(11,42)),
                                                     ],
                                     num_samples=1000)
                                                    
         return
     if step == 1:
-        data_manager = DataManager.from_existing(dbfile_in='uq_acqui.nc', result_dir='/usr/scratch4/sima9999/work/modal_uq/uq_acqui/')
+        data_manager = DataManager.from_existing(dbfile_in='uq_acqui2.nc', result_dir=result_dir, working_dir=working_dir)
         # data_manager.clear_failed(True)
         data_manager.post_process_samples()
 
@@ -250,7 +262,7 @@ def uq_acqui(step=3):
     if step == 2:
         #ansys = Mechanical.start_ansys()
 
-        data_manager = DataManager.from_existing(dbfile_in='uq_acqui.nc', result_dir='/usr/scratch4/sima9999/work/modal_uq/uq_acqui/')
+        data_manager = DataManager.from_existing(dbfile_in='uq_acqui2.nc', result_dir=result_dir, working_dir=working_dir)
         func_kwargs = {'ansys':None, 'num_nodes':101, 'num_meas_nodes': 100,
                        'f_scale':1000, 'dt_fact':0.01, 'quant':'a', 'noise_power':0.0,
                        'ref_sig':'channel', 'sample_dur':None, 'margin':None, 'duration':None,
@@ -265,7 +277,9 @@ def uq_acqui(step=3):
                     'bits':'bits',
                     'tau_max':'tau_max',
                     'window':'window',
-                    'order_factor':'order_factor'}
+                    'order_factor':'order_factor',
+                    'nyq_rat':'nyq_rat',
+                    'numtaps_fact':'numtaps_fact'}
         
         ret_names = {'frequencies_a':('modes',), 
                      'damping_a':('modes',), 
@@ -304,49 +318,111 @@ def uq_acqui(step=3):
         import matplotlib
         from helpers import get_pcd
         pcd = get_pcd()
-        data_manager = DataManager.from_existing(dbfile_in='uq_acqui.nc', result_dir='/usr/scratch4/sima9999/work/modal_uq/uq_acqui/')
+        data_manager = DataManager.from_existing(dbfile_in='uq_acqui2.nc', result_dir=result_dir, working_dir=working_dir)
         # data_manager.clear_failed(True)
-        
         
         with matplotlib.rc_context(rc=pcd):
             # influences of signal acquistion (quantization and sampling)
-            # names = ['snr_db','bits','margin', 'this_snr_quant','this_snr_db_out']
-            # data_manager.post_process_samples(names=names, db='processed')
+            if False:
+                # with data_manager.get_database('processed', rw=True) as ds:
+                    # ds['bits_eff']=(np.log(ds.margin*(2**ds.bits))/np.log(2)).mean('channels')
+                names = ['snr_db','bits','bits_eff', 'this_snr_quant','this_snr_db_out'] # effective bits = log(margin / 2**bits)/log(2)
+                labels= ['SNR\\textsubscript{dB}','$b$', '$b_\\text{eff}$','SNR\\textsubscript{dB, quant}','SNR\\textsubscript{dB, tot}']
+                #scales = ['linear','log','log','linear','linear']
+                fig = data_manager.post_process_samples(names=names, db='processed', labels=labels, figsize=(5.92, 5.92))#, scales=scales)
+                #fig.subplots_adjust(bottom=0.07, left=0.1)
+                fig.savefig('/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_KolloquiumVolkmar/figures/uq_quant.pdf', dpi=300)
             
-            # names = ['snr_db', 'numtaps_fact', 'nyq_rat','sim_steps', 'dec_rate', 'this_snr_alias', 'this_snr_db_out'] # numtaps_fact = numtaps/dec_fact, nyq_rat=fs/cutoff, <- constant
-            # data_manager.post_process_samples(names=names, db='processed')
+            if False:
+                names = ['snr_db', 'numtaps_fact', 'nyq_rat','sim_steps', 'dec_rate', 'this_snr_alias', 'this_snr_db_out'] # numtaps_fact = numtaps/dec_fact, nyq_rat=fs/cutoff, <- constant
+                labels = ['SNR\\textsubscript{dB}', '$\\sfrac{M}{d}$', '$\\sfrac{f_c}{f_s}$', '$N$', '$d$', 'SNR\\textsubscript{dB, alias}', 'SNR\\textsubscript{dB, tot}']
+                fig = data_manager.post_process_samples(names=names, db='processed', labels=labels, figsize=(5.92, 5.92))
+                fig.subplots_adjust(bottom=0.07, left=0.07)
+                fig.savefig('/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_KolloquiumVolkmar/figures/uq_samp.pdf', dpi=300)
             
-            # names = ['this_snr_db_out','freq_diff','damp_diff','modal_assurance','unp_id','unp_num']
-            # data_manager.post_process_samples(names=names, db='processed')
+            if False:
+                names = ['this_snr_db_out','freq_diff','damp_diff','modal_assurance','unp_id','unp_num']
+                labels = ['SNR\\textsubscript{dB, tot}','$\\Delta_f$','$\\Delta_{\\zeta}$','MAC','$m_\\text{additional}$','$m_\\text{missing}$']
+                fig = data_manager.post_process_samples(names=names, db='processed', labels = labels, figsize=(5.92, 5.92))
+                fig.subplots_adjust(left=0.07)
+                fig.savefig('/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_KolloquiumVolkmar/figures/uq_noise.pdf', dpi=300)
+            
             
             # influences of sensors
-            names = ['lumped', 'num_sensors','freq_diff','damp_diff','modal_assurance','unp_id','unp_num'] # quant
-            data_manager.post_process_samples(names=names, db='processed', draft=False, 
-                                              labels=['sensor distribution', '$n_\\text{sensors}$','$\\Delta_f$','\\Delta_{\\zeta}}','MAC','$m_\\text{additional}$','$m_\\text{missing}$'])
+            if False:
+                names = ['num_sensors', 'lumped', 'freq_diff','damp_diff','modal_assurance','unp_id','unp_num'] # quant
+                labels=[ '$n_\\text{sensors}$','placement','$\\Delta_f$','$\\Delta_{\\zeta}$','MAC','$m_\\text{additional}$','$m_\\text{missing}$']
+                fig = data_manager.post_process_samples(names=names, db='processed', labels=labels, figsize=(5.92, 5.92))
+
+                axes = fig.axes
+                for ax in axes:
+                    sps = ax.get_subplotspec()
+                    col, row = sps.colspan.start, sps.rowspan.start
+                    if col==1 and row==6:
+                        axis = ax.xaxis
+                    elif row==1 and col==0:
+                        axis = ax.yaxis
+                    else:
+                        continue
+                    axis.set_ticks([0,1])
+                    axis.set_ticklabels(['lump','dist'])
+                fig.subplots_adjust(left=0.08)        
+                fig.savefig('/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_KolloquiumVolkmar/figures/uq_sensors.pdf', dpi=300)
+            
             
             # influences of signal processing and system identification
-            names = ['all_n_cycl','tau_max','order_factor','freq_diff','damp_diff','modal_assurance','unp_id','unp_num']
-            data_manager.post_process_samples(names=names, db='processed', draft=False)
-            
+            if False:
+                names = ['all_n_cycl','window','tau_max','order_factor','freq_diff','damp_diff','modal_assurance','unp_id','unp_num']
+                labels=[ '$n_\\text{cycles}$','spectral \\\\ estimator','$\\tau_\\text{max}$','model order \\\\ overrate','$\\Delta_f$','$\\Delta_{\\zeta}$','MAC','$m_\\text{additional}$','$m_\\text{missing}$']
+                fig = data_manager.post_process_samples(names=names, db='processed',labels=labels, figsize=(5.92, 5.92))
+                axes = fig.axes
+                for ax in axes:
+                    sps = ax.get_subplotspec()
+                    col, row = sps.colspan.start, sps.rowspan.start
+                    if col==1 and row==8:
+                        axis = ax.xaxis
+                    elif row==1 and col==0:
+                        axis = ax.yaxis
+                    else:
+                        continue
+                    axis.set_ticks([0,1])
+                    axis.set_ticklabels(['b.-t.','welch'])
+                fig.subplots_adjust(left=0.08)        
+                fig.savefig('/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_KolloquiumVolkmar/figures/uq_sigid.pdf', dpi=300)
             
             # influences of structural parameters
-            names = ['damping','freq_scale','num_modes','this_delta_f','this_delta_d','this_mac','unp_id','unp_num']
-            data_manager.post_process_samples(names=names, db='processed', draft=False)
+            if True:
+                names = ['damping', 'freq_scale', 'num_modes', 'freq_diff','damp_diff','modal_assurance','unp_id','unp_num']
+                labels = [ '$\\zeta$','$\\delta_f$','$n_\\text{modes}$','$\\Delta_f$','$\\Delta_{\\zeta}$','MAC','$m_\\text{additional}$','$m_\\text{missing}$']
+                fig = data_manager.post_process_samples(names=names, db='processed', labels=labels, figsize=(5.92, 5.92))
+                fig.subplots_adjust(left=0.07)
+                fig.savefig('/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_KolloquiumVolkmar/figures/uq_struct.pdf', dpi=300)
+                
             
-            names = None
-            data_manager.post_process_samples(names=names, db='processed', draft=False)
+            
+            if False:
+                names = None
+                data_manager.post_process_samples(names=names, db='processed', draft=False)
+                
+            plt.show()
             #data_manager.post_process_samples()
 
         return
     if step == 4:
-        data_manager = DataManager.from_existing(dbfile_in='uq_acqui.nc', result_dir='/usr/scratch4/sima9999/work/modal_uq/uq_acqui/')
+        data_manager = DataManager.from_existing(dbfile_in='uq_acqui2.nc', result_dir=result_dir, working_dir=working_dir)
         data_manager.clear_failed(dryrun=True)
 
 def main():
+    
+    working_dir = os.path.join('/run/user', str(os.getuid()), 'work')
+    if os.getlogin()=='womo1998':
+        base='/vegas/scratch/womo1998/'
+    else:
+        base='/usr/scratch4/sima9999/work/'
+    result_dir = os.path.join(base, 'modal_uq/uq_acqui/')
+    
     if False:        
         import uuid
-        working_dir = '/run/user/30980/work/'
-        result_dir = '/usr/scratch4/sima9999/work/modal_uq/uq_acqui/'
         jid = '6892f3e8f39e'
     
         fun_out = model_acqui_signal_sysid(jid, result_dir, working_dir, window='None', order_factor=2)
@@ -354,9 +430,10 @@ def main():
             print(a)
             
     else:
+            
         #import logging
         #logging.getLogger('uncertainty.data_manager').setLevel(logging.DEBUG)
-        uq_acqui(3)
+        uq_acqui(1, working_dir, result_dir)
     
 if __name__ == '__main__':
     main()
