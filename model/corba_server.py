@@ -4,7 +4,7 @@ import os
 from ansys_corba import CORBA
 import subprocess
 
-#os.chdir('/vegas/scratch/womo1998/modal_uq/')
+#os.chdir('/usr/scratch4/sima9999/work/modal_uq/')
 os.chdir('/dev/shm/womo1998/')
 
 # edit this to match your ansys exe

@@ -4,18 +4,21 @@
 import time
 import numpy as np
 import matplotlib
-from mpldatacursor import datacursor
-matplotlib.use('qt5Agg')
+#matplotlib.use('qt5Agg')
 import matplotlib.pyplot as plot
 # plot.ioff()
 import os
+import sys
 import glob
 import shutil
 
 import logging
 # global logger
-# LOG = logging.getLogger('')
-logging.basicConfig(level=logging.INFO)
+# logger = logger.getLogger('')
+logger = logging.getLogger(__name__)
+logger.setLevel(level=logging.INFO)
+
+import pyansys
 
 # import scipy.stats
 # import scipy.optimize
@@ -26,7 +29,6 @@ import uuid
 import warnings
 # import simpleflock
 
-import pyansys
 # plot.figure()
 # plot.close("all")
 
@@ -54,10 +56,10 @@ print_context_dict = {'text.usetex':True,
     # figsize=(3.69,2.96)#beamer 16:9
     # plot.rc('axes.formatter',use_locale=True) #german months
 # must be manually set due to some matplotlib bugs
-if print_context_dict['text.usetex']:
-    # plt.rc('text.latex',unicode=True)
-    plot.rc('text', usetex=True)
-    plot.rc('text.latex', preamble="\\usepackage{siunitx}\n \\usepackage{xfrac}")
+# if print_context_dict['text.usetex']:
+    # # plt.rc('text.latex',unicode=True)
+    # plot.rc('text', usetex=True)
+    # plot.rc('text.latex', preamble="\\usepackage{siunitx}\n \\usepackage{xfrac}")
 
 # import math
 # class LogFormatterSciNotation(matplotlib.ticker.LogFormatterMathtext):
@@ -111,7 +113,8 @@ def session_restore(func):
         ansys.get(par='ROUT', entity='ACTIVE', entnum='0', item1='ROUT')
         # ansys.load_parameters()
         current_rout = ansys.parameters['ROUT']
-        if current_rout != 0.0: ansys.finish()
+        if current_rout != 0.0:
+            ansys.finish()
         value = func(*args, **kwargs)
         if current_rout != 0.0:
             ansys.finish()
@@ -121,10 +124,240 @@ def session_restore(func):
     return wrapper_session_restore
 
 
+class MechanicalDummy(object):
+    
+    def __init__(self, jobname):
+        logger.info('Non functioning dummy of Mechanical for faster loading of previous results.')
+        self.jobname = jobname
+        
+        #             build_mdof, free_decay, ambient, impulse_response, modal, modal_comp  , IRF matrix
+        self.state = [False,      False,      False,   False,            False, False,        False]
+
+        self.nonlinear_elements = []
+        self.voigt_kelvin_elements = []
+        self.coulomb_elements = []
+        self.mass_elements = []
+        self.beam_elements = []
+
+        # initialize class variables
+        # build_mdof
+        self.nodes_coordinates = None
+        self.num_nodes = None
+        self.num_modes = None
+        self.d_vals = None
+        self.k_vals = None
+        self.masses = None
+        self.eps_duff_vals = None
+        self.sl_force_vals = None
+        self.hyst_vals = None
+        self.meas_nodes = None
+        self.damping = None
+        
+        # free_decay
+        self.decay_mode = None
+        self.t_vals_decay = None
+        self.resp_hist_decay = None
+        
+        #ambient
+        self.inp_hist_amb = None
+        self.t_vals_amb = None
+        self.resp_hist_amb = None
+        
+        #impulse_response
+        self.inp_hist_imp = None
+        self.t_vals_imp = None
+        self.resp_hist_imp = None
+        self.modal_imp_energies = None
+        self.modal_imp_amplitudes = None
+        
+        # IRF matrix 
+        self.t_vals_imp = None
+        self.IRF_matrix = None
+        self.imp_hist_imp_matrix = None
+        self.modal_imp_energy_matrix = None
+        self.modal_imp_amplitude_matrix = None
+        
+        # modal
+        self.damped_frequencies = None
+        self.modal_damping = None
+        self.damped_mode_shapes = None
+        self.frequencies = None
+        self.mode_shapes = None
+        self.num_modes = None
+        
+        #signal_parameters
+        self.deltat = None
+        self.timesteps = None
+        
+        #transient_parameters
+        self.trans_params = None
+        
+    def build_mdof(self, nodes_coordinates=[(1, 0, 0, 0), ],
+                   k_vals=[1], masses=[1], d_vals=None, damping=None,
+                   sl_force_vals=None, eps_duff_vals=None, hyst_vals=None,
+                   num_modes=None, meas_nodes=None, **kwargs):
+        
+        logger.debug('self.build_mdof')
+        # if m modes are of interest number of nodes n > 10 m
+
+        num_nodes = len(nodes_coordinates)
+
+        # Nodes
+        ntn_conns = [[] for i in range(num_nodes - 1)]
+        for i, (node, x, y, z) in enumerate(nodes_coordinates):
+            if i < num_nodes - 1:
+                ntn_conns[i] = [node]
+            if i > 0:
+                ntn_conns[i - 1].append(node)
+
+        self.nodes_coordinates = nodes_coordinates
+        self.ntn_conns = ntn_conns
+        self.num_nodes = num_nodes
+        self.num_modes = num_modes
+        self.d_vals = d_vals
+        self.k_vals = k_vals
+        self.masses = masses
+        self.eps_duff_vals = eps_duff_vals
+        self.sl_force_vals = sl_force_vals
+        self.hyst_vals = hyst_vals
+
+        self.damping = damping
+        self.meas_nodes = np.array(meas_nodes)
+        
+        self.state[0] = True
+        for i in range(1, len(self.state)):
+            self.state[i] = False
+
+    @classmethod
+    def load(cls, jobname, load_dir):
+        
+        assert os.path.isdir(load_dir)
+        
+        fname = os.path.join(load_dir, f'{jobname}_mechanical.npz')
+        assert os.path.exists(fname)
+        
+        logger.info('Now loading previous results from  {}'.format(fname))
+
+        in_dict = np.load(fname, allow_pickle=True)
+        
+        assert jobname == in_dict['self.jobname'].item()
+        
+        mech = cls(jobname)
+        
+        state = list(in_dict['self.state'])
+        
+        if state[0]:
+            logger.debug('stat[0]')
+            nodes_coordinates = in_dict['self.nodes_coordinates']
+            #print(nodes_coordinates, 'should be list of lists')
+            #num_nodes = in_dict['self.num_nodes']
+            num_modes = in_dict['self.num_modes'].item()
+            d_vals = list(in_dict['self.d_vals'])
+            k_vals = list(in_dict['self.k_vals'])
+            masses = list(in_dict['self.masses'])
+            eps_duff_vals = list(in_dict['self.eps_duff_vals'])
+            sl_force_vals = list(in_dict['self.sl_force_vals'])
+            hyst_vals = list(in_dict['self.hyst_vals'])
+            meas_nodes = list(in_dict['self.meas_nodes'])
+            #print(in_dict['self.damping'], type(in_dict['self.damping']))
+            damping = in_dict['self.damping']
+            if damping.size == 1:
+                damping = damping.item()
+            else:
+                damping = list(damping)
+                if len(damping) >= 2:
+                    if damping[-1] == 1 or damping[-1] == 0:
+                        damping[-1] = bool(damping[-1])
+            
+            mech.build_mdof(nodes_coordinates=nodes_coordinates,
+                            k_vals=k_vals, masses=masses, d_vals=d_vals,
+                            damping=damping, sl_force_vals=sl_force_vals,
+                            eps_duff_vals=eps_duff_vals, hyst_vals=hyst_vals,
+                            num_modes=num_modes, meas_nodes=meas_nodes)
+        
+        if state[1]:
+            logger.debug('state[1]')
+            mech.decay_mode = in_dict['self.decay_mode'].item()
+            mech.t_vals_decay = in_dict['self.t_vals_decay']
+            mech.resp_hist_decay = [None, None, None]
+            for i, key in enumerate(['self.resp_hist_decayd',
+                                     'self.resp_hist_decayv',
+                                     'self.resp_hist_decaya']):
+                arr = in_dict[key]
+                if not arr.shape: arr = arr.item()
+                mech.resp_hist_decay[i] = arr
+
+        if state[2]:
+            logger.debug('state[2]')
+            mech.inp_hist_amb = in_dict['self.inp_hist_amb']
+            mech.t_vals_amb = in_dict['self.t_vals_amb']
+            mech.resp_hist_amb = [None, None, None]
+            for i, key in enumerate(['self.resp_hist_ambd',
+                                     'self.resp_hist_ambv',
+                                     'self.resp_hist_amba']):
+                arr = in_dict[key]
+                if not arr.shape: arr = arr.item()
+                mech.resp_hist_amb[i] = arr
+                
+        if state[3]:
+            logger.debug('state[3]')
+            mech.inp_hist_imp = in_dict['self.inp_hist_imp']
+            mech.t_vals_imp = in_dict['self.t_vals_imp']
+            mech.resp_hist_imp = [None, None, None]
+            for i, key in enumerate(['self.resp_hist_impd',
+                                     'self.resp_hist_impv',
+                                     'self.resp_hist_impa']):
+                arr = in_dict[key]
+                if not arr.shape: arr = arr.item()
+                mech.resp_hist_imp[i] = arr
+            mech.modal_imp_energies = in_dict['self.modal_imp_energies']
+            mech.modal_imp_amplitudes = in_dict['self.modal_imp_amplitudes']
+
+        if state[4]:
+            logger.debug('state[4]')
+            mech.damped_frequencies = in_dict['self.damped_frequencies']
+            mech.modal_damping = in_dict['self.modal_damping']
+            mech.damped_mode_shapes = in_dict['self.damped_mode_shapes']
+            mech.frequencies = in_dict['self.frequencies']
+            mech.mode_shapes = in_dict['self.mode_shapes']
+            mech.num_modes = in_dict['self.num_modes']
+        
+        if state[5]:
+            logger.debug('state[5]')
+            mech.frequencies_comp = in_dict['self.frequencies_comp']
+            mech.modal_damping_comp = in_dict['self.modal_damping_comp']
+            mech.mode_shapes_comp = in_dict['self.mode_shapes_comp']
+            
+        if state[2] or state[3] or state[4] or state[6]:
+            logger.debug('state[2,3,4 or 6]')
+            trans_params = in_dict['self.trans_params']
+            if trans_params.size > 1:
+                mech.trans_params = tuple(trans_params)
+                
+            mech.deltat = in_dict['self.deltat'].item()
+            mech.timesteps = in_dict['self.timesteps'].item()
+        
+        if state[6]:
+            logger.debug('state[6]')
+            mech.t_vals_imp = in_dict['self.t_vals_imp']
+            mech.IRF_matrix = in_dict['self.IRF_matrix']
+            mech.imp_hist_imp_matrix = in_dict['self.imp_hist_imp_matrix']
+            mech.modal_imp_energy_matrix = in_dict['self.modal_imp_energy_matrix']
+            mech.modal_imp_amplitude_matrix = in_dict['self.modal_imp_amplitude_matrix']
+        
+        mech.state = state
+        
+        return mech
+
+
 class Mechanical(object):
     #TODO: Update to newest pyANSYS release
     
     def __init__(self, ansys=None, jobname=None, wdir=None):
+        
+        if wdir is not None:
+            if not os.path.isdir(wdir):
+                os.makedirs(wdir)
         
         if ansys is None:
             ansys = self.start_ansys(wdir, jobname)
@@ -141,20 +374,20 @@ class Mechanical(object):
                     os.remove(file)
                 os.rmdir(f'{path}/')
         except (pyansys.errors.MapdlExitedError, NameError) as e:
-            logging.warning(repr(e))
+            logger.exception(e)
             ansys = self.start_ansys(wdir, jobname)
         
         self.ansys = ansys
         
         if wdir is not None:
-            logging.info(f'Switching working directory:\t {wdir}')
+            logger.info(f'Switching working directory:\t {wdir}')
             ansys.cwd(wdir)
         if jobname is not None:
-            logging.info(f'Switching job:\t {jobname}')
+            logger.info(f'Switching job:\t {jobname}')
             ansys.filname(fname=jobname, key=1)
             self.jobname = jobname
         else:
-            logging.info(f'Current job:\t {ansys.jobname}')
+            logger.info(f'Current job:\t {ansys.jobname}')
             self.jobname = ansys.jobname
         ansys.finish()
         ansys.clear()
@@ -233,7 +466,7 @@ class Mechanical(object):
         # try:
             # ansys.finish()
         # except (pyansys.errors.MapdlExitedError, NameError) as e:
-            # logging.warning(repr(e))
+            # logger.warning(repr(e))
         if working_dir is None:
             working_dir = os.getcwd()
         os.chdir(working_dir)
@@ -241,13 +474,13 @@ class Mechanical(object):
         if jid is None:
             jid = 'file'
         ansys = pyansys.launch_mapdl(
-            exec_file='/vegas/apps/ansys/v201/ansys/bin/ansys201',
-            run_location=working_dir, override=True, loglevel='WARNING',
+            exec_file='/usr/app-soft/ansys/v201/ansys/bin/ansys201',
+            run_location=working_dir, override=True, loglevel='ERROR',
             nproc=1, log_apdl='w',
             log_broadcast=False, jobname=jid,
             mode='console', additional_switches='-smp')
     
-        logging.info(f'Took {time.time()-now} s to start up ANSYS.')
+        logger.info(f'Took {time.time()-now} s to start up ANSYS.')
         
         ansys.clear()
         
@@ -268,7 +501,7 @@ class Mechanical(object):
         k_nl: nonlinear stiffness, if not automatically determined: k_lin and k_nl should match at d_max
         '''
         if k_nl is not None:
-            warnings.warn('Are you sure, you want to set k_nl manually. Make sure to not overshoot d_max')
+            logger.warning('Are you sure, you want to set k_nl manually. Make sure to not overshoot d_max')
         if nl_ity < -0.5 or nl_ity > 0.5:
             raise RuntimeError('The fraction of nonlinearity should not exceed/subceed 0.5/-0.5. It currently is set to {}.'.format(nl_ity))
 
@@ -569,34 +802,34 @@ class Mechanical(object):
                     TRY IN SDOF first
 
         TODO:
-        (make it generic s.t. build_sdof only wraps around it) for compatibility with all subsequent analyses
+        (store constrained nodes to exclude them from indexing operations)
         (extend 3D: arguments constraints, ntn_conns)
         (extend nonlinear)
         (extend damping)
 
         '''
-        logging.debug('self.build_mdof')
+        logger.debug('self.build_mdof')
         # if m modes are of interest number of nodes n > 10 m
 
         num_nodes = len(nodes_coordinates)
 
         if num_modes is None:
             num_modes = max(1, int(np.floor(num_nodes / 10) - 1))  # choose at least 1 mode
-            logging.info(f'Choosing num_modes as {num_modes} based on the number of nodes {num_nodes}')
+            logger.info(f'Choosing num_modes as {num_modes} based on the number of nodes {num_nodes}')
         assert num_modes <= num_nodes - 1
         if num_modes > num_nodes / 10:
-            logging.warning(f'The number of modes {num_modes} should be less/equal than 0.1 x number of nodes (= {num_nodes}).')
+            logger.warning(f'The number of modes {num_modes} should be less/equal than 0.1 x number of nodes (= {num_nodes}).')
 
         if d_vals is None:
             if damping is None:
-                logging.debug('Performing undamped analysis.')
+                logger.debug('Performing undamped analysis.')
                 d_vals = [0 for _ in range(num_nodes - 1)]
             elif isinstance(damping, float):
                 d_vals = [0 for _ in range(num_nodes - 1)]
             else:
                 d_vals = [0 for _ in range(num_nodes - 1)]
         elif damping is not None:
-            logging.warning('Applying elementwise damping and global proportional at the same time. Not sure how ANSYS handles this.')
+            logger.warning('Applying elementwise damping and global proportional at the same time. Not sure how ANSYS handles this.')
         else:
             # pre generated elementwise damping
             pass
@@ -649,7 +882,7 @@ class Mechanical(object):
             # print(ntn_conn)
             if fsl:
 
-                logging.warning("friction untested")
+                logger.warning("friction untested")
                 # fsl is provided, because the equation for its computation contains omega and d_mean, which is not known here
                 if last_params[3] != fsl or last_params[1] != k or last_params[2] != d:
                     k_1 = k * 100  # factor could also be provided,
@@ -664,7 +897,7 @@ class Mechanical(object):
 
             ansys.e(*ntn_conn)
             if eps_duff != 0 or hyst!=0:
-                logging.warning("nonlinear untested")
+                logger.warning("nonlinear untested")
                 #assert abs(nl_ity) <= 0.5
                 # only the nonlinear part is added here, the linear part is in voigt-kelvin/coulomb
 
@@ -687,6 +920,10 @@ class Mechanical(object):
         # ansys.dcum(oper='ADD') # does not work
 
         ansys.d(node=nodes_coordinates[0][0], value=0, lab='UX', lab2='UY', lab3='UZ')  # ,lab4='RX', lab5='RY',lab6='RZ')
+        
+        # move constrained node to the end to ensure consistency with ANSYS node indexing -> bull shit
+        #nodes_coordinates.append(nodes_coordinates.pop(0))
+        
         for node, x, y, z in nodes_coordinates:
             ansys.d(node=node, value=0, lab='UX', lab2='UY')
         ansys.finish()
@@ -719,7 +956,7 @@ class Mechanical(object):
             zeta1 = damping
             zeta2 = damping
             alpha, beta = np.linalg.solve(np.array([[1 / omega1, omega1], [1 / omega2, omega2]]), [2 * zeta1, 2 * zeta2])
-            logging.debug(f'Rayleigh parameters: {alpha}, {beta}')
+            logger.debug(f'Rayleigh parameters: {alpha}, {beta}')
             globdamp = True
             damped = True
         elif isinstance(damping, float) and num_modes == 1:
@@ -734,7 +971,7 @@ class Mechanical(object):
             omega2 = frequencies[-1] * 2 * np.pi
             zeta1, zeta2 = damping
             alpha, beta = np.linalg.solve(np.array([[1 / omega1, omega1], [1 / omega2, omega2]]), [2 * zeta1, 2 * zeta2])
-            logging.debug(f'Rayleigh parameters: {alpha}, {beta}')
+            logger.debug(f'Rayleigh parameters: {alpha}, {beta}')
             globdamp = True
             damped = True
         # mass/stiffness/rayleigh proportional damping either elementwise or global
@@ -760,9 +997,9 @@ class Mechanical(object):
                 # check/ compute the d_vals
                 # d_vals is a list and its length should fit
                 # elementwise Rayleigh with (alpha,) beta
-                logging.debug('Using elementwise damping.')
+                logger.debug('Using elementwise damping.')
                 if alpha > 1e-15:
-                    logging.warning(f'Elementwise proportional damping takes only a stiffness factor {beta}. Neglecting mass factor {alpha}!')
+                    logger.warning(f'Elementwise proportional damping takes only a stiffness factor {beta}. Neglecting mass factor {alpha}!')
                 for i in range(num_nodes - 1):
                     d_val = k_vals[i] * beta
                     if d_vals[i] and d_vals[i] != d_val:
@@ -787,7 +1024,8 @@ class Mechanical(object):
                 self.ansys.finish()
 
         if meas_nodes is not None:
-            logging.debug(f'Using node components {meas_nodes}')
+            meas_nodes = np.sort(meas_nodes)
+            logger.debug(f'Using node components {meas_nodes}')
             ansys.nsel(type='NONE')
 #             if 1 not in meas_nodes:
 #                 print('Warning: make sure to include the first (constrained) node in meas_nodes for visualization.')
@@ -804,6 +1042,7 @@ class Mechanical(object):
         else:
             ansys.nsel(type='ALL')
             meas_nodes = [node for node, _, _, _ in nodes_coordinates]
+            meas_nodes = np.sort(meas_nodes)
 
         ansys.cm(cname='meas_nodes', entity='NODE')  # and group into component assembly
 
@@ -828,6 +1067,100 @@ class Mechanical(object):
 #         self.nl_ity_rats=nl_ity_rats
 #         self.d_max      =d_max
 #         self.f_scale    =f_scale
+
+    def example_rod(self, num_nodes, damping=None, nl_stiff=None, sl_forces=None, freq_scale=1, num_modes=None,  # structural parameters
+                    num_meas_nodes=None, meas_nodes=None,  # signal parameters
+                    ** kwargs):
+        '''
+        argument:
+            damping = None -> no damping
+                      zeta -> global rayleigh,
+                      (zeta, zeta) -> global rayleigh
+                      (alpha,beta,True/False) -> global/elementwise proportional
+                      (eta, True/False) -> Structural/Hysteretic (global -> only damped modal and harmonic analyses not TRANSIENT! / elementwise -> only transient (IWAN))
+                      (Friction -> only local via sl_forces
+                      IWAN needs an equivalent damping ratio and a stress-strain relationship (G,E?)
+                        from which a monotonic strain-softening backbone curve \tau vs \gamma (considering shear) according to Masing's rule can be computed (Kausel Eq. 7.307),
+                        in turn this can be approximated/discretized by N spring-slider systems in parallel (or a nonlinear stiffness
+                        TRY IN SDOF first
+    
+        TODO:
+        - nonlinear-equivalent
+            - stiffness (as in SDOF systems), estimation of d_max
+            - friction (equivalent per node and mode, averaging?)
+            - structural damping (ANSYS routines, IWAN)
+        '''
+        
+        
+        ansys = self.ansys
+        
+        try:
+            ansys.finish()
+        except pyansys.errors.MapdlExitedError as e:
+            print(e)
+            ansys = self.start_ansys()
+        ansys.clear()
+        
+        # Example structure Burscheid Longitudinal modes
+        total_height = 200
+        E = 2.1e11 * freq_scale ** 2  # for scaling the frequency band linearly; analytical solution is proportional to sqrt(E); (ratios are fixed for a rod 1:2:3:4:... or similar)
+        # I=0.01416
+        A = 0.0343
+        rho = 7850
+    
+        num_nodes = int(num_nodes)
+    
+        section_length = total_height / (num_nodes - 1)
+        nodes_coordinates = []
+        k_vals = [0 for _ in range(num_nodes - 1)]
+        masses = [0 for _ in range(num_nodes)]
+        d_vals = None  # [0 for i in range(num_nodes-1)]
+        eps_duff_vals = [0 for _ in range(num_nodes - 1)]
+        sl_force_vals = [0 for _ in range(num_nodes - 1)]
+        hyst_vals = [0 for _ in range(num_nodes - 1)]
+        
+        if isinstance(damping, (list, tuple)):
+            if len(damping) == 2 and isinstance(damping[1], bool):
+                hyst_damp = damping[0]
+        else:
+            hyst_damp = None
+        
+        for i in range(num_nodes):
+            #  nodes_coordinates.append([i+1,0,0,section_length*i])
+            nodes_coordinates.append([i + 1, 0, 0, 0])  # to disable Warning "Nodes are not coincident"
+            masses[i] += 0.5 * rho * A * section_length
+            if i >= 2:
+                masses[i - 1] += 0.5 * rho * A * section_length
+            if i >= 1:
+                k_vals[i - 1] = E * A / section_length
+                
+                if nl_stiff is not None:
+                    eps_duff_vals[i - 1] = nl_stiff
+                if sl_forces is not None:
+                    sl_force_vals[i - 1] = sl_forces
+                if hyst_damp is not None:
+                    hyst_vals[i - 1] = hyst_damp
+        if num_meas_nodes is None and meas_nodes is None:
+            meas_nodes = [node for node, _, _, _ in nodes_coordinates[1:]]  # exclude the constrained node
+        elif num_meas_nodes is not None and meas_nodes is None:
+            # step = int(np.floor(num_nodes/num_meas_nodes))
+            # meas_nodes = np.concatenate(([1],np.arange(step,num_nodes+1,step)))
+            meas_nodes = np.rint(np.linspace(2, num_nodes, int(num_meas_nodes))).astype(int)
+            if len(meas_nodes) != (num_meas_nodes):
+                logger.warning(f'Warning number of meas_nodes generated {len(meas_nodes)} differs from number of meas_nodes specified {num_meas_nodes}')
+        elif num_meas_nodes is not None and meas_nodes is not None:
+            raise RuntimeError(f'You cannot provide meas_nodes {meas_nodes} and num_meas_nodes {num_meas_nodes} at the same time')
+        
+        logger.info(f'Building an example rod structure with {num_nodes} nodes, {damping} % damping, considering the output of {num_modes} modes at {num_meas_nodes} measurement nodes.')
+        
+        self.build_mdof(nodes_coordinates=nodes_coordinates,
+                        k_vals=k_vals, masses=masses, d_vals=d_vals, damping=damping,
+                        sl_force_vals=sl_force_vals, eps_duff_vals=eps_duff_vals, hyst_vals=hyst_vals,
+                        meas_nodes=meas_nodes, num_modes=num_modes,)
+            
+        return
+
+
 
     # def build_sdof(self, f_init=None, d_init=None, mass=None, **kwargs):
         # ansys = self.ansys
@@ -891,8 +1224,10 @@ class Mechanical(object):
             'static' : displacement obtained from static analysis with unit top displacement
             'modes' : arithmetic mean of all mode shapes
             number > 0, mode_index of which to excite
+        
+        TODO: extend 3D
         '''
-
+        
         num_nodes = self.num_nodes
         uz = 2
 
@@ -920,7 +1255,7 @@ class Mechanical(object):
 
         frequencies, damping, _ = self.modal(damped=True)
 
-        logging.info(f"Generating free decay response with f {frequencies[mode_index]:1.3f}, zeta {damping[mode_index]:1.3f}, free_decay mode {mode_index+1},  deltat {deltat:1.6f}, dt_fact {dt_fact:1.6f}, timesteps {timesteps}, num_cycles {num_cycles}")
+        logger.info(f"Generating free decay response with f {frequencies[mode_index]:1.3f}, zeta {damping[mode_index]:1.3f}, free_decay mode {mode_index+1}")
 
         d = np.full((timesteps, num_nodes), np.nan)
         if d0 == 'static':
@@ -947,7 +1282,7 @@ class Mechanical(object):
         
         return time_values, response_time_history
 
-    def ambient(self, f_scale, deltat=None, dt_fact=None, timesteps=None, num_cycles=None, **kwargs):
+    def ambient(self, f_scale, deltat=None, dt_fact=None, timesteps=None, num_cycles=None, seed=None, **kwargs):
         '''to take f_scale or more advanced parameters and call transient with passing kwargs
         save last analysis run as a class variable: f_scale, time histories, input time histories, signal and analysis parameters
         '''
@@ -955,12 +1290,19 @@ class Mechanical(object):
 
         dt_fact, deltat, num_cycles, timesteps, _ = self.signal_parameters(dt_fact, deltat, num_cycles, timesteps)
 
-        logging.info(f"Generating ambient response in frequency range [0 ... {self.frequencies[-1]:1.3f}], zeta range [{np.min(self.modal_damping):1.3f}-{np.max(self.modal_damping):1.3f}], number of modes {self.num_modes},  deltat {deltat:1.6f}, dt_fact for f_max {dt_fact:1.6f}, timesteps {timesteps}, num_cycles for f_min {num_cycles}")
+        logger.info(f"Generating ambient response in frequency range [0 ... {self.frequencies[-1]:1.3f}], zeta range [{np.min(self.modal_damping):1.3f}-{np.max(self.modal_damping):1.3f}], number of modes {self.num_modes}")
 
-        logging.warning("WARNING: Gaussian Noise Generator has not been verified!!!!!!")
-        f = np.random.normal(0, f_scale, (timesteps, num_nodes))
-        # f*=f_scale
-
+        logger.warning("WARNING: Gaussian Noise Generator has not been verified!!!!!!")
+        rng = np.random.default_rng(seed)
+        
+        #f = rng.normal(0, f_scale, (timesteps, num_nodes))
+        
+        phase = rng.uniform(-np.pi, np.pi, (timesteps // 2 + 1, num_nodes))
+        Pomega = f_scale * np.ones_like(phase) * np.exp(1j * phase)
+        f = np.empty((timesteps, num_nodes))
+        for channel in range(num_nodes):
+            f[:, channel] = np.fft.irfft(Pomega[:, channel], timesteps)
+        
         # TODO: implement correlated random processes here
         # TODO: implement random impulses here
         try:
@@ -971,14 +1313,15 @@ class Mechanical(object):
                 lines_found = []
                 block_counter = -1
                 while len(lines_found) < 10:
-                    try:f.seek(block_counter * 4098, os.SEEK_END)
+                    try:
+                        f.seek(block_counter * 4098, os.SEEK_END)
                     except IOError:
                         f.seek(0)
                         lines_found = f.readlines()
                         break
                     lines_found = f.readlines()
                     block_counter -= 1
-                logging.error(str(lines_found[-10:]))
+                logger.error(str(lines_found[-10:]))
 
                 raise e
 
@@ -995,16 +1338,16 @@ class Mechanical(object):
         impulses = list of list containing
             [ref_nodes, imp_forces, imp_times, imp_durs/-num_modes]
         if imp_dur is negative, it is interpreted, as the highest mode, which is excited by half of the wavepower 1/sqrt(2)  (-3dB) (only for half-sine)
-
+        
         form = 'sine', 'step', 'rect'
-
+        
         mode='matrix' return the IRF matrix for each reference node
         mode='combined' apply all impulses at the same time
-
-
+        
+        
         save last analysis run as a class variable: ref_nodes, IRF matrix, signal and analysis parameters
-
-
+        
+        
         Unit impulse -> IRF
         Rectangular impulse -> define impulse length (includes stepped load for infinite length)
         Half-Sine impulse -> define f_max and power at f_max
@@ -1079,7 +1422,7 @@ class Mechanical(object):
                 f = np.zeros((timesteps, num_nodes))
                 if form == 'step':
                     if imp_dur is not None:
-                        logging.warning(f'Stepped impulses have infinite length. A finite length tp_i of {imp_dur} was provided. Setting tp_i to {t_total-imp_time}')
+                        logger.warning(f'Stepped impulses have infinite length. A finite length tp_i of {imp_dur} was provided. Setting tp_i to {t_total-imp_time}')
                     imp_dur = t_total - imp_time
                 elif imp_dur < 0:  # mode number, which should be excited with at least half energy
                     # it must be an integer and less than the total number of modes (it is an index starting at 0)
@@ -1129,7 +1472,7 @@ class Mechanical(object):
         if mode == 'matrix':
 
             if form != 'step':
-                logging.warning(f'You have chosen to generate an IRF matrix with other than stepped impulses, but {form}. You should know what you are doing.')
+                logger.warning(f'You have chosen to generate an IRF matrix with other than stepped impulses, but {form}. Know what you are doing.')
             if len(out_quant) > 1:
                 raise ValueError(f'For IRF Matrix mode, out_quant can only be a single quantity: {out_quant}')
             quant_ind = ['d', 'v', 'a'].index(out_quant[0])
@@ -1141,27 +1484,26 @@ class Mechanical(object):
             num_ref_nodes = len(ref_nodes)
             num_meas_nodes = len(self.meas_nodes)
 
-            IRF_matrix = np.zeros((num_meas_nodes, num_ref_nodes, timesteps))
+            IRF_matrix = np.zeros((num_ref_nodes, timesteps, num_meas_nodes, 3))
             F_matrix = np.zeros((num_ref_nodes, timesteps))
             energy_matrix = np.zeros((num_ref_nodes, num_modes))
             amplitudes_matrix = np.zeros((num_ref_nodes, num_modes))
             last_ref_node = 0
             for i in range(num_impulses):
                 if imp_times[i] != deltat:
-                    logging.warning(f'A starting time was specified as {imp_times[i]} which is invalid for IRF matrix mode. Starting time will be set to {deltat}.')
+                    logger.warning(f'A starting time was specified as {imp_times[i]} which is invalid for IRF matrix mode. Starting time will be set to {deltat}.')
                 this_ref_node = ref_nodes[i]
                 if this_ref_node <= last_ref_node:
-                    logging.warning(f'ref nodes should be in ascending order and not appear twice (last: {last_ref_node}, current: {this_ref_node}')
+                    logger.warning(f'ref nodes should be in ascending order and not appear twice (last: {last_ref_node}, current: {this_ref_node}')
                 last_ref_node = this_ref_node
                 this_impulses = [(this_ref_node,), (imp_forces[i],), (deltat,), (imp_durs[1],)]
                 time_values, response_time_history, f, energies, amplitudes = self.impulse_response(this_impulses, form, 'combined', deltat, dt_fact, timesteps, num_cycles, out_quant=out_quant, **kwargs)
 
                 if form == 'step' and out_quant[0] == 'd':
-                    disp = self.static(((this_ref_node, imp_forces[i]),), use_meas_nodes=True)[:, 2]
-                    IRF_matrix[:, i, :] = (response_time_history[0] - disp).T
+                    disp = self.static(((this_ref_node, imp_forces[i]),), use_meas_nodes=True)
+                    IRF_matrix[i, :, :, :] = (response_time_history[0] - disp)
                 else:
-
-                    IRF_matrix[:, i, :] = response_time_history[quant_ind].T
+                    IRF_matrix[i, :, :, :] = response_time_history[quant_ind]
 
                 # in normal irf mode, impulses may be at all nodes, at any time
                 # in irf matrix mode, impulses are only at ref node and
@@ -1190,7 +1532,7 @@ class Mechanical(object):
             
             return time_values, IRF_matrix, F_matrix, energy_matrix, amplitudes_matrix
 
-        logging.info(f"Generating impulse response in frequency range [0 ... {self.frequencies[-1]:1.3f}], zeta range [{np.min(self.modal_damping):1.3f}-{np.max(self.modal_damping):1.3f}], number of modes {num_modes},  deltat {deltat:1.6f}, dt_fact for f_max {dt_fact:1.6f}, timesteps {timesteps}, num_cycles for f_min {num_cycles}")
+        logger.info(f"Generating impulse response in frequency range [0 ... {self.frequencies[-1]:1.3f}], zeta range [{np.min(self.modal_damping):1.3f}-{np.max(self.modal_damping):1.3f}], number of modes {num_modes}")
         t_total = timesteps * deltat
 
 #         nrows = int(np.ceil(np.sqrt(num_meas_nodes)))
@@ -1258,11 +1600,9 @@ class Mechanical(object):
 #                         W=(p_i*np.abs(phi_ij))**2/kappa_j*np.pi**2/8
 #                     if np.isclose(zeta_j,0):
 #                         W=(p_i*np.abs(phi_ij))**2/kappa_j*(omegaf_i*omegan_j/(omegaf_i**2-omegan_j**2))**2*(np.cos(omegan_j*tp_i)+1)
-                    # TODO: Improve with quadrature integration
-                    # Integration for half-sine impulse is done by partial integration
+                    
+                    # Integration for half-sine impulse by quad integration
                     W = scipy.integrate.quad(work_integrand_half_sine, a=t_vals_int[0], b=t_vals_int[-1], args=(omegan_j, zeta_j, A, B, C, D, p_i * np.abs(phi_ij), tp_i))[0]
-#                     W=scipy.integrate.simps(imp_resp_int*(imp_int*np.abs(phi_ij)), t_vals_int, even='first') # integration in modal coordinates
-#                     print(W,W_)
 
                 elif form == 'step' or form == 'rect':
 
@@ -1322,13 +1662,14 @@ class Mechanical(object):
         self.resp_hist_imp = response_time_history
         self.modal_imp_energies = modal_imp_energies
         self.modal_imp_amplitudes = modal_amplitudes
-#         fign.suptitle(f'Nodal impulse responses')
-#         plot.show()
+        
+        # TODO: reduce modal_matrices to size (num_meas_nodes, num_modes)
+        
         self.state[3] = True
 
         return time_values, response_time_history, f , modal_imp_energies, modal_amplitudes
 
-    def frequency_response(self, N, fmax=None, out_quant='a', inp_node=-1):
+    def frequency_response(self, N, inp_node, dof, fmax=None, out_quant='a'):
         '''
         Returns the onesided FRF matrix of the linear(ized) system
         at N//2 + 1 frequency lines for all nodes in meas_nodes
@@ -1336,15 +1677,30 @@ class Mechanical(object):
         
         Uses numerically computed modal parameters and discrete system matrices
         The FRF may not be completely equivalent to analytical solutions
+        
+        inp_node is the ANSYS node number -> index is corresponding to
+            meas_nodes (if compensated) or
+            nodes_coordinates if not compensated
         '''
         
+        nodes_coordinates = self.nodes_coordinates
         
+        for i, (node, x, y, z) in enumerate(nodes_coordinates):
+            if node == inp_node:
+                inp_node_ind = i
+                break
+        else:
+            raise RuntimeError(f'input node {inp_node} could not be found in nodes_coordinates')
         
-        logging.warning('Unverified code!')
+        dof_ind = ['ux', 'uy', 'uz'].index(dof)
         
-        # too complicated to get compensated modal_matrices, so we will live with a marginal error
-        _, _, _, kappas, mus, etas = self.modal(modal_matrices=True)
-        frequencies, damping, mode_shapes = self.numerical_response_parameters(compensate=True)
+        # too complicated to get compensated (numerical damping, period elongation) modal_matrices, so we will live with a marginal error
+        _, _, mode_shapes, kappas, _, _ = self.modal(num_modes=10, modal_matrices=True)
+        frequencies, damping, mode_shapes_n = self.numerical_response_parameters(compensate=True, dofs=[dof_ind])
+        # we have to distinguish between input and output mode shapes
+        # output mode shapes are generally only for meas_nodes,
+        # while input mode shapes must be complete i.e. input node could not be in meas_nodes
+        
         
         if fmax is None:
             fmax = np.max(frequencies)
@@ -1352,13 +1708,13 @@ class Mechanical(object):
         df = fmax / (N // 2 + 1)
     
         omegas = np.linspace(0, fmax, N // 2 + 1, False) * 2 * np.pi
-        assert df * 2 * np.pi == (omegas[-1] - omegas[0]) / (N // 2 + 1 - 1)
+        assert np.isclose(df * 2 * np.pi, (omegas[-1] - omegas[0]) / (N // 2 + 1 - 1))
         omegas = omegas[:, np.newaxis]
         
         num_modes = self.num_modes
         num_meas_nodes = len(self.meas_nodes)
         omegans = frequencies * 2 * np.pi
-    
+        
         frf = np.zeros((N // 2 + 1, num_meas_nodes), dtype=complex)
         
         for mode in range(num_modes):
@@ -1366,26 +1722,76 @@ class Mechanical(object):
             omegan = omegans[mode]
             zeta = damping[mode]
             kappa = kappas[mode]
-            mode_shape = mode_shapes[:, mode]
-            modal_coordinate = mode_shape[inp_node]
+            mode_shape = mode_shapes_n[:, mode]
+            modal_coordinate = mode_shapes[inp_node_ind, dof_ind, mode]
             # TODO: extend 3D
             
             if out_quant == 'a':
                 frf += -omegan**2 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
             elif out_quant == 'v':
-                frf += omegan / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[:, np.newaxis]
+                frf += omegan / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
             elif out_quant == 'd':
-                frf += 1 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[:, np.newaxis]
+                frf += 1 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
             else:
-                logging.warning(f'This output quantity is invalid: {out_quant}')
+                logger.warning(f'This output quantity is invalid: {out_quant}')
             
         return omegas, frf
+    
+    def ambient_ifrf(self, f_scale, deltat=None, dt_fact=None, timesteps=None, num_cycles=None, out_quant=['d', 'v', 'a'], dofs=['ux', 'uy', 'uz'], seed=None, **kwargs):
+        '''
+        a shortcut function for ambient using the linear frf and the
+        inverse FFT to generate the signal by orders of magnitude faster
+        non-linear effects, or non-white noise inputs are not possible
+        '''
+        num_nodes = self.num_nodes
+        
+        dt_fact, deltat, num_cycles, timesteps, _ = self.signal_parameters(dt_fact, deltat, num_cycles, timesteps)
+        
+        logger.info(f"Generating ambient response (IFFT/FRF-based) in frequency range [0 ... {self.frequencies[-1]:1.3f}], zeta range [{np.min(self.modal_damping):1.3f}-{np.max(self.modal_damping):1.3f}], number of modes {self.num_modes}")
 
+        logger.warning("WARNING: Gaussian Noise Generator has not been verified!!!!!!")
+        
+        meas_nodes = self.meas_nodes
+        input_nodes = [node for node, x, y, z in self.nodes_coordinates[-2:-1]]
+        
+        rng = np.random.default_rng(seed)
+        phase = rng.uniform(-np.pi, np.pi, (timesteps // 2 + 1, num_nodes))
+        Pomega = f_scale * np.ones_like(phase) * np.exp(1j * phase)
+        
+        response_time_history = [None, None, None]
+        
+        for quant_ind, quant in enumerate(['d', 'v', 'a']):
+            if quant in out_quant:
+                sig = np.zeros((timesteps, len(meas_nodes), 3))
+                # compute ifft for each combination of input and output node
+                # use linear superposition of output signals from each input node
+                
+                for inp_node_ind, inp_node in enumerate(input_nodes):
+                    for dof_ind, dof in enumerate(['ux', 'uy', 'uz']):  # use all dofs in order to comply with the output of a transient simulation
+                        if dof in dofs:
+                            _, this_frf = self.frequency_response(N=timesteps, inp_node=inp_node, dof=dof,
+                                                                  fmax=1 / deltat / 2, out_quant=quant, )
+                            for channel in range(this_frf.shape[1]):
+                                sig[:, channel, dof_ind] += np.fft.irfft(this_frf[:, channel] * Pomega[:, inp_node_ind])
+                response_time_history[quant_ind] = sig
+        
+        time_values = np.linspace(deltat, timesteps * deltat, timesteps) #  ansys also starts at deltat
+        
+        self.inp_hist_amb = None
+        self.t_vals_amb = time_values
+        self.resp_hist_amb = response_time_history
+
+        self.state[2] = True
+        
+        return time_values, response_time_history, None
+    
     def static(self, fz=None, uz=None, use_meas_nodes=False):
         '''
         provide fz/uz as a numpy array of [node, displacement] pairs
         assumes UZ DOF, may have to be changed in the future
         constraints are restored after forced-displacement analysis, currently hardcoded
+        
+        TODO: extend 3D
         '''
 
         if fz is not None:
@@ -1450,17 +1856,17 @@ class Mechanical(object):
             num_modes = self.num_modes
         assert num_modes <= num_nodes
         if num_modes > 10 * num_nodes:
-            logging.warning(f'The number of modes {num_modes} should be greater/equal than 10 number of nodes {num_nodes}.')
+            logger.warning(f'The number of modes {num_modes} should be greater/equal than 10 number of nodes {num_nodes}.')
 
         # cached modal analysis results
         # TODO: the logic needs improvement: num_modes may have been different for both types of analyses
-        if damped and num_modes == self.num_modes and use_cache:
+        if damped and num_modes == self.num_modes and use_cache and not modal_matrices:
             if self.damped_frequencies is not None:
                 frequencies = self.damped_frequencies
                 damping = self.modal_damping
                 mode_shapes = self.damped_mode_shapes
                 return frequencies, damping, mode_shapes
-        elif not damped and num_modes == self.num_modes and use_cache:
+        elif not damped and num_modes == self.num_modes and use_cache and not modal_matrices:
             if self.frequencies is not None:
                 frequencies = self.frequencies
                 mode_shapes = self.mode_shapes
@@ -1469,7 +1875,7 @@ class Mechanical(object):
 
         ansys.prep7()
         if self.coulomb_elements and reset_sliders:
-            logging.info("Temporarily resetting sliders for modal analysis.")
+            logger.info("Temporarily resetting sliders for modal analysis.")
             real_constants = []
             # reset the sliding capabilities (k1,fslide) for modal analysis,
             # else ktot=k2+k1 would be taken
@@ -1501,7 +1907,7 @@ class Mechanical(object):
         ansys.outres(# item='A',
                      item='NSOL',
                      freq='ALL'
-                    # ,cname='meas_nodes'
+                    # ,cname='meas_nodes'# for modal matrices we need the full mode shapes
                      )  # Controls the solution data written to the database.
         if damped:
             ansys.modopt(method='QRDAMP', nmode=num_modes, freqb=0,
@@ -1527,7 +1933,22 @@ class Mechanical(object):
             ansys.wrfull()
             ansys.finish()
             ansys.aux2()
-            # ansys.file(jid,'FULL')
+            '''
+            APDL Guide 4.4
+            The mode shapes from the .MODE file and the DOF results from 
+            the .RST file are in the internal ordering, and they need 
+            to be converted before use with any of the matrices from the .FULL file, as shown below:
+            '''
+            ansys.smat(matrix='Nod2Solv', type='D', method='IMPORT', val1='FULL', val2=f"{self.jobname}.full", val3="NOD2SOLV")
+            # Permutation operators can not be exported, so the mode shapes must be redordered to solver ordering in APDL 
+            if damped:
+                ansys.dmat(matrix="PhiI", type="Z", method="IMPORT", val1="MODE", val2=f"{self.jobname}.mode")
+            else:
+                ansys.dmat(matrix="PhiI", type="D", method="IMPORT", val1="MODE", val2=f"{self.jobname}.mode")
+            ansys.mult(m1='Nod2Solv', t1='', m2='PhiI', t2='', m3='PhiB')
+            ansys.export(matrix="PhiB", format="MMF", fname="PhiB.bin")
+            msh = np.array(scipy.io.mmread('PhiB.bin'))
+            
             ansys.dmat(matrix="MatKD", type="D", method="IMPORT", val1="FULL", val2=f"{self.jobname}.full", val3="STIFF")
             ansys.export(matrix="MatKD", format="MMF", fname="MatKD.bin")
             K = np.array(scipy.io.mmread('MatKD.bin'))
@@ -1541,10 +1962,25 @@ class Mechanical(object):
             except Exception as e:
                 # print(e)
                 C = np.zeros_like(K)
+                # compute modal matrices
             
+            kappas = np.zeros((num_modes))
+            mus = np.zeros((num_modes))
+            etas = np.zeros((num_modes))
+            
+            for mode in range(num_modes):
+                # TODO: should work, since I assume K, M and C are 3D
+                # properly remove constraint nodes
+                # check complex conjugate?
+                msh_f = msh[:, mode]
+
+                kappas[mode] = (msh_f.T.dot(K).dot(msh_f.conj())).real
+                mus[mode] = (msh_f.T.dot(M).dot(msh_f.conj())).real
+                etas[mode] = (msh_f.T.dot(C).dot(msh_f.conj())).real
+        
+        
         ansys.finish()
         
-
         ansys.prep7()
         if self.coulomb_elements and reset_sliders:
             for coulomb, real_constant in zip(self.coulomb_elements, real_constants):
@@ -1561,10 +1997,11 @@ class Mechanical(object):
         if res._resultheader['cpxrst']:  # real and imaginary parts are saved as separate sets
             num_modes_ //= 2
         if num_modes_ != num_modes:
-            logging.warning(f'The number of numerical modes {num_modes_} differs from the requested number of modes {num_modes}.')
+            logger.warning(f'The number of numerical modes {num_modes_} differs from the requested number of modes {num_modes}.')
             num_modes = num_modes_
 
         nnodes = res._resultheader['nnod']
+        assert nnodes == self.num_nodes
         ndof = res._resultheader['numdof']
 
         mode_shapes = np.full((nnodes, ndof, num_modes), (1 + 1j) * np.nan, dtype=complex)
@@ -1593,19 +2030,20 @@ class Mechanical(object):
                 mode_shapes[:, :, mode] = modal_disp
             mode_shapes = mode_shapes.real
             
-        if modal_matrices:
-            
-            kappas = np.zeros_like(frequencies)
-            mus = np.zeros_like(frequencies)
-            etas = np.zeros_like(frequencies)
-            
-            for mode in range(num_modes):
-                # TODO: extend 3D
-                msh_f = mode_shapes[1:, 2, mode].flatten()
+
         
-                kappas[mode] = msh_f.T.dot(K).dot(msh_f)
-                mus[mode] = msh_f.T.dot(M).dot(msh_f)
-                etas[mode] = msh_f.T.dot(C).dot(msh_f)
+        # reduce mode shapes to meas_nodes and translational dof
+        # if self.meas_nodes is not None:
+            # meas_indices = []
+            # for meas_node in self.meas_nodes:
+                # for i, (node, _, _, _) in enumerate(self.nodes_coordinates):
+                    # if node == meas_node:
+                        # meas_indices.append(i)
+                        # break
+                # else:
+                    # raise RuntimeError(f'meas_node {meas_node} could not be found in nodes_coordinates')
+            # mode_shapes = mode_shapes[meas_indices, :3, :]
+        mode_shapes = mode_shapes[:, :3, :]
         
         if damped:
             self.damped_frequencies = frequencies
@@ -1615,7 +2053,7 @@ class Mechanical(object):
             self.frequencies = frequencies
             self.mode_shapes = mode_shapes
         self.num_modes = num_modes
-
+        
         self.state[4] = True
         
         if modal_matrices:
@@ -1659,7 +2097,7 @@ class Mechanical(object):
             if isinstance(parameter_set, (float, int)):
                 rho_inf = parameter_set
             elif parameter_set is None:
-                logging.info("Spectral radius was not supplied. Using 1")
+                logger.info("Spectral radius was not supplied. Using 1")
                 rho_inf = 1
             else:
                 assert len(parameter_set) == 4
@@ -1686,7 +2124,7 @@ class Mechanical(object):
 
         tintopt = 'HHT'
 
-        logging.debug(f'Transient analysis method {meth} with parameter set {parameter_set} -> gamma {delta}, beta {alpha}, alpha_f {alphaf}, alpha_m {alpham}')
+        logger.debug(f'Transient analysis method {meth} with parameter set {parameter_set} -> gamma {delta}, beta {alpha}, alpha_f {alphaf}, alpha_m {alpham}')
 
         self.trans_params = (delta, alpha, alphaf, alpham)
 
@@ -1716,8 +2154,12 @@ class Mechanical(object):
             deltat = np.round(deltat,8)
 
         if timesteps is None:
-            timesteps = int(np.ceil(num_cycles / f_min / deltat))
+            # ensure timesteps is a multiple of 2 to avoid problems in any fft based processing
+            timesteps = int(np.ceil(num_cycles / f_min / deltat) // 2) * 2
         elif num_cycles is None:
+            if timesteps % 2:
+                logging.warning(f'Timesteps is {timesteps}, which is not a multiple of 2. In order to avoid problems in FFT-based processing, setting it to {timesteps +1}')
+                timesteps += 1
             num_cycles = int(np.floor(timesteps * f_min * deltat))
 
         Omega = deltat * frequencies * 2 * np.pi
@@ -1729,26 +2171,27 @@ class Mechanical(object):
                 if alpha_f is None and alpha_m is  None:
                     Omega_bif = (-0.5 * damping * (-gamma + 0.5) + np.sqrt(damping ** 2 * (beta - 0.5 * gamma) - beta + 0.25 * (gamma + 0.5) ** 2)) / (0.25 * (gamma + 0.5) ** 2 - beta)
                     if (Omega > Omega_bif).any():
-                        logging.warning(f'Omega exceeds bifurcation limit for modes {np.where(Omega>Omega_bif)[0]+1}')
+                        warnings.warn(f'Omega exceeds bifurcation limit for modes {np.where(Omega>Omega_bif)[0]+1}')
             # timestep, where decay is down to 1e-8
             else:
                 t_crit = -1 * np.log(1e-8) / damping[-1] / f_max / 2 / np.pi
                 if t_crit <= timesteps * deltat:
-                    logging.warning(f'For conditionally stable integration, convergence issues may appear in free-decay mode due to numerical precision leaking into higher modes: {np.where((deltat*frequencies*2*np.pi)>0.1)[0]+1}.')
+                    logger.warning(f'For conditionally stable integration, convergence issues may appear in free-decay mode due to numerical precision leaking into higher modes: {np.where((deltat*frequencies*2*np.pi)>0.1)[0]+1}.')
 
         self.deltat = deltat
         self.timesteps = timesteps
+        logger.info(f"Signal parameters for upcoming transient: deltat {deltat:1.6f}, dt_fact for f_max {dt_fact:1.6f}, timesteps {timesteps}, num_cycles for f_min {num_cycles}")
 
         return dt_fact, deltat, num_cycles, timesteps, mode_index
 
-    def transient(self, f=None, d=None, timint=1, deltat=None, timesteps=None, out_quant=['a', 'v', 'd'],
-        chunksize=10000, chunk_restart=False, **kwargs):
+    def transient(self, f=None, d=None, timint=1, deltat=None, timesteps=None, out_quant=['d', 'v', 'a'],
+                  chunksize=10000, chunk_restart=False, **kwargs):
         ansys = self.ansys
 
         chunksize = int(chunksize)
         num_chunks = timesteps // chunksize
         if num_chunks > 5 and not chunk_restart:
-            logging.debug(f"{num_chunks}>5 chunks will be computed, enabling chunk_restart")
+            logger.debug(f"{num_chunks}>5 chunks will be computed, enabling chunk_restart")
             chunk_restart = True
 #             prior_log_level = ansys._log.level
 #             ansys.set_log_level('INFO')
@@ -1816,10 +2259,10 @@ class Mechanical(object):
                 ansys.ddele(node=node, lab='UZ')
 
         if 'd' in out_quant:
-            ansys.outres(item='NSOL', freq='ALL' , cname='MEAS_NODES')
+            ansys.outres(item='NSOL', freq='ALL', cname='MEAS_NODES')
 
         if 'a' in out_quant:
-            ansys.outres(item='A', freq='ALL' , cname='MEAS_NODES')
+            ansys.outres(item='A', freq='ALL', cname='MEAS_NODES')
 
         if 'v' in out_quant:
             ansys.outres(item='V', freq='ALL', cname='MEAS_NODES')
@@ -1827,7 +2270,7 @@ class Mechanical(object):
 #         ansys.set_log_level("ERROR")
         t_end = t_start
         t_start = time.time()
-        logging.debug(f'setup  in {t_start-t_end} s')
+        logger.debug(f'setup  in {t_start-t_end} s')
 
         # make sure time series start at t=deltat, a previous solve was done at t=deltat/2, and a constant deltim would shift everything by deltat/2
         # solve for consistent accelerations
@@ -1875,7 +2318,7 @@ class Mechanical(object):
             ansys.output(fname='term')
             if chunk_restart:
                 shutil.copyfile(os.path.join(ansys.directory, ansys.jobname + '.rst'), os.path.join(ansys.directory, ansys.jobname + f'.rst.{chunknum}'))
-                ansys.get(par='RST_SUBSTEPS', entity='ACTIVE',item1='SOLU', it1num='NCMSS')
+                ansys.get(par='RST_SUBSTEPS', entity='ACTIVE', item1='SOLU', it1num='NCMSS')
                 rst_substeps = int(ansys.parameters['RST_SUBSTEPS'])
                 ansys.finish()
                 # not needed, if we just move the rst file, but ansys throws a warning about a missing rst file
@@ -1898,15 +2341,15 @@ class Mechanical(object):
                     ansys.outres(item='ERASE')
                     ansys.outres(item='ALL', freq='NONE')
                     if 'd' in out_quant:
-                        ansys.outres(item='NSOL', freq='ALL' , cname='MEAS_NODES')
+                        ansys.outres(item='NSOL', freq='ALL', cname='MEAS_NODES')
                     if 'a' in out_quant:
-                        ansys.outres(item='A', freq='ALL' , cname='MEAS_NODES')
+                        ansys.outres(item='A', freq='ALL', cname='MEAS_NODES')
                     if 'v' in out_quant:
                         ansys.outres(item='V', freq='ALL', cname='MEAS_NODES')
 
             t_end = t_start
             t_start = time.time()
-            logging.info(f'{stepsize} timesteps in {t_start-t_end:.3f} s')
+            logger.info(f'{stepsize} timesteps in {t_start-t_end:.3f} s')
 
 #         else:
 #             #TODO: align everything with the above procedure
@@ -1935,7 +2378,7 @@ class Mechanical(object):
 #                     os.rename(os.path.join(ansys.directory, ansys.jobname+'.rst'), os.path.join(ansys.directory, ansys.jobname+f'.rst.{chunknum}'))
 #                 t_end=t_start
 #                 t_start = time.time()
-#                 logging.info(f'{timesteps%chunksize} timesteps in {t_start-t_end} s')
+#                 logger.info(f'{timesteps%chunksize} timesteps in {t_start-t_end} s')
 
         ansys.set_log_level("WARNING")
         ansys.finish()
@@ -1954,6 +2397,8 @@ class Mechanical(object):
 
                 solution_data_info = res._solution_header(0)
                 DOFS = solution_data_info['DOFS']
+                ux = DOFS.index(1)
+                uy = DOFS.index(2)
                 uz = DOFS.index(3)
 
                 if 'd' in out_quant:
@@ -1966,15 +2411,15 @@ class Mechanical(object):
             time_values = np.concatenate(out_t)
 
             if 'a' in out_quant:
-                all_disp_a = np.concatenate(out_a, axis=0)[:, :, uz]
+                all_disp_a = np.concatenate(out_a, axis=0)[:, :, (ux, uy, uz)]
             else:
                 all_disp_a = None
             if 'v' in out_quant:
-                all_disp_v = np.concatenate(out_v, axis=0)[:, :, uz]
+                all_disp_v = np.concatenate(out_v, axis=0)[:, :, (ux, uy, uz)]
             else:
                 all_disp_v = None
             if 'd' in out_quant:
-                all_disp_d = np.concatenate(out_d, axis=0)[:, :, uz]
+                all_disp_d = np.concatenate(out_d, axis=0)[:, :, (ux, uy, uz)]
             else:
                 all_disp_d = None
 
@@ -1986,27 +2431,30 @@ class Mechanical(object):
 
             solution_data_info = res._solution_header(0)
             DOFS = solution_data_info['DOFS']
+            
+            ux = DOFS.index(1)
+            uy = DOFS.index(2)
             uz = DOFS.index(3)
-
+            
             if 'd' in out_quant:
-                all_disp_d = res.nodal_time_history('NSL')[1][:, :, uz]
+                all_disp_d = res.nodal_time_history('NSL')[1][:, :, (ux, uy, uz)]
             else:
                 all_disp_d = None
             if 'a' in out_quant:
-                all_disp_a = res.nodal_time_history('ACC')[1][:, :, uz]
+                all_disp_a = res.nodal_time_history('ACC')[1][:, :, (ux, uy, uz)]
             else:
                 all_disp_a = None
             if 'v' in out_quant:
-                all_disp_v = res.nodal_time_history('VEL')[1][:, :, uz]
+                all_disp_v = res.nodal_time_history('VEL')[1][:, :, (ux, uy, uz)]
             else:
                 all_disp_v = None
 
         if len(time_values) != timesteps:
-            logging.warning(f'The number of response values {len(time_values)} differs from the specified number of timesteps {timesteps} -> Convergence or substep errors.')
+            warnings.warn(f'The number of response values {len(time_values)} differs from the specified number of timesteps {timesteps} -> Convergence or substep errors.')
 
         t_end = t_start
         t_start = time.time()
-        logging.info(f'RST parsing in {t_start-t_end} s')
+        logger.info(f'RST parsing in {t_start-t_end} s')
 
         return time_values, [all_disp_d, all_disp_v, all_disp_a]
 
@@ -2179,7 +2627,7 @@ class Mechanical(object):
          - rerun analysis
          - retrieve previously run analyses
         '''
-        logging.info(f'Saving Mechanical object to {save_dir}/{self.jobname}_mechanical.npz')
+        logger.info(f'Saving Mechanical object to {save_dir}/{self.jobname}_mechanical.npz')
         
         if not os.path.isdir(save_dir):
             os.makedirs(save_dir)
@@ -2206,17 +2654,23 @@ class Mechanical(object):
         if self.state[1]:
             out_dict['self.decay_mode'] = self.decay_mode
             out_dict['self.t_vals_decay'] = self.t_vals_decay
-            out_dict['self.resp_hist_decay'] = self.resp_hist_decay
+            out_dict['self.resp_hist_decayd'] = self.resp_hist_decay[0]
+            out_dict['self.resp_hist_decayv'] = self.resp_hist_decay[1]
+            out_dict['self.resp_hist_decaya'] = self.resp_hist_decay[2]
 
         if self.state[2]:
             out_dict['self.inp_hist_amb'] = self.inp_hist_amb
             out_dict['self.t_vals_amb'] = self.t_vals_amb
-            out_dict['self.resp_hist_amb'] = self.resp_hist_amb
+            out_dict['self.resp_hist_ambd'] = self.resp_hist_amb[0]
+            out_dict['self.resp_hist_ambv'] = self.resp_hist_amb[1]
+            out_dict['self.resp_hist_amba'] = self.resp_hist_amb[2]
 
         if self.state[3]:
             out_dict['self.inp_hist_imp'] = self.inp_hist_imp
             out_dict['self.t_vals_imp'] = self.t_vals_imp
-            out_dict['self.resp_hist_imp'] = self.resp_hist_imp
+            out_dict['self.resp_hist_impd'] = self.resp_hist_imp[0]
+            out_dict['self.resp_hist_impv'] = self.resp_hist_imp[1]
+            out_dict['self.resp_hist_impa'] = self.resp_hist_imp[2]
             out_dict['self.modal_imp_energies'] = self.modal_imp_energies
             out_dict['self.modal_imp_amplitudes'] = self.modal_imp_amplitudes
 
@@ -2257,7 +2711,7 @@ class Mechanical(object):
         fname = os.path.join(load_dir, f'{jobname}_mechanical.npz')
         assert os.path.exists(fname)
         
-        print('Now loading previous results from  {}'.format(fname))
+        logger.info('Now loading previous results from  {}'.format(fname))
 
         in_dict = np.load(fname, allow_pickle=True)
         
@@ -2289,7 +2743,7 @@ class Mechanical(object):
                     if damping[-1] == 1 or damping[-1] == 0:
                         damping[-1] = bool(damping[-1])
             #print(damping)
-            
+            #print(meas_nodes)
             mech.build_mdof(nodes_coordinates=nodes_coordinates,
                             k_vals=k_vals, masses=masses, d_vals=d_vals,
                             damping=damping, sl_force_vals=sl_force_vals,
@@ -2356,7 +2810,7 @@ class Mechanical(object):
                     nodes.append([node, x, y, z])
                     break
             else:
-                logging.warning(f'Meas node {meas_node} was not found in nodes_coordinates')
+                logger.warning(f'Meas node {meas_node} was not found in nodes_coordinates')
         
         lines = []
         meas_node_last = 1  # ansys starts at 1
@@ -2376,7 +2830,7 @@ class Mechanical(object):
         
         return nodes, lines, chan_dofs
     
-    def export_geometry(self, save_dir='/vegas/scratch/womo1998/modal_uq/datasets/'):
+    def export_geometry(self, save_dir='/usr/scratch4/sima9999/work/modal_uq/datasets/'):
         'save under jid_folder, nodes_file, lines_file, chan_dofs_file'
         os.makedirs(save_dir, exist_ok=True)
     
@@ -2399,63 +2853,52 @@ class Mechanical(object):
                 
         return
 
-    def numerical_response_parameters(self, num_modes=None, compensate=True):
+    def numerical_response_parameters(self, num_modes=None, compensate=True, dofs = [2]):
         '''optionally, compensate with time integration parameters
         compensate: frequencies for spatial and temporal discretization(and mass matrix formulation?)
         compensate: damping ratios for non-constant rayleigh and temporal discretization
-        modeshapes  only for meas nodes
+        modeshapes are always reduced to the set of meas nodes
         '''
 
-        dofs = [2]  # uz_only
         ndof = len(dofs)
         if num_modes is None:
             num_modes = self.num_modes
 #         frequencies, _, _ = self.modal(damped=False, num_modes=num_modes)
         if self.trans_params is None and compensate:
-            logging.warning('No transient parameters set. Compensation will be skipped.')
+            logger.info('No transient parameters set. Compensation will be skipped.')
             compensate = False
         
         frequencies, damping, mode_shapes = self.modal(damped=True, num_modes=num_modes)
         deltat = self.deltat
+        
+        meas_nodes = self.meas_nodes
+        nodes_coordinates = self.nodes_coordinates
+        meas_indices = []
+        for meas_node in self.meas_nodes:
+            for i, (node, x, y, z) in enumerate(nodes_coordinates):
+                if node == meas_node:
+                    meas_indices.append(i)
+                    break
+            else:
+                raise RuntimeError(f'meas_node {meas_node} could not be found in nodes_coordinates')
+        
+        mode_shapes_n = np.full((len(meas_nodes) * ndof, num_modes), np.nan, dtype=complex)
+        for mode in range(num_modes):
+            for i, dof in enumerate(dofs):
+                mode_shapes_n[len(meas_nodes) * i:len(meas_nodes) * (i + 1), mode] = mode_shapes[meas_indices, dof, mode]
+                
         if not compensate:
             frequencies_n = frequencies
             damping_n = damping
-            
-            meas_nodes = self.meas_nodes
-            nodes_coordinates = self.nodes_coordinates
-            meas_indices = []
-            for meas_node in self.meas_nodes:
-                for i, (node, x, y, z) in enumerate(nodes_coordinates):
-                    if node == meas_node:
-                        meas_indices.append(i)
-                        break
-                else:
-                    raise RuntimeError(f'meas_node {meas_node} could not be found in nodes_coordinates')
-            mode_shapes_n = np.full((len(meas_nodes) * ndof, num_modes), np.nan, dtype=complex)
-            
-            for mode in range(num_modes):
-                for i, dof in enumerate(dofs):
-                    mode_shapes_n[len(meas_nodes) * i:len(meas_nodes) * (i + 1), mode] = mode_shapes[meas_indices, dof, mode]
         else:
             # (delta,alpha, alphaf,alpham)
             # gamma,beta, alphaf, alpham
             gamma_, beta_, alpha_f_, alpha_m_ = self.trans_params
 
-            if gamma_   is None: gamma_ = 0
-            if beta_    is None: beta_ = 0
+            if gamma_ is None: gamma_ = 0
+            if beta_ is None: beta_ = 0
             if alpha_f_ is None: alpha_f_ = 0
             if alpha_m_ is None: alpha_m_ = 0
-
-            meas_nodes = self.meas_nodes
-            nodes_coordinates = self.nodes_coordinates
-            meas_indices = []
-            for meas_node in self.meas_nodes:
-                for i, (node, x, y, z) in enumerate(nodes_coordinates):
-                    if node == meas_node:
-                        meas_indices.append(i)
-                        break
-                else:
-                    raise RuntimeError(f'meas_node {meas_node} could not be found in nodes_coordinates')
 
 #             h,beta,gamma,zeta,omega,Omega,eta=sympy.symbols('h \\beta \gamma \zeta \omega \Omega \eta', real=True, positive=True)
 #             alpha_f, alpha_m, rho_inf=sympy.symbols('$\\alpha_f$ $\\alpha_m$ $\\rho_{\infty}$', real=True)
@@ -2465,7 +2908,6 @@ class Mechanical(object):
 #             A=A1.solve(A2)
             frequencies_n = np.full_like(frequencies, np.nan)
             damping_n = np.full_like(damping, np.nan)
-            mode_shapes_n = np.full((len(meas_nodes) * ndof, num_modes), np.nan, dtype=complex)
 #             for i,(zeta_, freq) in enumerate(zip(damping, frequencies)):
 #                 Omega_ = deltat*freq
 #                 A_sub = A.subs(beta, beta_).subs(gamma, gamma_).subs(alpha_f, alpha_f_).subs(alpha_m,alpha_m_).subs(zeta, zeta_)
@@ -2482,7 +2924,7 @@ class Mechanical(object):
                 zeta_ = damping[mode]
                 freq_ = frequencies[mode]
                 omega_ = freq_ * 2 * np.pi  # damped response frequency, undamped would be a little higher
-                Omega_ = omega_ * deltat
+                # Omega_ = omega_ * deltat
 
                 # If here the damped omega is provided, later Omega_hat_ud is to be used
                 # If here the undamped omega is provided, later Omega_hat_dd is to be used
@@ -2505,7 +2947,7 @@ class Mechanical(object):
                 lamda = lamda[np.logical_and(np.real(lamda) != 0, np.imag(lamda) != 0)]
                 # find the conjugate eigenvalues
                 if np.logical_and(np.real(lamda) < 0, np.imag(lamda) == 0).all():
-                    logging.warning("System has only negative, real eigenvalues!")
+                    logger.warning("System has only negative, real eigenvalues!")
                     frequencies_n[mode] = np.nan
                     damping_n[mode] = np.nan
                 else:
@@ -2520,9 +2962,6 @@ class Mechanical(object):
                         frequencies_n[mode] = Omega_hat_ud / 2 / np.pi / deltat
                         damping_n[mode] = zeta_hat
 
-                for i, dof in enumerate(dofs):
-                    mode_shapes_n[len(meas_nodes) * i:len(meas_nodes) * (i + 1), mode] = mode_shapes[meas_indices, dof, mode]
-            
         self.frequencies_comp = frequencies_n
         self.modal_damping_comp = damping_n
         self.mode_shapes_comp = mode_shapes_n
@@ -2531,9 +2970,17 @@ class Mechanical(object):
         
         return frequencies_n, damping_n, mode_shapes_n
 
-    def get_channel_types(self):
-        ' ref, accel, velo, disp'  # would mean to extend all response analyses with accel,velo,disp arguments, needed?
-        pass
+    # def get_signal(self, channel_defs=None):
+        # '''
+        # TODO :
+        # - for re-usability: the initial signal generation should include all meas_nodes, DOF and quantities, where meas_nodes may be all nodes or at least a large enough subset of these
+        # - create a channel definition list : channel: meas node, dof, quantity (np.ndarray, dtype=int)
+        # - function get_signal returns the requested (or most recent) time series reduced by channel definition list
+        # '''
+        #
+        #
+        #
+        # return t_vals, signal, channel_defs
 
 
 #
@@ -3038,7 +3485,7 @@ def generate_sdof_time_hist(ansys,
     try:
         ansys.finish()
     except pyansys.errors.MapdlExitedError as e:
-        logging.warning(repr(e))
+        logger.exception(e)
         ansys = Mechanical.start_ansys()
     ansys.clear()
 
@@ -3079,7 +3526,7 @@ def generate_sdof_time_hist(ansys,
     # compute elemental parameters
     k_lin = k * (1 - nl_ity)
     if nl_ity:
-        logging.warning("Should k_lin really be reduced here? check definitions of nonlinear again")
+        logger.warning("Should k_lin really be reduced here? check definitions of nonlinear again")
     d_visc = d * (1 - fric_visc_rat)
     d_fric = d * fric_visc_rat
 
@@ -3099,7 +3546,7 @@ def generate_sdof_time_hist(ansys,
 
         # Computation of equivalent friction damping
         fsl_equiv = d_mean / 2 * (k_1 - np.sqrt(k_1 * (-np.pi * omega * d_fric + k_1)))
-        logging.info(f"equivalent slip force {fsl_equiv} for d {d_fric} at omega {omega} and d_mean {d_mean} with k_1 {k_1}")
+        logger.info(f"equivalent slip force {fsl_equiv} for d {d_fric} at omega {omega} and d_mean {d_mean} with k_1 {k_1}")
     else:
         fsl_equiv = None
 #         coulomb = mech.coulomb(k_2=k_lin, k_1=k_1, f_sl= f_sl_equiv, d=d_visc)
@@ -3127,7 +3574,7 @@ def generate_sdof_time_hist(ansys,
     # TODO: account for nonlinear stiffness
     try:
         freqs, damping, _ = mech.modal(True)
-        logging.info(f"Numeric solution: f={freqs} zeta={damping*100}")
+        logger.info(f"Numeric solution: f={freqs} zeta={damping*100}")
     except Exception as e:
         err_file = os.path.join(ansys.directory, ansys.jobname + '.err')
         with open(err_file) as f:
@@ -3141,14 +3588,14 @@ def generate_sdof_time_hist(ansys,
                     break
                 lines_found = f.readlines()
                 block_counter -= 1
-            logging.error(str(lines_found[-10:]))
+            logger.error(str(lines_found[-10:]))
 
             raise e
-        logging.warning('Modal analysis failed, probably something is wrong with the model.')
+        logger.warning('Modal analysis failed, probably something is wrong with the model.')
 
     f_analytical = np.sqrt((k) / m) / np.pi / 2
     zeta_analytical = d / 2 / np.sqrt(k * m) * 100  # in percent of critical damping
-    logging.info(f"Analytic solution: f={f_analytical},zeta={zeta_analytical}")
+    logger.info(f"Analytic solution: f={f_analytical},zeta={zeta_analytical}")
 
 #     # Setup transient simulation parameters
 #     assert deltat is not None or dt_fact is not None
@@ -3168,7 +3615,7 @@ def generate_sdof_time_hist(ansys,
     elif f_scale is not None:
         t_vals, resp_hist, inp_hist = mech.ambient(f_scale, dt_fact=dt_fact, num_cycles=num_cycles, **kwargs)
     else:
-        logging.info(f"Simulating system with omega {omega:1.3f}, zeta {zeta:1.3f}, fric_visc_rat {fric_visc_rat:1.3f}, nonlinearity {nl_ity}, user_provided excitation, deltat {deltat:1.5f}, dt_fact {dt_fact:1.2f}, timesteps {timesteps}, num_cycles {num_cycles}")
+        logger.info(f"Simulating system with omega {omega:1.3f}, zeta {zeta:1.3f}, fric_visc_rat {fric_visc_rat:1.3f}, nonlinearity {nl_ity}, user_provided excitation, deltat {deltat:1.5f}, dt_fact {dt_fact:1.2f}, timesteps {timesteps}, num_cycles {num_cycles}")
         # provide a custom forcing function for verification purposes
         f = kwargs.pop('f', None)
         t_vals, resp_hist = mech.transient(f=f, **kwargs)
@@ -3663,6 +4110,8 @@ def stepsize_example(ansys):
 #########
 # Example showing effect of stepsizes
 #########
+    
+    from mpldatacursor import datacursor
     with matplotlib.rc_context(rc=print_context_dict):
         plot.figure(tight_layout=True)
         zeta_ = 0 / 100
@@ -3837,7 +4286,7 @@ def student_data_part2(jid, result_dir, omega, zeta, dt_fact, num_cycles, f_scal
     try:
         ansys.finish()
     except (pyansys.errors.MapdlExitedError, NameError) as e:
-        logging.warning(repr(e))
+        logger.exception(e)
         ansys = Mechanical.start_ansys(jid=jid, working_dir=working_dir)
 
     ansys.clear()
@@ -4002,14 +4451,11 @@ def identify_student():
     plot.show()
 
 
-
-
-
 def generate_mdof_time_hist(ansys, num_nodes=None, damping=None, nl_stiff=None, sl_forces=None, freq_scale=1, num_modes=None,  # structural parameters
-                     d0=None, f_scale=None,  # loading parameters
-                     deltat=None, dt_fact=None, timesteps=None, num_cycles=None, num_meas_nodes=None, meas_nodes=None,  # signal parameters
-                     savefolder=None, working_dir='/dev/shm/womo1998/', jid=None,  # function parameters
-                     ** kwargs):
+                            d0=None, f_scale=None,  # loading parameters
+                            deltat=None, dt_fact=None, timesteps=None, num_cycles=None, num_meas_nodes=None, meas_nodes=None,  # signal parameters
+                            savefolder=None, working_dir='/dev/shm/womo1998/', jid=None,  # function parameters
+                            ** kwargs):
     '''
     argument:
         damping = None -> no damping
@@ -4057,86 +4503,17 @@ def generate_mdof_time_hist(ansys, num_nodes=None, damping=None, nl_stiff=None, 
         print(e)
         ansys = Mechanical.start_ansys()
     ansys.clear()
-    # Example structure Burscheid Longitudinal modes
-    total_height = 200
-    E = 2.1e11 * freq_scale ** 2  # for scaling the frequency band linearly; analytical solution is proportional to sqrt(E); (ratios are fixed for a rod 1:2:3:4:... or similar)
-    # I=0.01416
-    A = 0.0343
-    rho = 7850
-
-    num_nodes = int(num_nodes)
-
-    section_length = total_height / (num_nodes - 1)
-    nodes_coordinates = []
-    k_vals = [0 for _ in range(num_nodes - 1)]
-    masses = [0 for _ in range(num_nodes)]
-    d_vals = None  # [0 for i in range(num_nodes-1)]
-    eps_duff_vals = [0 for _ in range(num_nodes-1)]
-    sl_force_vals = [0 for _ in range(num_nodes-1)]
-    hyst_vals =  [0 for _ in range(num_nodes-1)]
     
-    if isinstance(damping, (list,tuple)):
-        if len(damping) == 2 and isinstance(damping[1], bool):
-            hyst_damp = damping[0]
-    else:
-        hyst_damp=None
-    
-    for i in range(num_nodes):
-#         nodes_coordinates.append([i+1,0,0,section_length*i])
-        nodes_coordinates.append([i + 1, 0, 0, 0])  # to disable Warning "Nodes are not coincident"
-        masses[i] += 0.5 * rho * A * section_length
-        if i >= 2:
-            masses[i - 1] += 0.5 * rho * A * section_length
-        if i >= 1:
-            k_vals[i - 1] = E * A / section_length
-            
-            if nl_stiff is not None:
-                eps_duff_vals[i-1]=nl_stiff
-            if sl_forces is not None:
-                sl_force_vals[i-1]=sl_forces
-            if hyst_damp is not None:
-                hyst_vals [i-1] = hyst_damp
-#     omega=2
-#     zeta=0.1
-#
-#     m=1
-#     k = omega**2*m/(1-zeta**2)# N/m
-#     d = 2*zeta*np.sqrt(k*m)
-#
-#     masses=[m,m]
-#     k_vals=[k]
-#     d_vals=[d]
-#     damping=None
-
-    if num_meas_nodes is None and meas_nodes is None:
-        meas_nodes = [node for node, _, _, _ in nodes_coordinates[1:]]  # exclude the constrained node
-    elif num_meas_nodes is not None and meas_nodes is None:
-        # step = int(np.floor(num_nodes/num_meas_nodes))
-        # meas_nodes = np.concatenate(([1],np.arange(step,num_nodes+1,step)))
-        meas_nodes = np.rint(np.linspace(1, num_nodes, int(num_meas_nodes + 1))).astype(int)
-        if len(meas_nodes) != (num_meas_nodes + 1):
-            print(f'Warning number of meas_nodes generated {len(meas_nodes)} differs from number of meas_nodes specified {num_meas_nodes+1}')
-    elif num_meas_nodes is not None and meas_nodes is not None:
-        raise RuntimeError(f'You cannot provide meas_nodes {meas_nodes} and num_meas_nodes {num_meas_nodes} at the same time')
-
-    mech = Mechanical(ansys, jid, wdir=os.getcwd())
-    mech.build_mdof(nodes_coordinates=nodes_coordinates,
-                    k_vals=k_vals, masses=masses, d_vals=d_vals, damping=damping,
-                    sl_force_vals=sl_force_vals, eps_duff_vals=eps_duff_vals,hyst_vals=hyst_vals,
-                    meas_nodes=meas_nodes, num_modes=num_modes,)
-    
-    if num_modes is None:
-        num_modes = mech.num_modes
+    mech = Mechanical(ansys=ansys, jobname=jid, wdir=working_dir)
+    mech.example_rod(num_nodes, damping, nl_stiff, sl_forces, freq_scale, num_modes, num_meas_nodes, meas_nodes)
 
     if kwargs.pop('just_build', False):
         return mech
-    # ansys.finish()
-    # mech.modal()
-    # ansys.open_gui()
+    
     if kwargs.pop('convergence_study', False):
         disp = mech.static(uz=np.array([[num_nodes, 1]]))
         frequencies, damping, modeshapes = mech.modal(damped=False, num_modes=num_modes)
-        return [coords[3] for coords in nodes_coordinates], disp[:, 2], frequencies, modeshapes[:, 2, :].real
+        return [coords[3] for coords in mech.nodes_coordinates], disp[:, 2], frequencies, modeshapes[:, 2, :].real
 
     if kwargs.pop('damping_study', False):
         frequencies, damping, modeshapes = mech.modal(damped=True, num_modes=num_modes)
@@ -4166,8 +4543,8 @@ def generate_mdof_time_hist(ansys, num_nodes=None, damping=None, nl_stiff=None, 
         meas_nodes = mech.meas_nodes
 
         if False:
-            import PreprocessingTools
-            import PlotMSH
+            from core import PreprocessingTools
+            from core import PlotMSH
 
             mech.export_geometry(f'/dev/shm/womo1998/{jid}/')
             geometry = PreprocessingTools.GeometryProcessor.load_geometry(f'/dev/shm/womo1998/{jid}/grid.txt', f'/dev/shm/womo1998/{jid}/lines.txt')
@@ -4326,7 +4703,7 @@ def generate_mdof_time_hist(ansys, num_nodes=None, damping=None, nl_stiff=None, 
         jid = ansys.jobname
 
         mech.export_geometry(f'/dev/shm/womo1998/{jid}/')
-        import PreprocessingTools
+        from core import PreprocessingTools
         geometry = PreprocessingTools.GeometryProcessor.load_geometry(f'/dev/shm/womo1998/{jid}/grid.txt', f'/dev/shm/womo1998/{jid}/lines.txt')
 
         if out_quant[0] == 'd':
@@ -4665,7 +5042,7 @@ def eigenvalue_decomposition_example(ansys):
     # # try:
         # # ansys.finish()
     # # except (pyansys.errors.MapdlExitedError, NameError) as e:
-        # # logging.warning(repr(e))
+        # # logger.warning(repr(e))
     # if working_dir is None:
         # working_dir = os.getcwd()
     # os.chdir(working_dir)
@@ -4679,7 +5056,7 @@ def eigenvalue_decomposition_example(ansys):
         # log_broadcast=False, jobname=jid,
         # mode='console', additional_switches='-smp')
         #
-    # logging.debug(f'Took {time.time()-now} s to start up ANSYS.')
+    # logger.debug(f'Took {time.time()-now} s to start up ANSYS.')
     #
     # ansys.clear()
     #
@@ -4712,7 +5089,7 @@ def model_performance():
         data_manager.provide_sample_inputs(arrays, names)
         return
     elif False:
-        data_manager = DataManager.from_existing(dbfile_in='model_perf2.nc', result_dir='/vegas/scratch/womo1998/modal_uq/')
+        data_manager = DataManager.from_existing(dbfile_in='model_perf2.nc', result_dir='/usr/scratch4/sima9999/work/modal_uq/')
         # data_manager.clear_failed(True)
         data_manager.post_process_samples()
 
@@ -4720,7 +5097,7 @@ def model_performance():
     else:
         ansys = Mechanical.start_ansys()
 
-        data_manager = DataManager.from_existing(dbfile_in='model_perf2.nc', result_dir='/vegas/scratch/womo1998/modal_uq/')
+        data_manager = DataManager.from_existing(dbfile_in='model_perf2.nc', result_dir='/usr/scratch4/sima9999/work/modal_uq/')
         func_kwargs = {'ansys':ansys, 'damping':0.05, 'dt_fact':0.01, 'timesteps':4001, 'perf_bench':True}
         arg_vars = [('num_nodes', 'num_nodes'), ('d0', 'd0'), ('f_scale', 'f_scale'), ('num_meas_nodes', 'num_meas_nodes'), ('chunksize', 'chunksize')]
 #         data_manager.evaluate_samples(func=generate_mdof_time_hist, arg_vars=arg_vars, ret_names=['mean', 'min', 'max', 'std'],**func_kwargs,
@@ -5005,7 +5382,7 @@ def test():
     os.makedirs(working_dir, exist_ok=True)
     os.chdir(working_dir)
     
-    save_dir = '/vegas/scratch/womo1998/modal_uq/test_mechanical/'
+    save_dir = '/usr/scratch4/sima9999/work/modal_uq/test_mechanical/'
     
     jid = 'test_mechanical'
     ansys = Mechanical.start_ansys(working_dir, jid)
@@ -5123,7 +5500,7 @@ def main():
     try:
         ansys.finish()
     except (pyansys.errors.MapdlExitedError, NameError) as e:
-        logging.warning(repr(e))
+        logger.exception(e)
         global working_dir
         working_dir = '/dev/shm/womo1998/'
         os.makedirs(working_dir, exist_ok=True)
@@ -5139,7 +5516,7 @@ def main():
 #     return
     # global working_dir
     # working_dir = os.getcwd()
-    # working_dir = '/vegas/scratch/womo1998/modal_uq/'
+    # working_dir = '/usr/scratch4/sima9999/work/modal_uq/'
     # working_dir = '/dev/shm/womo1998/'
     # os.makedirs(working_dir, exist_ok=True)
     # os.chdir(working_dir)

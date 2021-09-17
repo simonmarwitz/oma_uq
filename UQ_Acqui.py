@@ -1,0 +1,362 @@
+from uncertainty.data_manager import DataManager, HiddenPrints
+from model.mechanical import Mechanical, MechanicalDummy
+from model.acquisition import Acquire
+
+from core.PreprocessingTools import PreprocessData
+from core.SSICovRef import BRSSICovRef
+
+import os
+#import uuid
+import numpy as np
+#from scipy import *
+import matplotlib.pyplot as plt
+#import pyansys
+
+#import ray
+
+
+def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
+                             num_nodes=101, num_modes=10, damping=0.01, freq_scale=1.0, num_meas_nodes=20, # structural properties
+                             f_scale=1000, dt_fact=0.01, num_cycles=500,  # time integration properties
+                             num_sensors=10, lumped=False, quant='a',  # sensor placement / properties
+                             snr_db=-30.0, noise_power=0.0, ref_sig='channel',  # acquisition noise properties
+                             sample_dur=None, margin=None, bits=16, duration=None,  # sampling properties
+                             decimate_factor=None, tau_max=100, window='None',  # signal processing parameters
+                             order_factor=2,  # system identification parameters
+                             ):
+    
+        
+
+    skip_existing = True
+    savefolder = os.path.join(result_dir, jid)
+    jid_int = int.from_bytes(bytes(jid, 'utf-8'), 'big')
+    
+    # load/generate  mechanical object:
+    # ambient response of a n dof rod,
+    if not os.path.exists(os.path.join(savefolder, f'{jid}_mechanical.npz')) or not skip_existing:
+        if True:
+            mech = Mechanical(ansys=ansys, jobname=jid, wdir=working_dir)
+            mech.example_rod(num_nodes=num_nodes, damping=damping, num_modes=num_modes, freq_scale=freq_scale, num_meas_nodes=num_meas_nodes)
+            mech.ambient_ifrf(f_scale, None, dt_fact, None, num_cycles, [quant], ['uz'], seed=jid_int)
+            mech.save(savefolder)
+        else:
+            #ansys = Mechanical.start_ansys(working_dir, jid)
+            mech = Mechanical(ansys=ansys, jobname=jid, wdir=working_dir)
+            mech.example_rod(num_nodes=num_nodes, damping=damping, num_modes=num_modes, num_meas_nodes=num_meas_nodes)
+            mech.ambient(f_scale, None, dt_fact, None, num_cycles, out_quant=[quant], seed=jid_int)
+            # mech = generate_mdof_time_hist(ansys=ansys, num_nodes=num_nodes, damping=damping,
+                                           # num_modes=num_modes, f_scale=f_scale,
+                                           # dt_fact=dt_fact, num_cycles=num_cycles)
+            mech.save(savefolder)
+    else:
+        try:
+            mech = MechanicalDummy.load(jid, savefolder)
+        except (EOFError, KeyError):
+            print(f'File {os.path.join(savefolder, f"{jid}_mechanical.npz")} corrupted. Deleting.')
+            os.remove(os.path.join(savefolder, f'{jid}_mechanical.npz'))
+            return
+        #mech = mechanical.Mechanical.load(jid, savefolder)
+    # sig = mech.resp_hist_amb[2]
+    # plt.figure()
+    # for channel in range(sig.shape[1]):
+        # plt.plot(sig[:,channel,2], label=mech.meas_nodes[channel])
+    # plt.legend()
+    # plt.show()
+    if isinstance(mech, MechanicalDummy):
+        frequencies_n, damping_n, mode_shapes_n = mech.frequencies_comp, mech.modal_damping_comp, mech.mode_shapes_comp
+    else:
+        frequencies_n, damping_n, mode_shapes_n = mech.numerical_response_parameters()
+    
+    # pass mechanical object to acquire
+    if lumped:
+        num_meas_nodes = len(mech.meas_nodes)
+        free_nodes = num_meas_nodes - num_sensors
+        assert free_nodes > 0
+        rng = np.random.default_rng(3*jid_int)
+        start_node = rng.integers(0, free_nodes)
+        meas_nodes = mech.meas_nodes[start_node:start_node + num_sensors]
+    else:
+        # evenly distributed sensors
+        num_meas_nodes = len(mech.meas_nodes)
+        ind = np.rint(np.linspace(0, num_meas_nodes - 1, num_sensors)).astype(int)
+        meas_nodes = mech.meas_nodes[ind]
+        
+    assert len(meas_nodes) == num_sensors
+    channel_defs = [(meas_node, 'uz', quant) for meas_node in meas_nodes]
+    
+    acqui = Acquire.init_from_mech(mech, channel_defs=channel_defs)
+    # sig = acqui.signal
+    # num_channels = acqui.num_channels
+    # Fs = 1 / acqui.deltat
+    # fig, axes = plt.subplots(num_channels, 2, sharex='col', sharey='col', tight_layout=True)
+    # axes = axes.T
+    # for channel in range(num_channels):
+        # axes[0, channel].plot(acqui.t_vals, sig[channel, :], alpha=.5)
+        # axes[1, channel].psd(sig[channel, :], NFFT=8192, Fs=Fs, alpha=.5)
+
+    
+    power_signal, power_noise = acqui.add_noise(snr_db=snr_db, noise_power=noise_power, ref_sig=ref_sig, seed=2*jid_int)
+    '''
+    for sampling it is of primary interest, much noise results from sample-and-hold process
+    that means, how much noise results from inproper anti-aliasing -> snr_alias
+    in physical sampling this is influenced by the order of the anti-aliasing filter 
+    (i.e. the signal power above the cutoff) and the cutoff-to-nyquist-rate
+        -> these are our primary derived input quantities (numtaps, fs / cutoff)
+    in this simulation low numbers of timesteps and high decimation rates mostly affect this
+        -> these are secondary derived input quantities for ensuring a negligible effect (sim_timesteps, dec_rate)
+    
+    quantization is affected by the number of bits and the chosen measurement range
+     in relation to the actual range of signal values -> the (normalized) margin
+     no other simulative processes seem to affect it
+        -> bits, margin_quant_norm
+    
+    '''
+    fs, numtaps, cutoff = acqui.sample_helper(f_max=frequencies_n[-1])
+    dec_rate, sim_timesteps = int(1 / (acqui.deltat * fs)), acqui.num_timesteps
+    meas_range = acqui.estimate_meas_range(sample_dur=sample_dur, margin=margin)
+    _, _, snr_alias, snr_quant, margin_quant_norm = acqui.sample(fs, numtaps, cutoff, bits, meas_range, duration)
+    snr_db_out = acqui.snr_db
+    frequencies_a, damping_a, mode_shapes_a = acqui.modal_frequencies, acqui.modal_damping, acqui.mode_shapes
+    
+    # sig = acqui.signal
+    # Fs = 1 / acqui.deltat
+    # for channel in range(num_channels):
+        # axes[0, channel].plot(acqui.t_vals, sig[channel, :], alpha=.5)
+        # node, dof, quantity = acqui.channel_defs[channel]
+        # label = f'{["dsp", "vel", "acc", ][quantity]} {node} {["x", "y", "z"][dof]}'
+        # axes[1, channel].psd(sig[channel, :], NFFT=8192, Fs=Fs, label=label, alpha=.5)
+        # axes[1, channel].legend()
+        # axes[1, channel].set_xlim((0, 150))
+        # for freq in acqui.modal_frequencies:
+            # axes[1, channel].axvline(freq, zorder=-10)
+            #
+    # plt.show()
+    # pass to PreProcessingTools
+    prep_data = PreprocessData(**acqui.to_prep_data())
+    #prep_data.plot_data(svd_spect=True)
+    if decimate_factor is not None:  # implying signal shall be decimated
+        prep_data.decimate_data(decimate_factor, highpass=None, order=int(21 * decimate_factor), filter_type='brickwall')
+    if window!='None':  # implying welch's method to be used
+        prep_data.corr_welch(tau_max, window)
+    else:
+        with HiddenPrints():
+            prep_data.compute_correlation_matrices(tau_max)
+    #prep_data.plot_data(svd_spect=True)
+    #plt.show()
+    # pass to Modal System Identification
+    model_order = num_modes * order_factor
+    modal_data = BRSSICovRef(prep_data)
+    modal_data.build_toeplitz_cov(num_block_columns=tau_max // 2)
+    modal_data.compute_state_matrices(max_model_order=model_order)
+    modal_frequencies, modal_damping, mode_shapes, _, modal_contributions = modal_data.single_order_modal(order=model_order)
+    
+    sort_ind = np.argsort(modal_frequencies[modal_frequencies != 0])
+    modal_damping = modal_damping[sort_ind]
+    modal_frequencies = modal_frequencies[sort_ind]
+    mode_shapes = mode_shapes[:, sort_ind]
+    modal_contributions = modal_contributions[sort_ind]
+    
+    if False:
+        modal_data.compute_modal_params()
+        
+        from core import StabilDiagram
+        from GUI import StabilGUI
+        stabil_calc = StabilDiagram.StabilCalc(modal_data)
+        stabil_plot = StabilDiagram.StabilPlot(stabil_calc)
+        StabilGUI.start_stabil_gui(stabil_plot, modal_data, None, prep_data)
+    
+    # all_nod_x = mech.meas_nodes
+    # nod_x_a = meas_nodes
+    # fig, axes = plt.subplots(3, 3, sharex=True, sharey=True)
+    # axes = axes.flat
+    # for mode in range(9):
+        # this_mode_shape = mode_shapes_n[:, mode] / mode_shapes_n[-1, mode]
+        # axes[mode].plot(all_nod_x, np.abs(this_mode_shape),
+                        # #np.sign(np.angle(this_mode_shape)) * np.abs(this_mode_shape),
+                        # label=f'mech: {frequencies_n[mode]:1.2f}, {damping_n[mode]:1.2f}', ls='none', marker='x')
+        # this_mode_shape = mode_shapes_a[:, mode] / mode_shapes_a[-1, mode]
+        # axes[mode].plot(nod_x_a, np.abs(this_mode_shape),
+                        # #np.sign(np.angle(this_mode_shape)) * np.abs(this_mode_shape),
+                        # label=f'acqui: {frequencies_a[mode]:1.2f}, {damping_a[mode]:1.2f}', ls='none', marker='+')
+        # id_mode = np.argmin(np.abs(modal_frequencies - frequencies_a[mode]))
+        # this_mode_shape = mode_shapes[:, id_mode] / mode_shapes[-1, id_mode]
+        # axes[mode].plot(nod_x_a, np.abs(this_mode_shape),
+                        # #np.sign(np.angle(this_mode_shape)) * np.abs(this_mode_shape),
+                        # label=f'ident: {modal_frequencies[id_mode]:1.2f}, {modal_damping[id_mode]:1.2f}', ls='none', marker='o', fillstyle='none')
+        # axes[mode].legend(title=f'mode: {mode}')
+    # plt.show()
+        
+    return (frequencies_a, damping_a, mode_shapes_a,  # reference output parameters
+            np.array(numtaps), np.array(fs), np.array(cutoff), margin_quant_norm,  # derived input parameters 
+            np.array(sim_timesteps), np.array(dec_rate), # control input parameters
+            snr_alias, snr_quant, snr_db_out,  # intermediate output parameters
+            np.array(model_order),  # derived input parameter
+            modal_frequencies, modal_damping, mode_shapes,  # output parameters
+            modal_contributions  # intermediate output parameters
+            )
+    
+    
+def uq_acqui(step=3):
+    
+    if step == 0 or not os.path.exists(os.path.join('/usr/scratch4/sima9999/work/modal_uq/uq_acqui/', 'uq_acqui.nc')):
+        data_manager = DataManager(title='uq_acqui', working_dir='/run/user/30980/work/', result_dir='/usr/scratch4/sima9999/work/modal_uq/uq_acqui/')
+        
+        #num_nodes=101,
+        #num_meas_nodes = 100,
+        #f_scale=1000,
+        #dt_fact=0.01,
+        quant='a',
+        #noise_power=0.0,
+        #ref_sig='channel',
+        #sample_dur=None,
+        #margin=None,
+        #duration=None,
+        #decimate_factor=None,
+       
+        # data_manager.generate_sample_inputs(names=['num_modes',
+        #                                            'damping',
+        #                                            'freq_scale',
+        #                                            'num_cycles',
+        #                                            'num_sensors',
+        #                                            'lumped',
+        #                                            'snr_db',
+        #                                            'bits',
+        #                                            'tau_max'],
+        #                             distributions=[('integers', (2, 21)),
+        #                                            ('uniform', (0.01, 0.1)),
+        #                                            ('uniform', (0.5, 2)),
+        #                                            ('integers', (500, 1501)),
+        #                                            ('integers', (2, 11)),
+        #                                            ('integers', (0, 2)),
+        #                                            ('uniform', (-30, 10)),
+        #                                            ('choice', ([8, 16, 32],)),
+        #                                            ('integers', (50, 501)),
+        #                                            ],
+        #                             num_samples=1000)
+        data_manager.generate_sample_inputs(names=['window',
+                                                   'order_factor'],
+                                    distributions=[('choice',(['None','hann'],)),
+                                                   ('integers',(2,11)),
+                                                    ],
+                                    num_samples=1000)
+                                                   
+        return
+    if step == 1:
+        data_manager = DataManager.from_existing(dbfile_in='uq_acqui.nc', result_dir='/usr/scratch4/sima9999/work/modal_uq/uq_acqui/')
+        # data_manager.clear_failed(True)
+        data_manager.post_process_samples()
+
+        return
+    if step == 2:
+        #ansys = Mechanical.start_ansys()
+
+        data_manager = DataManager.from_existing(dbfile_in='uq_acqui.nc', result_dir='/usr/scratch4/sima9999/work/modal_uq/uq_acqui/')
+        func_kwargs = {'ansys':None, 'num_nodes':101, 'num_meas_nodes': 100,
+                       'f_scale':1000, 'dt_fact':0.01, 'quant':'a', 'noise_power':0.0,
+                       'ref_sig':'channel', 'sample_dur':None, 'margin':None, 'duration':None,
+                       'decimate_factor':None}
+        arg_vars = {'num_modes':'num_modes',
+                    'damping':'damping',
+                    'freq_scale':'freq_scale',
+                    'num_cycles':'num_cycles',
+                    'num_sensors':'num_sensors',
+                    'lumped':'lumped',
+                    'snr_db':'snr_db',
+                    'bits':'bits',
+                    'tau_max':'tau_max',
+                    'window':'window',
+                    'order_factor':'order_factor'}
+        
+        ret_names = {'frequencies_a':('modes',), 
+                     'damping_a':('modes',), 
+                     'mode_shapes_a':('channels','modes',),  # reference output parameters
+                     'numtaps':(),
+                     'fs':(),
+                     'cutoff':(),
+                     'margin':('channels',),  # derived input parameters
+                     'sim_steps':(),
+                     'dec_rate':(), #control input parameters
+                     'snr_alias':('channels',),
+                     'snr_quant':('channels',), 
+                     'snr_db_out':('channels',),  # intermediate output parameters
+                     'model_order':(),  # derived input parameter
+                     'modal_frequencies':('modes',),
+                     'modal_damping':('modes',), 
+                     'mode_shapes':('channels', 'modes',),  # output parameters
+                     'modal_contributions':('modes',)  # intermediate output parameters
+                     }        
+        
+        # ret_names = ['frequencies_a', 'damping_a', 'mode_shapes_a',  # reference output parameters
+        #              'numtaps', 'cutoff', 'meas_range',  # derived input parameters
+        #              'snr_alias', 'snr_quant', 'snr_db_out',  # intermediate output parameters
+        #              'model_order',  # derived input parameter
+        #              'modal_frequencies', 'modal_damping', 'mode_shapes',  # output parameters
+        #              'modal_contributions'  # intermediate output parameters
+        #              ]
+        data_manager.evaluate_samples(func=model_acqui_signal_sysid, arg_vars=arg_vars, ret_names=ret_names, **func_kwargs,
+                                      chwdir=True, dry_run=False, default_len={'modes':100, 'channels':10} # modes = max(num_modes) * max(order_factor) / 2
+                                      
+                                      )
+        #['d6075c96cfb7', 'b5c3a0c90604', 'e2cc12128797', '6251717cb53e','d60c3915887e', '79dc28c2f054', '9e6fd66b51c5']
+
+        return
+    if step == 3:
+        import matplotlib
+        from helpers import get_pcd
+        pcd = get_pcd()
+        data_manager = DataManager.from_existing(dbfile_in='uq_acqui.nc', result_dir='/usr/scratch4/sima9999/work/modal_uq/uq_acqui/')
+        # data_manager.clear_failed(True)
+        
+        
+        with matplotlib.rc_context(rc=pcd):
+            # influences of signal acquistion (quantization and sampling)
+            # names = ['snr_db','bits','margin', 'this_snr_quant','this_snr_db_out']
+            # data_manager.post_process_samples(names=names, db='processed')
+            
+            # names = ['snr_db', 'numtaps_fact', 'nyq_rat','sim_steps', 'dec_rate', 'this_snr_alias', 'this_snr_db_out'] # numtaps_fact = numtaps/dec_fact, nyq_rat=fs/cutoff, <- constant
+            # data_manager.post_process_samples(names=names, db='processed')
+            
+            # names = ['this_snr_db_out','freq_diff','damp_diff','modal_assurance','unp_id','unp_num']
+            # data_manager.post_process_samples(names=names, db='processed')
+            
+            # influences of sensors
+            names = ['lumped', 'num_sensors','freq_diff','damp_diff','modal_assurance','unp_id','unp_num'] # quant
+            data_manager.post_process_samples(names=names, db='processed', draft=False, 
+                                              labels=['sensor distribution', '$n_\\text{sensors}$','$\\Delta_f$','\\Delta_{\\zeta}}','MAC','$m_\\text{additional}$','$m_\\text{missing}$'])
+            
+            # influences of signal processing and system identification
+            names = ['all_n_cycl','tau_max','order_factor','freq_diff','damp_diff','modal_assurance','unp_id','unp_num']
+            data_manager.post_process_samples(names=names, db='processed', draft=False)
+            
+            
+            # influences of structural parameters
+            names = ['damping','freq_scale','num_modes','this_delta_f','this_delta_d','this_mac','unp_id','unp_num']
+            data_manager.post_process_samples(names=names, db='processed', draft=False)
+            
+            names = None
+            data_manager.post_process_samples(names=names, db='processed', draft=False)
+            #data_manager.post_process_samples()
+
+        return
+    if step == 4:
+        data_manager = DataManager.from_existing(dbfile_in='uq_acqui.nc', result_dir='/usr/scratch4/sima9999/work/modal_uq/uq_acqui/')
+        data_manager.clear_failed(dryrun=True)
+
+def main():
+    if False:        
+        import uuid
+        working_dir = '/run/user/30980/work/'
+        result_dir = '/usr/scratch4/sima9999/work/modal_uq/uq_acqui/'
+        jid = '6892f3e8f39e'
+    
+        fun_out = model_acqui_signal_sysid(jid, result_dir, working_dir, window='None', order_factor=2)
+        for a in fun_out:
+            print(a)
+            
+    else:
+        #import logging
+        #logging.getLogger('uncertainty.data_manager').setLevel(logging.DEBUG)
+        uq_acqui(3)
+    
+if __name__ == '__main__':
+    main()

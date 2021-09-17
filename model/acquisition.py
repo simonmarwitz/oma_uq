@@ -1,15 +1,74 @@
 '''
 models the signal acquisition:
 
-
+TODO:
+ * sensor FRF simulation
+ * predefined noise profiles
 
 
 '''
 
 import numpy as np
 import scipy.signal
+import matplotlib
 import matplotlib.pyplot as plt
 import os
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+
+class LoggingContext(object):
+    def __init__(self, logger, level=None, handler=None, close=True):
+        self.logger = logger
+        self.level = level
+        self.handler = handler
+        self.close = close
+
+    def __enter__(self):
+        if self.level is not None:
+            self.old_level = self.logger.level
+            self.logger.setLevel(self.level)
+        if self.handler:
+            self.logger.addHandler(self.handler)
+
+    def __exit__(self, et, ev, tb):
+        if self.level is not None:
+            self.logger.setLevel(self.old_level)
+        if self.handler:
+            self.logger.removeHandler(self.handler)
+        if self.handler and self.close:
+            self.handler.close()
+        # implicit return of None => don't swallow exceptions
+        
+        
+print_context_dict = {'text.usetex':True,
+                     'text.latex.preamble':"\\usepackage{siunitx}\n \\usepackage{xfrac}",
+                     'font.size':10,
+                     'legend.fontsize':10,
+                     'xtick.labelsize':10,
+                     'ytick.labelsize':10,
+                     'axes.labelsize':10,
+                     'font.family':'serif',
+                     'legend.labelspacing':0.1,
+                     'axes.linewidth':0.5,
+                     'xtick.major.width':0.2,
+                     'ytick.major.width':0.2,
+                     'xtick.major.width':0.5,
+                     'ytick.major.width':0.5,
+                     'figure.figsize':(5.906, 5.906 / 1.618),  # print #150 mm \columnwidth
+                     # 'figure.figsize':(5.906/2,5.906/2/1.618),#print #150 mm \columnwidth
+                     # 'figure.figsize':(5.53/2,2.96),#beamer
+                     # 'figure.figsize':(5.53/2*2,2.96*2),#beamer
+                     'figure.dpi':100}
+    # figsize=(5.53,2.96)#beamer 16:9
+    # figsize=(3.69,2.96)#beamer 16:9
+    # plot.rc('axes.formatter',use_locale=True) #german months
+# must be manually set due to some matplotlib bugs
+# if print_context_dict['text.usetex']:
+    # # plt.rc('text.latex',unicode=True)
+    # plt.rc('text', usetex=True)
+    # plt.rc('text.latex', preamble="\\usepackage{siunitx}\n \\usepackage{xfrac}")
 
 
 class Acquire(object):
@@ -30,63 +89,113 @@ class Acquire(object):
         - decimation noise -> results from imperfect filtering before sample reduction
         - signal energies -> might change due to frf, noise and sampling
         - ...
-        
+    
+    .. TODO::
+        * add save / load abilities
+        * implement apply_sensor function
+        * add functions for verification, plots
     '''
-    def __init__(self, t_vals, signal=None, IRF_matrix=None, 
-                 modal_frequencies=None, modal_damping=None, mode_shapes=None
+    def __init__(self, t_vals, signal=None, IRF_matrix=None, channel_defs=None,
+                 modal_frequencies=None, modal_damping=None, mode_shapes=None,
+                 modal_energies=None, modal_amplitudes=None,
+                 jobname=None,
                  ):
         '''
-        input a synthethised signal (ambient response, impulse response) and corresponding t_vals 
-        
+        input a synthethised signal (ambient response, impulse response) and corresponding t_vals
         
         
         '''
         if IRF_matrix is not None:
             assert signal is None
-            num_meas_nodes = IRF_matrix.shape[0]
-            num_ref_nodes = IRF_matrix.shape[1]
+            #(num_ref_nodes, num_channels, num_timesteps)
+            num_channels = IRF_matrix.shape[1]
+            num_ref_nodes = IRF_matrix.shape[0]
             num_timesteps = IRF_matrix.shape[2]
-            signal = IRF_matrix.reshape((num_meas_nodes * num_ref_nodes, num_timesteps))
-            self.re_shape = (num_meas_nodes, num_ref_nodes, num_timesteps)
+            # Flatten the IRF matrix to a signal of shape (num_channels, num_timesteps)
+            signal = IRF_matrix.reshape((num_ref_nodes * num_channels, num_timesteps))
+            # Store the shape to restore the IRF matrix in get_signal
+            self.re_shape = [num_ref_nodes, num_channels, num_timesteps]
         else:
-            self.re_shape = signal.shape
-            
+            self.num_channels = signal.shape[0]
+            self.re_shape = list(signal.shape)
+        #print(signal.shape)
         self.num_channels = signal.shape[0]
         self.num_timesteps = signal.shape[1]
         
-        self.deltat = np.mean(np.diff(t_vals))
-        
+        #self.deltat = np.mean(np.diff(t_vals))
+        self.deltat = (t_vals[-1] - t_vals[0]) / (t_vals.size - 1)
+        #print(self.num_timesteps, len(t_vals))
         assert self.num_timesteps == len(t_vals)
         
         self.t_vals = t_vals
         self.signal = signal
         
+        self.channel_defs = channel_defs
+        
+        self.num_modes = None
+        
         if modal_frequencies is not None:
             assert isinstance(modal_frequencies, (list, tuple, np.ndarray))
             assert len(modal_frequencies.shape) == 1
-            
-            self.modal_frequencies = modal_frequencies
             self.num_modes = modal_frequencies.size
+            
+            assert np.all(np.diff(modal_frequencies) >= 0)  # ensure they are sorted
+            
+        self.modal_frequencies = modal_frequencies
         
         if modal_damping is not None:
             assert isinstance(modal_damping, (list, tuple, np.ndarray))
             assert len(modal_damping.shape) == 1
-            
-            self.modal_damping = modal_damping
             self.num_modes = modal_damping.size
+            
+        self.modal_damping = modal_damping
             
         if mode_shapes is not None:
             assert isinstance(mode_shapes, (list, tuple, np.ndarray))
-            assert len(mode_shapes.shape) == 2 # needs reduced mode shapes (channel,mode) type, not (node, dof, mode) 3D type
+            assert len(mode_shapes.shape) == 2  # needs reduced mode shapes (channel,mode) type, not (node, dof, mode) 3D type
             
-            self.mode_shapes = mode_shapes
             self.num_modes = mode_shapes.shape[1]
+            #print(mode_shapes.shape, self.num_channels)
             assert mode_shapes.shape[0] == self.num_channels
             
-        return cls
-    
+        self.mode_shapes = mode_shapes
+            
+        if modal_energies is not None:
+            assert isinstance(modal_energies, (list, tuple, np.ndarray))
+            assert len(modal_energies.shape) == 1
+            
+            self.num_modes = modal_energies.shape[1]
+            # IRF matrix modal matrices are shaped (num_ref_nodes, num_modes)
+            # impulse response modal matrices are shape (num_nodes, num_modes
+        
+        self.modal_energies = modal_energies
+            
+        if modal_amplitudes is not None:
+            assert isinstance(modal_amplitudes, (list, tuple, np.ndarray))
+            assert len(modal_amplitudes.shape) == 1
+            
+            self.num_modes = modal_amplitudes.shape[1]
+            # IRF matrix modal matrices are shaped (num_ref_nodes, num_modes)
+            # impulse response modal matrices are shape (num_nodes, num_modes
+        
+        self.modal_amplitudes = modal_amplitudes
+        
+        self.snr = [np.mean(signal**2, axis=1), np.zeros((self.num_channels,))]  # no noise so far
+        
+        self.jobname = jobname
+        
+        self.is_sampled = False
+        
+    @property
+    def duration(self):
+        return self.num_timesteps * self.deltat
+        
+    @property
+    def snr_db(self):
+        return 10 * np.log10(self.snr[0] / self.snr[1])
+        
     @classmethod
-    def init_from_mech(cls, mech):
+    def init_from_mech(cls, mech, channel_defs=None):
         
         '''
         Extract the relevant parameters from a mechanical object
@@ -96,15 +205,18 @@ class Acquire(object):
         is present in the mechanical object (uses the first encountered type)
         
         '''
+        logger.info('Initializing Acquire object from a Mechanical object')
+        jobname = mech.jobname
         
         if mech.state[5]:
             modal_frequencies = mech.frequencies_comp
             modal_damping = mech.modal_damping_comp
-            mode_shapes = mech.mode_shapes_comp
+            #mode_shapes = mech.mode_shapes_comp
+            mode_shapes = mech.damped_mode_shapes  # shape (num_meas_nodes, 3, num_modes)
         elif mech.state[4]:
             modal_frequencies = mech.damped_frequencies
             modal_damping = mech.modal_damping
-            mode_shapes = mech.damped_mode_shapes
+            mode_shapes = mech.damped_mode_shapes  # shape (num_meas_nodes, 3, num_modes)
         else:
             modal_frequencies = None
             modal_damping = None
@@ -112,103 +224,663 @@ class Acquire(object):
         
         if mech.state[1]:
             t_vals = mech.t_vals_decay
-            signal = mech.resp_hist_decay
-            acqui = cls(t_vals, signal, None, modal_frequencies, modal_damping, mode_shapes)
-            
-        if mech.state[2]:
-            #mech.inp_hist_amb
+            signals = mech.resp_hist_decay
+            kind = 'free decay response'
+        elif mech.state[2]:
             t_vals = mech.t_vals_amb
-            signal = mech.resp_hist_amb
-            acqui = cls(t_vals, signal, None, modal_frequencies, modal_damping, mode_shapes)
-
-        if mech.state[3]:
-            #mech.inp_hist_imp
+            signals = mech.resp_hist_amb
+            kind = 'ambient response'
+        elif mech.state[3]:
             t_vals = mech.t_vals_imp
-            signal = mech.resp_hist_imp
-            modal_energies = mech.modal_imp_energies
-            modal_amplitudes = mech.modal_imp_amplitudes
-            acqui = cls(t_vals, signal, None, modal_frequencies, modal_damping, mode_shapes)
-            
-        if mech.state[6]:
+            signals = mech.resp_hist_imp
+            kind = 'impulse response'
+        elif mech.state[6]:
+            # IRF matrix is only a single quantity, usually displacement
+            # size is num_ref_nodes, num_timesteps, num_meas_nodes, 3
             t_vals = mech.t_vals_imp
             IRF_matrix = mech.IRF_matrix
-            #mech.imp_hist_imp_matrix
-            modal_energies = mech.modal_imp_energy_matrix
-            modal_amplitudes = mech.modal_imp_amplitude_matrix
-            acqui = cls(t_vals, None, IRF_matrix, modal_frequencies, modal_damping, mode_shapes)
+            
+        else:
+            raise ValueError('No signal has been generated yet.')
+        
+        meas_nodes = mech.meas_nodes  # np.ndarray
+        nodes_coordinates = mech.nodes_coordinates
+        
+        if np.sum(mech.state[1:4]) > 1:
+            logger.warning(f'More than one type of signal has been generated. Using the {kind} signal.')
+        
+        # signals is size [3][num_timesteps, num_meas_nodes, 3]
+        if mech.state[6]:
+            quant_avail = [True, False, False]  # assuming displacement
+        else:
+            quant_avail = [sig is not None for sig in signals]
+        
+        if channel_defs in ['ux', 'uy', 'uz']:
+            dofs = [['ux', 'uy', 'uz'].index(channel_defs)]
+            channel_defs = None
+        else:
+            dofs = list(range(3))
+        
+        if channel_defs in ['d', 'v', 'a']:
+            quant = ['d', 'v', 'a'].index(channel_defs)
+            assert quant_avail[quant]
+            channel_defs = None
+        else:
+            for quant in [2, 1, 0]:
+                if quant_avail[quant]:
+                    break
+            
+        if isinstance(channel_defs, (list, tuple, np.ndarray)):
+            
+            if not isinstance(channel_defs[0], (tuple, list)): # list of nodes
+                nodes = channel_defs
+                channel_defs = None
+        else:
+            nodes = meas_nodes
+        
+        if channel_defs is None:
+            # may be any of: list of (node, dof, quant)
+            #                list of nodes -> all dof and accel
+            #                dof: [ux, uy, uz] -> all nodes and accel
+            #                quant: [d,v,a]-> all nodes and all dof
+            
+            num_nodes = len(nodes)
+            num_dof = len(dofs)  # only translational dofs will be used, rotational ignored
+            num_quant = 1
+            channel_defs = np.empty((num_nodes * num_dof * num_quant, 3), dtype=int)
+            ind = 0
+            for meas_node in nodes:
+                for dof in dofs:
+                    channel_defs[ind, :] = [meas_node, dof, quant]
+                    ind += 1
+            else:
+                assert ind == num_nodes * num_dof * num_quant
+        else:
+            assert isinstance(channel_defs, (tuple, list, np.ndarray))
+            for ind in range(len(channel_defs)):  # len refers to the first dimension of an ndarray or to the len of a list
+                this_channel_defs = channel_defs[ind]
+                if isinstance(this_channel_defs, tuple):
+                    this_channel_defs = list(this_channel_defs)
+                    channel_defs[ind] = this_channel_defs
+                    
+                meas_node, dof, quant = this_channel_defs  # for ndarray returns rows, will throw an error anyway if not
+                assert meas_node in meas_nodes
+                
+                if isinstance(dof, str):
+                    dof = ['ux', 'uy', 'uz'].index(dof)
+                    channel_defs[ind][1] = dof
+                
+                if isinstance(quant, str):
+                    quant = ['d', 'v', 'a'].index(quant)
+                    channel_defs[ind][2] = quant
+                assert quant_avail[quant]
+            channel_defs = np.array(channel_defs, dtype=int)
+        
+        num_channels = channel_defs.shape[0]
+        num_timesteps = len(t_vals)
+        if mech.state[6]:
+            # IRF matrix is generated only for a single quantity
+            # size is num_ref_nodes, num_timesteps, num_meas_nodes, 3
+            num_ref_nodes = IRF_matrix.shape[0]
+            signal = np.empty((num_ref_nodes, num_channels, num_timesteps))
+            for channel, (meas_node, dof, quant) in enumerate(channel_defs):
+                node_ind = list(meas_nodes).index(meas_node)
+                for ref_node in range(num_ref_nodes):
+                    signal[ref_node, channel, :] = IRF_matrix[ref_node, :, node_ind, dof]
+        else:
+            signal = np.empty((num_channels, num_timesteps))
+            for channel, (meas_node, dof, quant) in enumerate(channel_defs):
+                node_ind = list(meas_nodes).index(meas_node)
+                signal[channel, :] = signals[quant][:, node_ind, dof]
+        
+        if mode_shapes is not None:
+            num_modes = mode_shapes.shape[2]
+            mode_shapes_chan = np.empty((num_channels, num_modes), dtype=complex)
+            for channel, (meas_node, dof, _) in enumerate(channel_defs):
+                for node_ind, (node, _, _, _) in enumerate(nodes_coordinates):
+                    if node == meas_node:
+                        break
+                else:
+                    raise RuntimeError(f'meas_node {meas_node} could not be found in nodes_coordinates')
+                    continue
+                mode_shapes_chan[channel, :] = mode_shapes[node_ind, dof, :]
+            mode_shapes = mode_shapes_chan
+        
+        if mech.state[1] or mech.state[2]:
+            acqui = cls(t_vals, signal, None, channel_defs,
+                        modal_frequencies, modal_damping, mode_shapes,
+                        jobname=jobname)
+
+        if mech.state[3]:  # impulse response
+            # num_nodes here is all nodes, because system may be excited at every node
+            # so we should not reduce these matrices to meas_nodes, channels, whatsoever
+            modal_energies = mech.modal_imp_energies  # shape (num_nodes, num_modes)
+            modal_amplitudes = mech.modal_imp_amplitudes  # shape (num_nodes, num_modes)
+            
+            acqui = cls(t_vals, signal, None, channel_defs,
+                        modal_frequencies, modal_damping, mode_shapes,
+                        modal_energies, modal_amplitudes,
+                        jobname=jobname)
+            
+        if mech.state[6]:  # IRF matrix
+            # mech.imp_hist_imp_matrix
+            modal_energies = mech.modal_imp_energy_matrix  # shape (num_ref_nodes, num_modes)
+            modal_amplitudes = mech.modal_imp_amplitude_matrix  # shape (num_ref_nodes, num_modes)
+            acqui = cls(t_vals, None, signal, channel_defs,
+                        modal_frequencies, modal_damping, mode_shapes,
+                        modal_energies, modal_amplitudes,
+                        jobname=jobname)
         
         #mech.trans_params
-        assert acqui.deltat == mech.deltat
+        if acqui.deltat != mech.deltat and np.isclose(acqui.deltat, mech.deltat):
+            acqui.deltat = mech.deltat
+        elif not np.isclose(acqui.deltat, mech.deltat):
+            raise RuntimeError(f'There is a mismatch between timestep size in data {acqui.deltat}and in the model {mech.deltat}.')
+        
         assert acqui.num_timesteps == mech.timesteps
-                
+        
         if mech.state[4] or mech.state[5]:
             assert acqui.num_modes == mech.num_modes
         
+        #acqui.mech = mech
+        
         return acqui
             
-    def apply_FRF(self, type=None):
+    def apply_sensor(self, sensor_type=None):
         '''
         (- apply sensor FRF (get frfs from our real sensors: 10V/g, 5V/g, small ones, geophones, laser-vib, won't use displacement) by discrete convolution in time domain)
+        
+        Let's skip this for now!
+        Datasheets/Calibration data not available, must be requested:
+        
+        Sensor    1D-Accelerometer    PCB 352C33      100 mV/g
+        Sensor    1D-Accelerometer    PCB 393A03      1 V/g
+        Sensor    1D-Accelerometer    PCB 393B31      10 V/g
+        
+        (Sensor    Seismograph         Guralp CMG-T40  2x80 V/m/s)
+        Sensor    3D-Seismometer      VE-53-DIN       2x100 V/m/s
+        Sensor    3D-Geophone         SM6-3D-1        28.8 V/m/s
+        
         '''
+        # load frf db (sensor_type, irf, frf, sensitivity, noise?)
+        # apply frf by IRF convolution
+        # simulate sensitivity by transforming to a voltage
+        # then add constant and proportional noise
+        # modify modal mode_shapes, modal_amplitudes, modal_energies by FRF multiplication
+        # damping, frequencies should not be affected
+        if self.is_sampled:
+            logging.warning(f'This signal is sampled already. Sensor FRFs should preferably be applied before sampling.')
+        raise NotImplementedError('Application of sensor FRFs is not yet implemented.')
         pass
     
-    def sample(self, f_max, fs_factor, ):
+    def sample_helper(self, dec_fact=None, f_max=None, num_modes=None, nyq_rat=2.5, numtaps_fact=21):
         '''
-        apply an (simulated) analog anti-aliasing filter
-            use a hardcoded FIR brickwall filter, to avoid any undesired effects from aliasing,
-            as this is not the primary objective of the research
-        then sample-and-hold -> take every nth sample
+        Helper function to  compute a final sampling frequency from given:
+            - decimation factor
+            - highest frequency
+            - number of modes to remain in the signal
+        additionally considering
+            - the ratio of the filter cutoff frequency to the final sampling frequency
+            - the filter order (= number of FIR filter coefficients or numtaps)
         
-        
-        - define highest mode frequency to be considered (there may be higher modes present in the signal) f_max
-        - define oversampling factor for highest mode (f_s = fs_factor*f_max) (fs_factor = [2 ... 20?]
-        - apply an (simulated analog) anti-aliasing filter with 3dB passband at fs_/2  
-        - define filter type, filter order, (filter 3dB passband)
-        https://www.digikey.de/en/articles/the-basics-of-anti-aliasing-low-pass-filters
-        - sample and hold / zero-order hold (decimation to sample rate) -> take every nth value
-
+        Returns:
+            - fs: final sampling frequency
+            - numtaps: FIR filter order
+            - cutoff: FIR cutoff frequency 
         '''
         
-        scipy.signal.fir
-        #slicing tuple -> start:stop:step = 0:samples_ful_blocks:block_length
-        self.signal = self.signal[0:N_dec*dec_fact:dec_fact, :]
-        dt = (self.signal[-1, 0] - self.signal[0, 0]) / (self.signal.shape[0] - 1)
+        dt = self.deltat
+        N = self.num_timesteps
+        modal_frequencies = self.modal_frequencies
         
-        self.re_shape[-1] = self.signal.shape[-1]
+        if num_modes is not None:
+            if modal_frequencies is not None:
+                f_max = modal_frequencies[num_modes]
+            else:
+                num_modes = None
+                logger.warning(f'num_modes was defined, but modal_frequencies were not provided upon init. Ignoring num_modes!')
+            
+        if f_max is not None and dec_fact is None:
+            assert nyq_rat > 1
+            if nyq_rat < 2:
+                logger.warning(f'The sampling rate factor ({nyq_rat}) should be greater than 2.0')
+            dec_fact = int(np.ceil(1 / dt / (f_max * nyq_rat)))
+            
+        elif f_max is not None and dec_fact is not None:
+            f_max = None
+            logger.warning('Both f_max and dec_factor were provided. Using dec_factor')
         
-        return dt
+        if not isinstance(dec_fact, int):
+            logger.warning('The decimation factor should be an integer')
+            dec_fact = int(dec_fact)
+            
+        if num_modes is None and modal_frequencies is not None:
+            if f_max is None:
+                f_max = 1 / dt / dec_fact / nyq_rat
+            # compute number of modes in the remaining frequency band
+            # assuming the aliasing filter has a perfect roll-off
+            num_modes = np.sum(modal_frequencies <= f_max)
+            
+        assert isinstance(numtaps_fact, int) and numtaps_fact >= 2
+        
+        fs = 1 / dt / dec_fact
+        numtaps = numtaps_fact * dec_fact
+        cutoff = fs / nyq_rat
+        
+        return fs, numtaps, cutoff
     
-    def add_noise(self, snr_db=np.infty, noise_power=None):
+    def estimate_meas_range(self, sample_dur=None, margin=3.0, seed=None):
         '''
-        Add noise to a signal either before or after sampling
+        imitate the process of finding an appropriate measurement range
+        take a measurement for a short duration on site
+        choose the maximum amplitude and increase it by a "safety" margin
+        
+        e.g. a 30 ... 90 s sample_dur is commonly used
+        if a percentage of the total duration is to be used compute that beforehand,
+        e.g.acqui.estimate_meas_range(sample_dur=acqui.duration/10, margin=1.5)
+        
+        here, we just choose a random sample of length sample_dur and
+        evaluate all channels from this sample (assuming all channels will 
+        use the same measurment range and bit resolution
+        '''
+        
+        dt = self.deltat
+        dur = self.duration
+        num_timesteps = self.num_timesteps
+        signal = self.signal
+        
+        if margin is None:
+            margin = 3.0
+        
+        if sample_dur is None:
+            sample_dur = 60 # 60 seconds default
+        
+        if sample_dur > dur:
+            logger.warning('Sample duration was reduced to total duration.')
+            sample_dur = dur
+        
+        # sample_dur should not be longer that 1/5th of the total signal length
+        if sample_dur > dur / 5:
+            logger.warning('Sample duration should be less than a fifth of the total duration.')
+            
+        rng = np.random.default_rng(seed)
+        start_time = rng.uniform(0, dur - sample_dur)
+        
+        start_index = int(np.floor(start_time / dt))
+        end_index = start_index + int(np.floor(sample_dur / dt))
+        
+        assert end_index <= num_timesteps
+        
+        sample = signal[:, start_index:end_index]
+        
+        max_amp = np.max(np.abs(sample))
+        
+        return max_amp * margin
+    
+    def sample(self, fs=None, numtaps=21, cutoff=None, 
+               bits=16, meas_range=None,
+               duration=None):
+        '''
+        Sampling consists of three steps:
+            - anti-aliasing filtering
+            - sample-and-hold
+            - quantization
+            
+        Not considered is:
+            - accuracy, e.g. the uncertainty to sample the correct voltage (offset and gain errors)
+            - sensitivity, e.g. the smallest absolute amount of change that can be detected by a measurement
+                commonly a number of quantization steps is attributed to noise,
+                so only a signal change greater than this level can be detected
+        
+        Simulation of these three steps:
+            -apply an (simulated) analog anti-aliasing filter
+                use a hardcoded FIR brickwall filter, to avoid any undesired effects from aliasing,
+                as this is not the primary objective of the research
+            - then sample-and-hold -> take every nth sample
+            - simulate quantization (SCXI 1600 -> 16 bit, NI PXI 6221 -> 16 bit)
+         
+        Additionally, the noise resulting from these operations is estimated:
+            - aliasing noise
+            - quantization noise
+            
+            
+        '''
+        if self.is_sampled:
+            logging.warning(f'This signal is sampled already. Applying sampling again.')
+        
+        dt = self.deltat
+        signal = self.signal
+        t_vals = self.t_vals
+        
+        if duration is not None:
+            assert duration <= self.duration
+            N = int(duration // dt)
+            signal = signal[:, :N]
+            t_vals = t_vals[:N]
+        else:
+            N = self.num_timesteps
+            
+        num_channels = self.num_channels
+        modal_frequencies = self.modal_frequencies
+        
+        dec_fact = int(1 / (dt * fs))
+        
+        dt_dec = dt * dec_fact
+        N_dec = int(np.floor(N / dec_fact))
+        # ceil would also work, but breaks indexing for aliasing noise estimation
+        # with floor though, care must be taken to shorten the time domain signal to N_dec full blocks before slicing
+        
+        if cutoff is None:
+            cutoff = 1 / dt / 2.5 / dec_fact
+            
+        logger.info(f'Sampling signal at {1/dt_dec} Hz with a cutoff frequency of {cutoff} Hz using a {numtaps} point FIR filter resulting in a sample size of {N_dec} out of {N}.')
+        # fir lowpass filter
+        fir_firwin = scipy.signal.firwin(numtaps, cutoff, fs=1 / dt)
+    
+        #filter signal
+        sig_filt = scipy.signal.lfilter(fir_firwin, [1.0], signal)
+        #sig_filt = np.apply_along_axis(lambda y: np.convolve(fir_firwin, y, 'same'), axis, signal)
+        #sig_filt =  np.convolve(signal, fir_firwin, 'same')
+    
+        fft_filt = np.apply_along_axis(lambda y: np.fft.fft(y), 1, sig_filt)  # /np.sqrt(N)
+    
+        #decimate signal
+        sig_filt_dec = np.copy(sig_filt[:, 0:N_dec * dec_fact:dec_fact])
+        # correct for power loss due to decimation
+        # https://en.wikipedia.org/wiki/Downsampling_(signal_processing)#Anti-aliasing_filter
+        #sig_filt_dec *= dec_fact
+    
+        #fft_filt_dec = np.fft.fft(sig_filt_dec)#/np.sqrt(N_dec)
+    
+        t_dec = t_vals[0:N_dec * dec_fact:dec_fact]
+    
+        # estimate aliasing noise,
+        '''
+        this is based on the assumption, that the aliased and folded part
+        of the spectrum is fully additive to the remaining part of the
+        spectrum, which is not the case as some spectral components may be
+        subtractive depending on phase differences
+        -> computed noise power is a conservative estimate
+        '''
+        fft_filt_alias = np.zeros((num_channels, N_dec), dtype=complex)
+        fft_filt_non_alias = np.zeros((num_channels, N_dec), dtype=complex)
+    
+        fft_filt_non_alias[:, :N_dec // 2] += np.copy(fft_filt[:, :1 * N_dec // 2])
+        fft_filt_non_alias[:, N_dec // 2:] += np.copy(fft_filt[:, -1 * N_dec // 2:])
+    
+        pos_alias = fft_filt_alias[:, :N_dec // 2]  # is a view, any modifications are reflected to the original array
+        neg_alias = fft_filt_alias[:, N_dec // 2:]  # is a view, any modifications are reflected to the original array
+    
+        for i in reversed(range(1, dec_fact)):
+            # folding and aliasing all parts of the spectrum above the
+            # new Nyquist frequency into the remaining spectrum
+            slp = slice(i * N_dec // 2, (i + 1) * N_dec // 2)
+            sln = slice(-(i + 1) * N_dec // 2, -i * N_dec // 2)
+    
+            if i % 2:  # alias and fold
+                neg = fft_filt[:, slp]
+                pos = fft_filt[:, sln]
+            else:  # alias
+                pos = fft_filt[:, slp]
+                neg = fft_filt[:, sln]
+    
+            pos_alias += pos
+            neg_alias += neg
+        
+        p_fft_filt_alias = np.mean(np.abs(fft_filt_alias / np.sqrt(N_dec))**2, axis=1)
+        p_fft_filt_non_alias = np.mean(np.abs(fft_filt_non_alias / np.sqrt(N_dec))**2, axis=1)
+        snr_alias = p_fft_filt_non_alias / p_fft_filt_alias
+    
+        # signal powers
+        logger.debug(f'Power signal:  {np.mean(np.abs(signal)**2, axis=1)}')
+        logger.debug(f'Power filtered signal: {np.mean(np.abs(sig_filt)**2, axis=1)} filtered spectrum: {np.mean(np.abs(fft_filt / np.sqrt(N))**2, axis=1)}')
+        logger.debug(f'Power decimated signal: {np.mean(np.abs(sig_filt_dec)**2, axis=1)}')
+        logger.debug(f'Power aliased/folded spectrum: {p_fft_filt_alias}')
+        logger.debug(f'Power non-alias spectrum: {p_fft_filt_non_alias}')
+        logger.debug(f'Power error due to non-additivity:  {np.mean(np.abs(sig_filt_dec)**2, axis=1) -p_fft_filt_alias-p_fft_filt_non_alias}')
+        
+        logger.debug(f'SNR alias: {snr_alias} in dB: {np.log10(snr_alias) * 10}')
+        
+        if modal_frequencies is not None :  # proxy for: "modal characteristics are present"
+            # adjust modal characteristics according to filter frf and reduced number of modes
+            
+            # compute number of modes in the remaining frequency band
+            # assuming the aliasing filter has a perfect roll-off
+            num_modes = np.sum(modal_frequencies <= cutoff)
+            
+            self.modal_frequencies = self.modal_frequencies[:num_modes]
+            omegas = self.modal_frequencies[np.newaxis, :] * 2 * np.pi
+            filter_frf = np.sum(fir_firwin[:, np.newaxis] * np.exp(-1j * omegas * np.linspace(0, dt * numtaps, numtaps)[:, np.newaxis]), axis=0)
+                
+            if self.modal_damping is not None:
+                self.modal_damping = self.modal_damping[:num_modes]
+            if self.mode_shapes is not None:
+                self.mode_shapes = self.mode_shapes[:, :num_modes] * filter_frf  # scale modal coordinates by filter frf
+            if self.modal_amplitudes is not None:
+                self.modal_amplitudes = self.modal_amplitudes[:, :num_modes] * np.abs(filter_frf)
+            if self.modal_energies is not None:
+                logger.warning('Energy reduction by FIR filters not validated.')
+                self.modal_energies = self.modal_energies[:, :num_modes] * np.abs(filter_frf)
+            
+            self.num_modes = num_modes
+            
+        self.re_shape[-1] = sig_filt_dec.shape[-1]
+        
+        self.num_timesteps = sig_filt_dec.shape[1]
+        assert self.num_timesteps == N_dec
+        self.deltat = dt_dec
+        assert np.isclose(t_dec[1] - t_dec[0], self.deltat)
+        
+        self.update_snr(p_fft_filt_alias, p_fft_filt_non_alias)
+        
+        # Quantization
+        if meas_range is None:
+            meas_range = 2**bits / (2**bits - 2) * np.max(np.abs(sig_filt_dec))
+            # factor adds one quantization level to the measurement range
+            # to avoid clipping when meas_range was not provided
+        logger.info(f'Quantizing signal in a measurement range of ± {meas_range} with {bits} bits.')
+        
+        Delta_s = 2 * meas_range / 2**bits
+        # symmetric quantization does not include 0, so we have to
+        # add Delta_s / 2 before quantization, and substract it afterwards
+        # division by Delta_s maps to the range [-2**b, 2**b],
+        # which is subsequently rounded to integers
+        # original signal range is restored by multiplication with Delta_s
+        sig_filt_dec_quant = np.rint((sig_filt_dec + Delta_s / 2) / Delta_s) * Delta_s - Delta_s / 2
+        # apply clipping of excess values
+        ind1 = sig_filt_dec_quant < -meas_range + Delta_s / 2
+        sig_filt_dec_quant[ind1] = -meas_range + Delta_s / 2
+        ind2 = sig_filt_dec_quant > meas_range - Delta_s / 2
+        sig_filt_dec_quant[ind2] = meas_range - Delta_s / 2
+        ind = np.logical_or(ind1, ind2)
+        if ind.any():
+            logger.warning(f'Clipping due to quantization occured for {np.sum(ind)} out of {sig_filt_dec.size} samples')
+        
+        margin_quant_norm = (meas_range - np.max(np.abs(sig_filt_dec), axis=1)) / meas_range
+        
+        n_q = sig_filt_dec - sig_filt_dec_quant
+        
+        P_S = np.mean(sig_filt_dec**2, axis=1)
+        P_N = np.mean(n_q**2, axis=1)
+        
+        logger.debug(f'Power quantized signal: {P_S}')
+        logger.debug(f'Power quantization noise: {P_N}')
+        
+        snr_quant = 10 * np.log10(P_S / P_N)
+        logger.debug(f'SNR quantization: {P_S / P_N} in dB: {snr_quant}')
+        
+        self.update_snr(P_N, P_S)
+        
+        self.t_vals = t_dec
+        self.signal = sig_filt_dec_quant
+        
+        self.is_sampled = True
+        
+        return t_dec, sig_filt_dec_quant, snr_alias, snr_quant, margin_quant_norm
+    
+    def update_snr(self, power_noise, power_no_noise=None):
+        '''
+        updates stored signal and noise power values
+        
+        power_noise should be an array of shape (num_channels,)
+        
+        power_no_noise should be provided, if the signal power might have been
+        modified in another different way prior to adding noise and should
+        be an array of shape (num_channels,)
+        
+        '''
+        
+        if power_no_noise is not None:
+            # total (unscaled) signal power consists of signal power and all added noise power
+            p_total = self.snr[0] + self.snr[1]
+            logger.debug(f'Total power theoretic: {p_total}')
+            logger.debug(f'Total power actual: {power_no_noise}')
+            logger.debug(f'Noise power: {power_noise}')
+            # factor, by which signal was modified externally
+            sig_factor = power_no_noise / p_total
+            #print(sig_factor)
+            # scale signal and noise power by factor
+            self.snr[1] *= sig_factor#**0.5
+            self.snr[0] *= sig_factor#**0.5
+            logger.debug(f'Total power scaled: {self.snr[0] + self.snr[1]}')
+            
+            
+            
+            #print(power_no_noise / (self.snr[0] + self.snr[1]))
+            
+        # updated noise power
+        # E[(X+Y)^2] = E[X^2] + 2E[X]E[Y] + E[Y^2], where E[X],E[Y] = 0
+        self.snr[1] += power_noise
+        logger.debug(f'Total noise power: {self.snr[1]}')
+        logger.debug(f'Current SNR: {self.snr_db} dB')
+        
+    def add_noise(self, snr_db=None, noise_power=None, ref_sig='channel', seed=None):
+        '''
+        Add noise to a signal preferably before, possibly after sampling
         snr_db or noise power can be global or per channel
         if snr_db is given it overrides noise_power
+        
+        reference signal is "mean" or "channel"
         
         returns power_signal, power_noise
         
         '''
-        snr = 10 ** (snr_db / 10)
-    
-        power = np.mean(array[:, 1] ** 2)
-    
-        # decimate
-        N = array.shape[0]
+        
+        if self.is_sampled:
+            logging.warning(f'This signal is sampled already. Noise should preferably be applied before sampling.')
+            
+        signal = self.signal
+        num_channels = self.num_channels
+        num_timesteps = self.num_timesteps
+        
+        channel_powers = np.mean(signal**2, axis=1)
+        if ref_sig == 'channel':
+            power_signal = channel_powers
+        elif ref_sig == 'mean':
+            power_signal = np.full((num_channels,), np.mean(signal**2))
+        else:
+            raise ValueError(f'ref_sig {ref_sig} is neither "mean" nor "channel"')
+        
+        logger.debug(f'Signal power: {power_signal}')
+        
+        if noise_power is not None:
+            if isinstance(noise_power, (float, int)):
+                noise_power = np.full((num_channels,), noise_power)
+            elif isinstance(noise_power, (list, tuple, np.ndarray)):
+                noise_power = np.array(noise_power)
+                assert noise_power.ndim == 1
+                assert noise_power.size == num_channels
+            else:
+                raise ValueError(f'Noise power must be either an iterable of length num_channels or a scalar. It is {noise_power}')
+            if snr_db is None:
+                info_str = f'Applying constant noise.'
+            
+        if snr_db is not None:
+            if not isinstance(snr_db, (float, int)):
+                raise NotImplementedError('Adding noise by per channel definition of SNR is currently not supported.')
+            if noise_power is not None:
+                info_str = f'Applying constant noise and proportional noise.'
+            else:
+                noise_power = np.zeros((num_channels,))
+                info_str = f'Applying proportional noise of {snr_db} dB.'
+            if snr_db > 10:
+                logger.warning(f'You are adding only {100/(10**(snr_db/10))} % of signal noise. Try using negative snr_db values.')
+                
+            snr = 10**(snr_db / 10)
+            noise_power += power_signal / snr
+        
+        if snr_db is None and noise_power is None:
+            raise ValueError('Either snr_db or noise_power (or both) must be provided.')
         # add noise
-        noise_power = power / snr
-        noise = np.random.normal(0, np.sqrt(noise_power), N)
-        power_noise = np.mean(noise ** 2)
+        # TODO: try spectral- and correlation-based white noise generation
+        rng = np.random.default_rng(seed)
+        noise = rng.normal(0, np.sqrt(noise_power), (num_timesteps, num_channels)).T
+        power_noise = np.mean(noise ** 2, axis=1)
+        
+        logger.info(f'{info_str} Final average noise power: {np.mean(power_noise):1.3g} (signal: {np.mean(power_signal):1.3g})')
     
-        snr_actual = power / power_noise
-        snr_actual_db = 10 * np.log10(snr_actual)
+        logger.debug(f'snr_actual = {power_signal / power_noise} = {10 * np.log10(power_signal / power_noise)} dB')
     
-        array[:, 1] += noise
+        signal += noise
+        
+        self.update_snr(power_noise, channel_powers)
+        self.signal = signal
 
-        return power, power_noise
+        return power_signal, power_noise
     
     def get_signal(self):
         
         return self.t_vals, self.signal.reshape(self.re_shape)
     
+    def to_prep_data(self):
+        
+        
+        if not self.is_sampled:
+            logging.warning(f'This signal has not been sampled already. Proceeding anyways.')
+        
+        t_vals, signal = self.get_signal()
+        assert signal.ndim == 2
+        fs = 1 / self.deltat
+        total_time_steps = self.num_timesteps
+        setup_name = self.jobname
+        
+        
+        channel_defs = self.channel_defs  # list of (node, dof, quantity)
+        
+        if channel_defs is not None:
+            disp_channels = np.where(channel_defs[:, 2] == 0)[0]
+            velo_channels = np.where(channel_defs[:, 2] == 1)[0]
+            accel_channels = np.where(channel_defs[:, 2] == 2)[0]
+            
+            channel_headers = []
+            for node, dof, quantity in channel_defs:
+                channel_headers.append(f'{["dsp", "vel", "acc", ][quantity]} {node} {["x", "y", "z"][dof]} ')
+            # channel_headers = list(map(' '.join,
+                                       # zip(channel_defs[:, 0].astype(str),
+                                           # channel_defs[:, 1].astype(str))))
+        else:
+            disp_channels = None
+            velo_channels = None
+            accel_channels = None
+            channel_headers = None
+            
+        kwargs = {'measurement': signal.T,
+                  'sampling_rate': fs,
+                  'total_time_steps': total_time_steps,
+                  'accel_channels': accel_channels,
+                  'velo_channels': velo_channels,
+                  'disp_channels': disp_channels,
+                  'setup_name': setup_name,
+                  'channel_headers': channel_headers}
+        
+        return kwargs
+        
+    def to_modal(self, mech=None):
+        
+        if not self.is_sampled:
+            logging.warning(f'This signal has not been sampled already. Proceeding anyways.')
+            
+        pass
     
 def ashift(array):
     return np.fft.fftshift(np.abs(array))
@@ -376,16 +1048,13 @@ def system_signal_decimate(N,dec_fact, numtap_fact, nyq_rat, do_plot=False, **kw
 
 def uq_dec_noise():
     import seaborn
-    import sys
-    sys.path.append('/vegas/users/staff/womo1998/Projects/2019_OMA_UQ/code/uncertainty')
-    import data_manager
-    import os
+    from uncertainty import data_manager
     
     num_samples = 10
     
     title = 'decimation_noise'
-    savefolder = '/vegas/scratch/womo1998/modal_uq/'
-    result_dir = '/vegas/scratch/womo1998/modal_uq/'
+    savefolder = '/usr/scratch4/sima9999/work/modal_uq/'
+    result_dir = '/usr/scratch4/sima9999/work/modal_uq/'
     
     if not os.path.exists(result_dir + title + '.nc') or False:
         dm = data_manager.DataManager(title=title, working_dir='/dev/shm/womo1998/',
@@ -421,26 +1090,135 @@ def uq_dec_noise():
     elif True:
         dm = data_manager.DataManager.from_existing(dbfile_in="".join(
             i for i in title if i not in "\\/:*?<>|") + '.nc', result_dir=result_dir)
-        dm.post_process_samples(db='merged',scales = ['log','linear','linear','linear','linear'])
+        with matplotlib.rc_context(rc=print_context_dict):
+            dm.post_process_samples(db='merged', scales = ['log','linear','linear','linear','linear'])
         dm.clear_locks()
         
         
-def main():
+def verify_noise_power():
+    
     from model import mechanical
     
     skip_existing = True
     working_dir = '/dev/shm/womo1998/'
-    result_dir = '/vegas/scratch/womo1998/modal_uq/'
+    result_dir = '/usr/scratch4/sima9999/work/modal_uq/'
     jid = 'filter_example'
     #jid='acquire_example'
-    
-    ansys = mechanical.Mechanical.start_ansys(working_dir, jid)
     
     num_nodes = 21
     damping = 0.01
     num_modes = 20
     dt_fact = 0.01
-    num_cycles = 10
+    num_cycles = 26
+    meas_nodes = list(range(1, 22))
+    
+    # load/generate  mechanical object:
+    # ambient response of a 20 dof rod,
+    f_scale = 1000
+    d0 = None
+    savefolder = os.path.join(result_dir, jid, 'ambient')
+        
+    if not os.path.exists(os.path.join(savefolder, f'{jid}_mechanical.npz')) or not skip_existing:
+        ansys = mechanical.Mechanical.start_ansys(working_dir, jid)
+        mech = mechanical.generate_mdof_time_hist(ansys=ansys, num_nodes=num_nodes, damping=damping,
+                                                  num_modes=num_modes, d0=d0, f_scale=f_scale,
+                                                  dt_fact=dt_fact, num_cycles=num_cycles,
+                                                  meas_nodes=meas_nodes,)
+        mech.save(savefolder)
+    else:
+        mech = mechanical.MechanicalDummy.load(jid, savefolder)
+        #mech = mechanical.Mechanical.load(jid, savefolder)
+    
+    # generate analytical FRF
+    if isinstance(mech, mechanical.Mechanical):
+        N = 2**15
+        fs = 256
+        
+        _, frf = mech.frequency_response(N, fs // 2)
+        
+        phase = (np.random.rand(N // 2 + 1) - 0.5)
+        Pomega = 120 * np.ones_like(phase) * np.exp(1j * phase * 2 * np.pi)
+        sig = np.empty((N, len(mech.meas_nodes)))
+        for channel in range(frf.shape[1]):
+            sig[:, channel] = np.fft.irfft(frf[:, channel] * Pomega) # ambient response
+            #sig[:, channel] = np.fft.irfft(frf[:, channel]) # IRF
+            #sig[:, channel] = np.fft.irfft(Pomega) # white noise
+            
+    # pass mechanical object to acquire
+    acqui = Acquire.init_from_mech(mech, channel_defs='uz')
+    
+    # use analytical example signals (ambient or impulse response, white noise)
+    #acqui = Acquire(np.linspace(0,N/fs,N), sig)
+    
+    if False:  # Noise power verification
+        print(acqui.snr_db)
+        p_sig = 1  # original signal power
+        ps = 1  # total signal power
+        all_noise = 0  # sum of noise powers = total noise power
+        sfac = 1  # signal factor
+        for i in range(10):
+            sfac = np.random.rand() + 0.5  # random signal power modification
+            snr_db = (np.random.rand() - 0.5) * 10  # random snr for adding noise
+            snr = 10**(snr_db / 10)
+            p_sig *= sfac
+            ps *= sfac
+            all_noise *= sfac
+            p_noise = ps / snr
+            all_noise += p_noise
+            ps += p_noise
+            
+            acqui.signal *= sfac
+            acqui.add_noise(snr_db)
+            print(np.nanmean(acqui.snr_db), 10 * np.log10(p_sig / all_noise))
+            
+        return
+    elif False:
+        # verify noise addition and snr updating
+        acqui.add_noise(snr_db=10)
+        print(np.nanmean(acqui.snr_db))
+        acqui.add_noise(snr_db=10, ref_sig='mean')
+        print(np.nanmean(acqui.snr_db))
+        acqui.add_noise(noise_power=5e-6)
+        print(np.nanmean(acqui.snr_db))
+        noise_power = np.random.rand(acqui.num_channels) * 1e-5 
+        acqui.add_noise(noise_power=noise_power)
+        print(np.nanmean(acqui.snr_db))
+        acqui.add_noise(snr_db=10, noise_power=noise_power, ref_sig='mean')
+        return
+    else:
+        plt.figure()
+        channel = -1
+        # verify snr updating with changing signal power
+        # verify sampling noise estimation
+        acqui.add_noise(snr_db=30)
+        print(np.nanmean(acqui.snr_db))  # should be 10*log10(1/(0.001*1))~30
+        plt.plot(acqui.t_vals, acqui.signal[channel, :], alpha=.3, label='noise1')
+        with LoggingContext(logger, level=logging.INFO):
+            acqui.sample(*acqui.sample_helper(8, numtaps_fact=5), 8, acqui.estimate_meas_range(acqui.duration / 10, 20))  # adds 30 db aliasing noise and about 30 db quantization noise
+        print(np.nanmean(acqui.snr_db))  # should be 10*log10(1/(0.001*3))~25.23
+        plt.plot(acqui.t_vals, acqui.signal[channel, :], alpha=.3, label='sample')
+        acqui.add_noise(snr_db=30)
+        print(np.nanmean(acqui.snr_db))  # should be 10*log10(1/(0.001*4))~23.98
+        plt.plot(acqui.t_vals, acqui.signal[channel, :], alpha=.3, label='noise2')
+        plt.legend()
+        plt.show()
+        return
+        
+        
+def filter_example():
+    
+    from model import mechanical
+    skip_existing = True
+    working_dir = '/dev/shm/womo1998/'
+    result_dir = '/usr/scratch4/sima9999/work/modal_uq/'
+    jid = 'filter_example'
+    #jid='acquire_example'
+    
+    num_nodes = 21
+    damping = 0.01
+    num_modes = 20
+    dt_fact = 0.01
+    num_cycles = 26
     meas_nodes = list(range(1, 22))
     
     # load/generate  mechanical object:
@@ -456,52 +1234,150 @@ def main():
         savefolder = os.path.join(result_dir, jid, 'impulse')
         
     if not os.path.exists(os.path.join(savefolder, f'{jid}_mechanical.npz')) or not skip_existing:
+        ansys = mechanical.Mechanical.start_ansys(working_dir, jid)
         mech = mechanical.generate_mdof_time_hist(ansys=ansys, num_nodes=num_nodes, damping=damping,
                                                   num_modes=num_modes, d0=d0, f_scale=f_scale,
                                                   dt_fact=dt_fact, num_cycles=num_cycles,
                                                   meas_nodes=meas_nodes,)
         mech.save(savefolder)
     else:
-        mech = mechanical.Mechanical.load(jid, savefolder)
-                
-    # pass mechanical object to acquire
-    acqui = Acquire(mech)
+        mech = mechanical.MechanicalDummy.load(jid, savefolder)
+        #mech = mechanical.Mechanical.load(jid, savefolder)
     
-    if True:
-        # pass to PreProcessingTools and create filter example with it
-        from core import PreprocessingTools
-        figt, axest = plt.subplots(2, 2, sharex=True, sharey=True)
-        axest = axest.flat
-        figf, axesf = plt.subplots(2, 2, sharex=True, sharey=True)
-        axesf = axesf.flat
-        for filt, order, cutoff, ax1, ax2 in [('moving_average', 5, 58.19, axest[0], axesf[0]),
-                                                ('brickwall', 5, 58.19, axest[1], axesf[1]),
-                                                ('butterworth', 5, 58.19, axest[2], axesf[2]),
-                                                ('cheby1', 5, 58.19, axest[3], axesf[3])]:
+    # generate analytical FRF
+    if isinstance(mech, mechanical.Mechanical):
+        N = 2**15
+        fs = 256
+        
+        _, frf = mech.frequency_response(N, fs // 2)
+        
+        phase = (np.random.rand(N // 2 + 1) - 0.5)
+        Pomega = 120 * np.ones_like(phase) * np.exp(1j * phase * 2 * np.pi)
+        sig = np.empty((N, len(mech.meas_nodes)))
+        for channel in range(frf.shape[1]):
+            sig[:, channel] = np.fft.irfft(frf[:, channel] * Pomega)
+
+    # pass mechanical object to acquire
+    acqui = Acquire.init_from_mech(mech, channel_defs='uz')
+    
+    
+    from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+    from mpl_toolkits.axisartist.axislines import AxesZero
+    
+    acqui.sample(*acqui.sample_helper(f_max=102.4))
+    
+    # pass to PreProcessingTools and create filter example with it
+    from core import PreprocessingTools
+    figt, axest = plt.subplots(2, 2, sharex=True, sharey=True)
+    axest = axest.flat
+    figf, axesf = plt.subplots(2, 2, sharex=True, sharey=True)
+    axesf = axesf.flat
+    
+    label_dict = {'moving_average':'Moving Average','brickwall':'Windowed Sinc','butter':'Butterworth','cheby1':'Chebychev Type I'}
+    
+    for filt, order, cutoff, ax1, ax2 in [('moving_average', 12, 58.19, axest[0], axesf[0]),
+                                            ('brickwall', 12, 58.19, axest[1], axesf[1]),
+                                            ('butter', 6, 58.19, axest[2], axesf[2]),
+                                            ('cheby1', 6, 58.19, axest[3], axesf[3])
+                                            ]:
+        
+        prep_data = PreprocessingTools.PreprocessData(**acqui.to_prep_data())
+        
+        # use analytical example data
+        #prep_data = PreprocessingTools.PreprocessData(sig, fs)
+        
+        channel = 18
+        prep_data.plot_data(channels=channel, NFFT=prep_data.total_time_steps // 8, axest=[ax1], axesf=[ax2], window='hamm', color='dimgrey', alpha=1)
+        
+        axins = inset_axes(ax1, width='30%', height='18.5%', loc=2, axes_class=AxesZero, borderpad=.75)
+        prep_data.filter_data(ftype=filt, order=order, lowpass=cutoff, overwrite=True, plot_ax=[axins, ax2])
+        prep_data.plot_data(channels=channel, NFFT=prep_data.total_time_steps // 8, axest=[ax1], axesf=[ax2], window='hamm', color='black', alpha=1)
+        
+        ax1.annotate(label_dict[filt], (0.05, 0.05), xycoords='axes fraction', backgroundcolor='#ffffff80')
+        ax2.annotate(label_dict[filt], (0.05, 0.05), xycoords='axes fraction', backgroundcolor='#ffffff80')
+        
+        ax2.axhline(0, color='lightgrey', ls='dotted')
+        if filt == 'moving_average':
+            axins.set_xlim((-0.05, 0.05))
+            axins.set_ylim((-0.01, 0.1))
+        elif filt == 'brickwall':
+            axins.set_xlim((-0.05, 0.05))
+            axins.set_ylim((-0.035, 0.35))
+        else:
+            axins.set_xlim((-0.01, 0.1))
+            axins.set_ylim((-.05, .05))
+        #axins.set_title('IRF', {'fontsize': 10})
+        
+        axins.set_xticks([])
+        axins.set_yticks([])
+        for direction in ["xzero", "yzero"]:
+            axins.axis[direction].set_axisline_style("-|>")
+            axins.axis[direction].set_visible(True)
+            lin = axins.axis[direction].line
+            lin.set_color('dimgrey')
+            lin.set_facecolor('dimgrey')
+            lin.set_edgecolor('black')
+        for direction in ["left", "right", "bottom", "top"]:
+            lin = axins.axis[direction].line
+            lin.set_color('dimgrey')
+            lin.set_facecolor('dimgrey')
+            lin.set_edgecolor('dimgrey')
             
-            prep_data = PreprocessingTools.PreprocessData(**acqui.to_preprocessdata())
-            prep_data.filter_data(filt,order,cutoff)
-            prep_data.plot_data(ax1)
-            prep_data.plot_psd(ax2)
+        ax1.legend().remove()
+        ax2.legend().remove()
+        if ax1.is_last_col():
+            ax1.set_ylabel('')
+            ax2.set_ylabel('')
+        if not ax1.is_last_row():
+            ax1.set_xlabel('')
+            ax2.set_xlabel('')
+    axesf[-1].set_xlim((0, 2 * 58.19))
+    axesf[-1].set_ylim((-62, 3))
+    
+    axest[-1].set_xlim((0, prep_data.duration))
+    
+    leg_handlesf = []
+    leg_handlest = []
+    for label,ls,c in [(None,'dashed','lightgrey'),('Filtered','solid','black'),('Original','solid','dimgrey')]:
+        if label is None:
+            line = matplotlib.lines.Line2D([],[],color=c, ls=ls, label='Filter FRF')
+            leg_handlesf.append(line)
+            line = matplotlib.lines.Line2D([],[],color=c, ls='solid', label='Filter IRF')
+            leg_handlest.append(line)
+        else:
+            line = matplotlib.lines.Line2D([],[],color=c, ls=ls, label=label)
+            leg_handlesf.append(line)
+            leg_handlest.append(line)
+    figf.legend(handles=leg_handlesf, loc=(.77, .13))
+    figf.subplots_adjust(.115, .115, .97, .97, .1, .1)
+    figt.legend(handles=leg_handlest, loc=(.77, .12))
+    figt.subplots_adjust(.115, .115, .97, .97, .1, .1)
+    
+    #figf.savefig('/ismhome/staff/womo1998/Projects/2019_OMA_UQ/tex/figures/math_basics/filter4_example_freq.pdf')
+    #figf.savefig('/ismhome/staff/womo1998/Projects/2019_OMA_UQ/tex/figures/math_basics/filter4_example_freq.png')
+    
+    #figt.savefig('/ismhome/staff/womo1998/Projects/2019_OMA_UQ/tex/figures/math_basics/filter4_example_tim.pdf')
+    #figt.savefig('/ismhome/staff/womo1998/Projects/2019_OMA_UQ/tex/figures/math_basics/filter4_example_tim.png')
+    
+    plt.show()
         
         
         
-        
-    else:
-        # apply sensor frf
-        acqui.apply_FRF(type)
-        
-        # add sensor / cabling  noise
-        acqui.add_noise(snr_db, noise_power)
-        
-        # decimate and estimate decimation noise / quantization noise
-        acqui.sample(f_max, fs_factor)
-        
-        prep_data = PreprocessingTools.PreprocessData(**acqui.to_preprocessdata())
-        
-        nodes, lines, chan_dofs = mech.get_geometry()
-        
-        geometry = PreprocessingTools.GeometryProcessor(nodes, lines)
+    return
+    # apply sensor frf
+    acqui.apply_FRF(type)
+    
+    # add sensor / cabling  noise
+    acqui.add_noise(snr_db, noise_power)
+    
+    # decimate and estimate decimation noise / quantization noise
+    acqui.sample(f_max, fs_factor)
+    
+    prep_data = PreprocessingTools.PreprocessData(**acqui.to_preprocessdata())
+    
+    nodes, lines, chan_dofs = mech.get_geometry()
+    
+    geometry = PreprocessingTools.GeometryProcessor(nodes, lines)
         
     
     # 
@@ -513,6 +1389,8 @@ if __name__ == '__main__':
     # nyq_rat=2.5
     # system_signal_decimate(N,dec_fact, numtap_fact,nyq_rat, True)
     # plt.show()
-    # uq_dec_noise()
-    main()
+    uq_dec_noise()
+    # verify_noise_power()
+    #with matplotlib.rc_context(rc=print_context_dict):
+    #    filter_example()()
     

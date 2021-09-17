@@ -271,7 +271,7 @@ def main():
     working_dir = '/dev/shm/womo1998/'
     os.makedirs(working_dir, exist_ok=True)
     jid = str(uuid.uuid4()).split('-')[-1]
-    result_dir = '/vegas/scratch/womo1998/modal_uq/model_error_era/'
+    result_dir = '/usr/scratch4/sima9999/work/modal_uq/model_error_era/'
     num_nodes = 10
     num_modes = 3
     damping = 0.01

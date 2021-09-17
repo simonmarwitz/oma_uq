@@ -1,52 +1,58 @@
-        
-#import matplotlib.pyplot as plt
-#import scipy.stats
-#import matplotlib.colors
-#import seaborn as sns
-#import scipy.signal
-#import PyQt5
-#import matplotlib.pyplot as plt
-        
 import os
 import glob
 import shutil
+import traceback
 import sys
 import time
 from datetime import date
 import simpleflock
+#import ray
 import coloredlogs
 import logging
 from contextlib import contextmanager
 import uuid
 import numpy as np
 import xarray as xr
-import ray
-import itertools
-coloredlogs.install()
+#import itertools
+#coloredlogs.install()
 #global logger
 #LOG = logging.getLogger('')
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.setLevel(level=logging.INFO)
 
 global pid
 pid = str(os.getpid())
+        
+# importing here to resolve import errors in ray
+# as usually, data_manager is part of the environment
+# all of its dependencies are pickled and so on
 
+import matplotlib
+import matplotlib.colors
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+
+
+import seaborn as sns
+import scipy.stats
+
+import ray
 
 '''
-PATH=$PATH:/ismhome/staff/womo1998/.local/bin/
+PATH=$PATH:/usr/scratch4/sima9999/.local/bin/
 export PATH
 
-module load python/intelpython3.7 > /dev/zero  2>&1
+conda activate my-conda-env
 export OMP_NUM_THREADS=1 # limit MKL to the number of workers / cpus to avoid hyperthreading
-PYTHONPATH=/vegas/users/staff/womo1998/Projects/2019_OMA_UQ/code/
+PYTHONPATH=/usr/scratch4/sima9999/code/:/usr/scratch4/sima9999/git/pyOMA/
 export PYTHONPATH
 export PYTHONUNBUFFERED=1
+IPADDRESS=$(hostname --ip-address)
+ray start --head --dashboard-host $IPADDRESS --dashboard-port=5990 --num-cpus 0
 
-ray start --head --dashboard-host 141.54.148.100 --dashboard-port=5998 --num-cpus 0
+lsrun ray start --address=$IPADDRESS:6379 --redis-password='5241590000000000' --num-cpus=16 --block &
 
-# run as many times as workers are needed, each adds 16 workers
-srun --nodes=1 --exclusive ray start --address='141.54.148.100:6379' --redis-password='5241590000000000' --num-cpus=16 --block &
-
-# connect to dashboard at  http://141.54.148.100:5998/
+# connect to dashboard at  http://141.54.148.100:5990/
 
 # encountered errors
 # workers fail due to slurm killing them
@@ -54,6 +60,14 @@ srun --nodes=1 --exclusive ray start --address='141.54.148.100:6379' --redis-pas
 
 '''
 
+class HiddenPrints:
+    def __enter__(self):
+        self._original_stdout = sys.stdout
+        sys.stdout = open(os.devnull, 'w')
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout.close()
+        sys.stdout = self._original_stdout
 
 class MultiLock():
     '''
@@ -81,7 +95,7 @@ class MultiLock():
                             lockfile_list) == 1 and lockfile_list[0] == self._this_lockfile:
                         # this processes lockfile is the only one, we can
                         # continue to modify the ds safely
-                        logging.debug(f'Acquired lock on {self._path}.lock')
+                        logger.debug(f'Acquired lock on {self._path}.lock')
                         return
                     elif self._this_lockfile in lockfile_list:
                         # another process has created a lockfile meanwhile ->
@@ -91,7 +105,7 @@ class MultiLock():
                     else:
                         # another process currently holds the lock for this
                         # file
-                        logging.warning(
+                        logger.warning(
                             'Wating for lockfile to release: {}'.format(lockfile_list))
                         time.sleep(np.random.random())
                 else:
@@ -116,12 +130,12 @@ class DataManager(object):
         self.title = title
 
         if result_dir is None:
-            logging.debug(
-                'no result_dir specified, using /vegas/scratch/womo1998/modal_uq/')
-            result_dir = '/vegas/scratch/womo1998/modal_uq/'
+            logger.debug(
+                'no result_dir specified, using /usr/scratch4/sima9999/work/modal_uq/')
+            result_dir = '/usr/scratch4/sima9999/work/modal_uq/'
 
         if not os.path.isdir(result_dir):
-            logging.debug(f'creating directory(s) {result_dir}')
+            logger.debug(f'creating directory(s) {result_dir}')
             os.makedirs(result_dir, exist_ok=True)
 
         self.result_dir = result_dir
@@ -130,7 +144,7 @@ class DataManager(object):
             working_dir = os.getcwd()
 
         if not os.path.isdir(working_dir):
-            logging.debug(f'creating directory(s) {working_dir}')
+            logger.debug(f'creating directory(s) {working_dir}')
             os.makedirs(working_dir, exist_ok=True)
 
         self.working_dir = working_dir
@@ -143,7 +157,7 @@ class DataManager(object):
         self.dbfile_in = dbfile_in
         if os.path.exists(os.path.join(result_dir, dbfile_in)):
             if overwrite:
-                logging.warning(
+                logger.warning(
                     f'Input database file {os.path.join(result_dir, dbfile_in)} already exists and will be overwritten')
                 os.remove(os.path.join(result_dir, dbfile_in))
 
@@ -154,7 +168,7 @@ class DataManager(object):
         self.dbfile_out = dbfile_out
         if os.path.exists(os.path.join(result_dir, dbfile_out)):
             if overwrite:
-                logging.warning(
+                logger.warning(
                     f'Output database file {os.path.join(result_dir, dbfile_out)} already exists and will be overwritten')
                 os.remove(os.path.join(result_dir, dbfile_out))
 
@@ -185,7 +199,7 @@ class DataManager(object):
         '''
         num_variables = len(distributions)
         if names is None:
-            logging.debug('generating variable names')
+            logger.debug('generating variable names')
             names = [f'var_{i:02d}' for i in range(num_variables)]
         assert len(names) == num_variables
 
@@ -234,7 +248,7 @@ class DataManager(object):
         '''
         num_variables = len(arrays)
         if names is None:
-            logging.debug('generating variable names')
+            logger.debug('generating variable names')
             names = [f'var_{i:02d}' for i in range(num_variables)]
         assert len(names) == num_variables
 
@@ -282,7 +296,7 @@ class DataManager(object):
         does not support provided samples
         '''
 
-        logging.warn("Enrichment currently untested.")
+        logger.warn("Enrichment currently untested.")
         with self.get_database(database='in', rw=False) as ds:
 
             new_ds = xr.Dataset()
@@ -337,8 +351,9 @@ class DataManager(object):
         dbpath = os.path.join(self.result_dir, self.dbfile_out)
         ds_new.to_netcdf(dbpath, engine='h5netcdf')
 
-    def evaluate_samples(self, func, arg_vars, ret_names=None,
-                         chwdir=True, re_eval_sample=None, dry_run=False, **kwargs):
+    def evaluate_samples(self, func, arg_vars, ret_names,
+                         chwdir=True, re_eval_sample=None, 
+                         dry_run=False, default_len=30, **kwargs):
         '''
 
         func is a function that
@@ -348,13 +363,21 @@ class DataManager(object):
             may take additional kwargs
 
         arg_vars  is a list of mappings (function argument, dataarray name in input dataset)
-
+        
+        ret_names Dict {'name1':('dimension1','dimension2',...),'name2':(),...} 
+            (as of python 3.7 dicts keep their order)
+        
         if chwdir:
             working directory will be changed for each sample to self.working_dir+jid
             and cleaned up upon successful completion ? or on every completion
         else:
             working_directory will be changed to self.working_dir once
-
+        
+        default_len is used when setting up new dimensions in an array to specify the
+            maximum number of values, that will be stored in that dimension
+        
+        dry_run may be a boolean, or a specific id_number for debugging purposes
+        
         uses ray to distribute tasks to a number of workers.
         a ray head process must be started on stratos
         see top of file for a sbatch file to start a ray worker
@@ -382,7 +405,7 @@ class DataManager(object):
 
             # lock files will stay there, make sure to delete them afterwards
             with simpleflock.SimpleFlock(os.path.join(self.result_dir, f'{jid}.lock'), timeout=1):
-                logging.info(f'start computing sample {jid}')
+                logger.info(f'start computing sample {jid}')
 
                 now = time.time()
                 # create the working directory
@@ -406,37 +429,95 @@ class DataManager(object):
                     if not isinstance(ret_vals, tuple):
                         raise RuntimeError('The evaluation function must return a tuple.')
                 except Exception as e:
-                    logging.warning(f'function failed with exit message {e}')
+                    logger.warning(f'function failed with exit message {e}')
+                    traceback.print_exc()
                     ret_vals = repr(e)
                 finally:
                     if working_dir is not None:
                         os.chdir(cwd)
                         subdirs = next(os.walk(working_dir))[1]
                         if len(subdirs) == 0:
-                            logging.info(f"Removing working_dir {working_dir}")
+                            logger.info(f"Removing working_dir {working_dir}")
                             shutil.rmtree(working_dir, ignore_errors=True)
                         else:
-                            logging.warning(
+                            logger.warning(
                                 f"Cannot remove working_dir {working_dir} (contains subdirectories)")
 
                     runtime = time.time() - now
 
-                    logging.info(
+                    logger.info(
                         f'done computing sample {jid}. Runtime was {runtime} s')
 
                 return jid, ret_vals, runtime
+            
+        def save_samples(ret_sets, ret_names, num_samples, default_len):
+            with self.get_database(database='out', rw=True) as out_ds:
+                
+                for jid, ret_vals, runtime in ret_sets:  # first may have thrown an exception, then len() fails
+                    if isinstance(ret_vals, (list, tuple)):
+                        num_variables = len(ret_vals)
+                        break
+                else:
+                    raise RuntimeError(f"All ret_sets are empty {ret_sets}")
 
+                for jid, ret_vals, runtime in ret_sets:
+
+                    if isinstance(ret_vals, str):  # exception repr
+                        if '_exceptions' not in out_ds.data_vars:
+                            out_ds['_exceptions'] = (['ids'], np.full(
+                                shape=(num_samples,), fill_value=''))
+                        out_ds['_exceptions'][out_ds.ids == jid] = ret_vals
+                        continue
+
+                    assert len(ret_names) == len(ret_vals)
+
+                    for (name, dims), value in zip(ret_names.items(), ret_vals):
+                        if not isinstance(value, np.ndarray):
+                            logger.warning(f'Output for {name} should be a (0- or higher-dimensional) numpy array.')
+                            value = np.array(value)
+                        if name not in out_ds.data_vars:
+                            ndims = len(dims)
+                            dtype = value.dtype
+                            if isinstance(default_len,(int,float)):
+                                shape = (num_samples, *[default_len] * ndims)
+                            elif isinstance(default_len, (dict)):  # dict of {dim:len,...}
+                                shape = [num_samples]
+                                for dim in dims:
+                                    shape.append(default_len[dim])
+                                
+                            out_ds[name] = (('ids', *dims), np.full(
+                                shape=shape, fill_value=np.nan, dtype=dtype))
+                            # for dim in dims:
+                            #     if dim not in out_ ds.coords:
+                            #         out_ds.coords[dim] = np.arange(default_len)
+                        
+                        pos_dict = {dim:slice(None,siz) for dim, siz in zip(dims, value.shape)}
+                            
+                        out_ds[name].loc[jid][pos_dict] = value
+
+                        logger.debug(out_ds[name][out_ds.ids == jid])
+
+                    out_ds['_runtimes'][out_ds.ids == jid] = runtime
+
+                    logger.debug(out_ds['_runtimes'][out_ds.ids == jid])
+        
+        if isinstance(dry_run, str):
+            if re_eval_sample is None:
+                re_eval_sample = dry_run
+            if re_eval_sample!=dry_run:
+                logger.warning(f'Trying to debug sample {dry_run} but re-evaluating {re_eval_sample}')
+                     
         # open database read-only, without locking
-        with self.get_database(database='in') as in_ds, self.get_database(database='out', rw=True) as out_ds:
-
+        with self.get_database(database='in') as in_ds, self.get_database(database='out', rw=False) as out_ds:
+            
             if not chwdir:
                 os.chdir(self.working_dir)
-                logging.debug(f'current working directory {self.working_dir}')
-
-            if re_eval_sample is not None:
-                in_ds = in_ds.sel(ids=[re_eval_sample])
+                logger.debug(f'current working directory {self.working_dir}')
 
             num_samples = in_ds.ids.size
+            
+            if re_eval_sample is not None:
+                in_ds = in_ds.sel(ids=[re_eval_sample])
 
             futures = []
 
@@ -444,7 +525,7 @@ class DataManager(object):
             # i.e. sort key = jobsize, but also add some smallest jobs
             # to the beginning to see any errors quickly
             
-            for jid_ind in sorted(range(num_samples),
+            for jid_ind in sorted(range(in_ds.ids.size),
                                   key=lambda _: np.random.random()):
 
                 if (not out_ds['_runtimes'][jid_ind].isnull()
@@ -463,23 +544,23 @@ class DataManager(object):
                     working_dir = None
 
                 if dry_run:
-                    #                     if jid=='5db7e4ed1b09':
-                    #                         if not os.path.exists(working_dir):
-                    #                             os.makedirs(working_dir, exist_ok=True)
-                    #                         func(jid, **fun_kwargs, working_dir=working_dir, result_dir=working_dir, **kwargs)
-                    #                         return
-                    continue
-                #print(fun_kwargs)
-                worker_ref = setup_eval.remote(
-                    func, jid, fun_kwargs, working_dir=working_dir, **kwargs)
-                
-                futures.append(worker_ref)
+                    if isinstance(dry_run, str) and dry_run!=jid:
+                        continue
+                    # evaluates samples in the regular way, i.e. one at a time
+                    ret_sets = [setup_eval(func, jid, fun_kwargs, working_dir=working_dir, **kwargs)]
+                    save_samples(ret_sets, ret_names, num_samples, default_len)
+                else:
+                    #print(fun_kwargs)
+                    worker_ref = setup_eval.remote(
+                        func, jid, fun_kwargs, working_dir=working_dir, **kwargs)
+                    
+                    futures.append(worker_ref)
 
         if dry_run:
             return
 
         futures = set(futures)
-
+        
         while True:
             ready, wait = ray.wait(
                 list(futures), num_returns=min(len(futures), 25))
@@ -487,68 +568,28 @@ class DataManager(object):
             ret_sets = ray.get(ready)
 
             if not ret_sets:
-                logging.info("All jobs already computed!")
+                logger.info("All jobs already computed!")
                 break
-
-            with self.get_database(database='out', rw=True) as out_ds:
-
-                for jid, ret_vals, runtime in ret_sets:  # first may have thrown an exception, then len() fails
-                    if isinstance(ret_vals, (list, tuple)):
-                        num_variables = len(ret_vals)
-                        break
-                else:
-                    raise RuntimeError(f"All ret_sets are empty {ret_sets}")
-
-                if ret_names is None:
-                    logging.debug('generating variable names')
-                    ret_names = [f'var_{i:02d}' for i in range(num_variables)]
-
-                for jid, ret_vals, runtime in ret_sets:
-
-                    if isinstance(ret_vals, str):  # exception repr
-                        if '_exceptions' not in out_ds.data_vars:
-                            out_ds['_exceptions'] = (['ids'], np.full(
-                                shape=(num_samples,), fill_value=''))
-                        out_ds['_exceptions'][out_ds.ids == jid] = ret_vals
-                        continue
-
-                    assert len(ret_names) == len(ret_vals)
-
-                    for name, value in zip(ret_names, ret_vals):
-                        if name not in out_ds.data_vars:
-                            out_ds[name] = ('ids', np.full(
-                                shape=(num_samples), fill_value=np.nan))
-                        out_ds[name][out_ds.ids == jid] = value
-
-                        logging.debug(out_ds[name][out_ds.ids == jid])
-
-                    out_ds['_runtimes'][out_ds.ids == jid] = runtime
-
-                    logging.debug(out_ds['_runtimes'][out_ds.ids == jid])
+            
+            save_samples(ret_sets, ret_names, num_samples, default_len)
 
             if len(wait) == 0:
                 break
 
             size_before = len(futures)
             futures.difference_update(ready)
-            logging.info(
+            logger.info(
                 f"Finished {len(ready)} samples. Remaining {len(futures)} samples. (before {size_before})")
         ray.shutdown()
         return
 
-    def post_process_samples(self, db='merged', func=None, names=None, **kwargs):
+    def post_process_samples(self, db='merged', func=None, 
+                             names=None, labels=None,
+                             max_categories=30, draft=True, **kwargs):
         '''
         drawing scatterplot matrices, bar charts, box plots etc.
         '''
-        
-        # importing here to resolve import errors in ray
-        # as usually, data_manager is part of the environment
-        # all of its dependencies are pickled and so on
 
-        import matplotlib.pyplot as plt
-        import matplotlib.colors
-        import seaborn as sns
-        import scipy.stats
         
         def categorize_data(datax, datay, categories):
             categories = np.array(categories)
@@ -589,8 +630,7 @@ class DataManager(object):
 
             return datax_cat, datay_cat, sizes
 
-        def scatterplot_matrix(
-                data, all_categories={}, nbins=20, scales={}, **kwargs):
+        def scatterplot_matrix(data, all_categories={}, nbins=20, scales={}, draft=True, labels=None, **kwargs):
             """Plots a scatterplot matrix of subplots.  Each row of "data" is plotted
             against other rows, resulting in a nrows by nrows grid of subplots with the
             diagonal subplots labeled with "names".
@@ -606,10 +646,10 @@ class DataManager(object):
             
             numdata, numvars = data.shape
             names = data.keys()
+            #print(numdata,numvars,names)
             
             fig, axes = plt.subplots(nrows=numvars, ncols=numvars, figsize=(
                 10, 10), sharex='col', sharey='row', squeeze=False)
-            fig.subplots_adjust(hspace=0.05, wspace=0.05)
 
             for ax in axes.flat:
                 # Hide all ticks and labels
@@ -643,6 +683,8 @@ class DataManager(object):
                 ax.yaxis.set_visible(False)
                 
                 name = names[ij]
+                
+                logger.debug(f'hist {name}')
                 if name in all_categories:
                     bin_centers = all_categories[name]
                     bin_widths = (bin_centers[1:] - bin_centers[:-1]) / 2
@@ -667,13 +709,15 @@ class DataManager(object):
                 
                 namex = names[x]
                 namey = names[y]
-                #print(namex,namey)
+                logger.debug(f'scatter {namex},{namey}')
+                
+                this_data = data[[namex, namey]].dropna() 
                 # categorical (i.e. integer) data should be displayed as box
                 # plots rather than scatter plots
                 if namex in all_categories and namey in all_categories:  # both categorical -> draw bubbles
 
                     datax, datay, sizes = count_data(
-                        data[namex], data[namey], all_categories[namex], all_categories[namey])
+                        this_data[namex], this_data[namey], all_categories[namex], all_categories[namey])
 
                     # sizes must be normalized, scaled to the binsize and to
                     # the axes size in points
@@ -690,16 +734,26 @@ class DataManager(object):
 
                     axes[y, x].scatter(datax, datay, s=sizes,
                                        alpha=.5, color='dimgrey')
-                elif namex in all_categories:  # xdata categorical -> draw normal boxplots
-                    widths = np.diff(all_bins[namex]) * 0.75
-                    datax = all_categories[namex]
-                    datay = categorize_data(
-                        data[namex], data[namey], datax)
+                elif namex in all_categories or namey in all_categories:  # xdata or ydata categorical -> draw normal boxplots
+                    if namex in all_categories:
+                        widths = np.diff(all_bins[namex]) * 0.75
+                        pos = all_categories[namex]
+                        bp_data = categorize_data(
+                            this_data[namex], this_data[namey], pos)
+                        vert=True
+                        
+                    elif namey in all_categories:
+                        widths = np.diff(all_bins[namey]) * 0.75
+                        pos = all_categories[namey]
+                        bp_data = categorize_data(
+                            this_data[namey], this_data[namex], pos)
+                        vert=False
                     
                     if True:
-                        axes[y, x].boxplot(datay,
-                                           positions=datax,
-                                           vert=True,
+                        
+                        axes[y, x].boxplot(bp_data,
+                                           positions=pos,
+                                           vert=vert,
                                            widths=widths,
                                            sym='',
                                            boxprops=dict(color='dimgrey'),
@@ -707,10 +761,12 @@ class DataManager(object):
                                            whiskerprops=dict(color='grey'))
                     else:
                         # strip plot plots the categories at x values 0 ... num_categories and does not obey numerical categories
-                        # this will be fixed in a future release: https://github.com/mwaskom/seaborn/issues/2429
-                        # There will be a parameter (fixed_scale) to disable the forced categorical mapping, meaning that the placement along the "categorical" axis will respect the numeric values of that variable. Fixed scaling will remain the default behavior.
+                        # this will be fixed in a future release: https://github.com/mwaskom/seaborn/issues/2429 -> possible v0.12.0
+                        # There will be a parameter (fixed_scale) to disable the forced categorical mapping,
+                        # meaning that the placement along the "categorical" axis will respect the numeric values of that variable.
+                        # Fixed scaling will remain the default behavior.
                         sns.stripplot(
-                            x=namex, y=namey, ax=axes[y, x], data=data, color='dimgrey', jitter=0.2,size=1)
+                            x=namex, y=namey, ax=axes[y, x], data=this_data, orient=('h','v')[vert], color='dimgrey', jitter=0.2,size=1)
 
                 else:  # draw hexbin plots
                     
@@ -718,7 +774,6 @@ class DataManager(object):
                     color_s = matplotlib.colors.to_rgba('dimgrey', alpha=0)
                     color_e = matplotlib.colors.to_rgba('dimgrey', alpha=1)
 
-                    from matplotlib.colors import LinearSegmentedColormap
 
                     cmap = LinearSegmentedColormap.from_list(
                         'CustomCmap', colors=[color_s, color_e])  # fff white with alpha
@@ -729,12 +784,15 @@ class DataManager(object):
                     else:
                         xscale='linear'
                         yscale='linear'
-
-                    axes[y, x].hexbin(data[namex], data[namey], gridsize=200, bins='log', cmap=cmap,
+                    
+                    if draft:
+                        axes[y, x].scatter(this_data[namex], this_data[namey],marker='.', c='dimgrey', edgecolors='none',s=1, )
+                    else:
+                        axes[y, x].hexbin(this_data[namex], this_data[namey], gridsize=200, bins='log', cmap=cmap,
                                       xscale=xscale, yscale=yscale,
                                       edgecolors='face')
 
-                rho, pval = scipy.stats.spearmanr(data[namex], data[namey])
+                rho, pval = scipy.stats.spearmanr(this_data[namex], this_data[namey])
                 #corr_coef = np.corrcoef(x,y)
                 #rho = corr_coef[1,0]
                 #corr_coef = rho
@@ -743,7 +801,10 @@ class DataManager(object):
                                     ha='center', va='center')
 
             # Label the diagonal subplots...
-            for i, label in enumerate(names):
+            for i, label in enumerate(labels):
+                if "_" in label and matplotlib.rcParams["text.usetex"] is True:
+                    # might want to use pylatexenc in the future
+                    label = label.replace("_", "\_")
                 ab = axes[i, i].annotate(label, (0.5, 0.5), xycoords='axes fraction',
                                          ha='center', va='center', zorder=10, backgroundcolor='#FFFFFFAA')
 
@@ -752,9 +813,11 @@ class DataManager(object):
                     axes[0, i].set_xscale(scale)
                     if i > 0:  # skip yscale on first row, there are just correlation coefficients anyway
                         axes[i, 0].set_yscale(scale)
-
+            
+            fig.subplots_adjust(hspace=0.05, wspace=0.05, top=0.98, bottom=0.05, left=0.05, right=0.98)
+            
             return fig
-
+        
         with self.get_database(database=db, rw=False) as ds:
             
             '''
@@ -793,16 +856,63 @@ class DataManager(object):
 
             '''
             if func is not None:
+                rw = kwargs.pop('rw', False)
+                logger.info(f'Applying user-supplied function {func.__name__} to dataset and save results ({rw})...')
+                    
+                    
                 ds = func(ds, **kwargs)
+                if ds is None:
+                    logger.warning(f'{func} did not return a dataset. Exiting!')
+                
+                # workaround, since func may have returned a new object of ds, also with new indices etc.
+                # adding a underscore to be on the safe side
+                if rw:
+                    file, ext = os.path.splitext(self.dbfile_in)
+                    dbfile_out = file + '_processed' + ext
+                    dbpath = os.path.join(self.result_dir, dbfile_out)
+                    logger.debug(f'Saving database to {dbpath}')
+                    ds.close()
+                    ds.to_netcdf(dbpath, engine='h5netcdf')
+                    ds.close
+                    logger.info('We saved the database outside the safe loop, ensure to load the "processed" db for future use')
             
+            if '_exceptions' in ds.data_vars:
+                ind = ds._exceptions=='' # no exception
+                ds = ds.isel(ids=ind)    
+                              
             if names is None:
                 names = [name for name in ds.data_vars]
-            # TODO: check names in data_vars and make sure it can be used as an indexer
             
+            # Sort out 3D data
+            try:
+                for i in reversed(range(len(names))):
+                    name = names[i]
+                    if name.startswith('_'):
+                        del names[i]
+                    elif name in ds.coords:
+                        del names[i]
+                    elif not name in ds.data_vars:
+                        logger.warning(f'Variable {name} is not in the dataset and will be skipped')
+                        del names[i]
+                    elif len(ds[name].data.shape) != 1:
+                        logger.warning(f'DataArray {name} has {len(ds[name].data.shape)} dimensions. Try to pre-process (flatten, subdivide, etc.) and remove it')
+                        del names[i]
+                    elif ds[name].dtype == np.dtype('O'):
+                        logger.warning(f'DataArray {name} is an object dtype, must be preprocessed!')
+                        #continue
+                        del names[i]
+                    elif np.isnan(ds[name].data).all():
+                        logger.warning(f'DataArray {name} is empty. Try to remove it from names!')
+                        del names[i]
+            except:
+                print(name)
+                raise
+            
+            
+            logger.info(f'Categorizing data arrays ...')
             categorical_dists = ['integers', 'choice', 'binomial',
                                  'hypergeometric', 'geometric', 'poisson']
             # geometric, poisson, are discrete but unbound, an overflow bin would have to be assigned, maybe if needed later
-            
             all_categories = {}
             for name in names:
                 da = ds[name]
@@ -811,77 +921,80 @@ class DataManager(object):
                     if dist_type in categorical_dists:
                         dist_params = da.attrs['dist_params']
                         if dist_type == 'integers':
-                            all_categories[name] = np.arange(*dist_params)
+                            categories = np.arange(*dist_params)
                         elif dist_type == 'choice':
-                            all_categories[name] = dist_params[0]
+                            categories = dist_params[0]
                         else:
                             raise NotImplementedError(f'Category generation for the {dist_type} distribution is currently not implemented.')
+                        
+                        if len(categories) <= max_categories:
+                            all_categories[name] = categories
+                        else:
+                            logger.warning(f'Number of categories exceeds max_categories {max_categories} for parameter {name}')
             
-            
-            
-            # Sort out 3D data
-            for name in ds.data_vars:
-                if name.startswith('_'):
-                    names.remove(name)
-                if len(ds[name].data.shape) != 1:
-                    logging.warning(f'DataArray {name} has {len(ds[name].data.shape)} dimensions. Try to remove it from names.!')
-                    if name in names:
-                        names.remove(name) # works for list
-                if np.isnan(ds[name].data).all():
-                    logging.warning(f'DataArray {name} is empty. Try to remove it from names.!')
-                    if name in names:
-                        names.remove(name) # works for list
-                #print(ds[name].data.shape, name)
-            print(names)
+           
+        
             numvars = len(names)
-            # might have to remove empty coordinates before
-            df = ds[names].to_dataframe()
+            
+            # TODO: might have to remove empty coordinates before
+            df = ds.reset_coords(['ids_','modes'])[names].to_dataframe()
+            #print(ds)
             
             
             
-            # g = sns.PairGrid(df, diag_sharey=True, despine=False)
-            #
-            # #g.map_diag(sns.histplot)
-            # print(np.triu_indices(numvars, 0))
-            # for indices in zip(*np.tril_indices(numvars, k=0)):
-                # x, y = indices
-                # print(indices)
-                # if x == y:
-                    # continue
-                    # g._map_bivariate(sns.histplot, [indices])
-                # elif names[x] in all_categories and names[y] in all_categories: # categorical data
-                    # ax = self.axes[x,y]
-                    #
-                    #
-                    # #g._map_bivariate(plt.scatter, [indices])
-                # elif names[x] in all_categories or names[y] in all_categories: #categorical data
-                    # g._map_bivariate(sns.stripplot, [indices])
-                    
-            #
-            #g.map_diag(sns.kdeplot)
-            #g.map_offdiag(sns.stripplot)
-            #g._map_bivariate(func, indices) # for categorical data
-            # plt.show()
+        # g = sns.PairGrid(df, diag_sharey=True, despine=False)
+        #
+        # #g.map_diag(sns.histplot)
+        # print(np.triu_indices(numvars, 0))
+        # for indices in zip(*np.tril_indices(numvars, k=0)):
+            # x, y = indices
+            # print(indices)
+            # if x == y:
+                # continue
+                # g._map_bivariate(sns.histplot, [indices])
+            # elif names[x] in all_categories and names[y] in all_categories: # categorical data
+                # ax = self.axes[x,y]
+                #
+                #
+                # #g._map_bivariate(plt.scatter, [indices])
+            # elif names[x] in all_categories or names[y] in all_categories: #categorical data
+                # g._map_bivariate(sns.stripplot, [indices])
+        #
+        #g.map_diag(sns.kdeplot)
+        #g.map_offdiag(sns.stripplot)
+        #g._map_bivariate(func, indices) # for categorical data
+        # plt.show()
+        logger.info(f'Creating the scatterplot matrix... ')
+        logger.debug(f'{df}')
+        logger.debug(f'{all_categories}')
+        logger.debug(f'{kwargs.get("scales",None)}{draft}')
+        if labels is None:
+            labels=names
+        else:
+            assert len(labels)==len(names)
             
-            
-            
-            
-            scatterplot_matrix(data=df,
-                               all_categories=all_categories,
-                               scales=kwargs.pop('scales', None),
-                               **kwargs)
-            plt.show()
+        scatterplot_matrix(data=df,
+                           all_categories=all_categories,
+                           scales=kwargs.pop('scales', None),
+                           draft=draft,
+                           labels=labels,
+                           **kwargs)
+        
+        plt.show()
 
     @classmethod
     def from_existing(cls, dbfile_in,
-                      result_dir='/vegas/scratch/womo1998/modal_uq/'):
+                      result_dir='/usr/scratch4/sima9999/work/modal_uq/'):
         assert os.path.exists(os.path.join(result_dir, dbfile_in))
 
         cls.result_dir = result_dir
         cls.dbfile_in = dbfile_in
         with cls.get_database(cls) as ds:
             working_dir = ds.attrs['working_dir']
-            assert os.path.exists(working_dir)
+            if not os.path.exists(working_dir):
+                logger.warning(f'Working directory {working_dir} does not exist. Creating!')
+                os.makedirs(working_dir)
+                
             cls.working_dir = working_dir
 
             title = ds.attrs['title']
@@ -889,19 +1002,19 @@ class DataManager(object):
 
             result_dir_ = ds.attrs['result_dir']
             if result_dir_ != result_dir:
-                logging.warning(
+                logger.warning(
                     f'result dir from db {result_dir_} differs from given result_dir {result_dir}')
 
             dbfile_in_ = ds.attrs['dbfile_in']
             if dbfile_in != dbfile_in_:
-                logging.warning(
+                logger.warning(
                     f'dbfile_in from db {dbfile_in_} differs from given dbfile_in {dbfile_in}')
 
             dbfile_out = ds.attrs['dbfile_out']
             cls.dbfile_out = dbfile_out
             # create and  populate output db with the ids at least
             if not os.path.exists(os.path.join(result_dir, dbfile_out)):
-                logging.info(
+                logger.info(
                     f'output db {os.path.join(result_dir,dbfile_out)} has been deleted. Recreating!')
                 with cls.get_database(cls, database='out', rw=True) as out_ds:
                     ids = ds.ids.data
@@ -923,18 +1036,18 @@ class DataManager(object):
         this should be used as a contextmanager, to ensure proper file closing and lock removal
         '''
 
-        assert database in ['in', 'out', 'merged']
+        assert database in ['in', 'out', 'merged', 'processed']
 
         if database == 'in':
             dbfile = self.dbfile_in
         elif database == 'out':
             dbfile = self.dbfile_out
             if not rw:
-                logging.warning(
+                logger.warning(
                     'You have chosen to open the output-db in read-only mode, changes will not be saved.')
         elif database == 'merged':
             if rw:
-                logging.warning('merged database can not be opend in rw mode')
+                logger.warning('merged database can not be opend in rw mode')
             try:
                 with self.get_database(database='in', rw=False) as in_ds, self.get_database(database='out', rw=False) as out_ds:
                     ds = in_ds.combine_first(out_ds)
@@ -944,11 +1057,14 @@ class DataManager(object):
             finally:
                 ds.close()
             return
+        elif database == 'processed':
+            file, ext = os.path.splitext(self.dbfile_in)
+            dbfile = file + '_processed' + ext
 
         dbpath = os.path.join(self.result_dir, dbfile)
 
         if not os.path.exists(dbpath):
-            logging.debug(f'file {dbfile} will be created')
+            logger.debug(f'file {dbfile} will be created')
             with MultiLock(dbpath):
                 # create database, if it does not exist
                 if not os.path.exists(dbpath):
@@ -965,7 +1081,7 @@ class DataManager(object):
                     #ds.to_netcdf(dbpath, format='netcdf4')
                     ds.close()
         else:
-            logging.debug(f'opening existing file {dbfile}')
+            logger.debug(f'opening existing file {dbfile}')
 
         if not rw:
             try:
@@ -998,7 +1114,7 @@ class DataManager(object):
                 finally:
                     # save and close database
                     ds.close()
-
+                    logger.debug(f'Saving database to {dbpath}')
                     ds.to_netcdf(dbpath, engine='h5netcdf')
                     #ds.to_netcdf(dbpath, format='netcdf4')
                     ds.close()
@@ -1012,9 +1128,9 @@ class DataManager(object):
             for file in lock_list:
                 jid = os.path.splitext(os.path.split(file)[-1])[0]
                 if np.isnan(out_ds['_runtimes'][out_ds.ids == jid]):
-                    logging.warning(
+                    logger.warning(
                         f'A lock exists for {jid} but no results are in the db')
-                logging.debug(f'removing file {file}')
+                logger.debug(f'removing file {file}')
                 os.remove(file)
 
     def clear_wdirs(self, delnonempty=False):
@@ -1025,18 +1141,18 @@ class DataManager(object):
                 if not jid in out_ds.ids:
                     continue
                 if np.isnan(out_ds['_runtimes'][out_ds.ids == jid]):
-                    logging.warning(
+                    logger.warning(
                         f'A lock exists for {jid} but no results are in the db')
-                logging.debug(f'removing file {dir_}')
+                logger.debug(f'removing file {dir_}')
                 try:
                     os.removedirs(dir_)
                 except Exception as e:
                     if e.errno == 39:
-                        logging.warning(f'Working directory not empty {dir_}')
+                        logger.warning(f'Working directory not empty {dir_}')
                         if delnonempty:
                             shutil.rmtree(dir_)
                     else:
-                        logging.warning(repr(e))
+                        logger.warning(repr(e))
 
     def clear_failed(self, dryrun=True):
         lock_list = glob.glob(os.path.join(self.result_dir, '*.lock'))
@@ -1051,6 +1167,17 @@ class DataManager(object):
                             os.remove(file)
                 if np.isnan(out_ds['_runtimes'][out_ds.ids == jid]):
                     print(out_ds['_runtimes'][out_ds.ids == jid], file)
+                    if not dryrun:
+                        os.remove(file)
+            for jid in out_ds.ids:
+                if '_exceptions' in out_ds.data_vars:
+                    if out_ds['_exceptions'][out_ds.ids == jid].data:
+                        print(out_ds['_exceptions']
+                              [out_ds.ids == jid].data)
+                        if not dryrun:
+                            os.remove(file)
+                if np.isnan(out_ds['_runtimes'][out_ds.ids == jid]):
+                    print(out_ds['_runtimes'][out_ds.ids == jid])
                     if not dryrun:
                         os.remove(file)
 
@@ -1298,8 +1425,8 @@ def manipulate_student_fun(jid, snr_db, readfolder, result_dir):
 
 def test_categorical():
     title = 'test_categorical'
-    savefolder = '/vegas/scratch/womo1998/modal_uq/'
-    result_dir = '/vegas/scratch/womo1998/modal_uq/'
+    savefolder = '/usr/scratch4/sima9999/work/modal_uq/'
+    result_dir = '/usr/scratch4/sima9999/work/modal_uq/'
 
     if not os.path.exists(result_dir + title + '.nc') or False:
         data_manager = DataManager(title=title, working_dir='/dev/shm/womo1998/',
@@ -1334,50 +1461,50 @@ def test_categorical():
 
     
 def test_imports():
-    
+    #import ray
     def import_tester_fun(**kwargs):
+        # The following imports must be on top of the file before import ray
+        import scipy.linalg, scipy.integrate, scipy.optimize, scipy.signal
+        import PyQt5.QtCore, PyQt5.QtGui
+        #from ansys.mapdl.core import launch_mapdl
+        #from ansys.dpf.core import Model
+        from model.mechanical import Mechanical, MechanicalDummy
+        import pyansys
+        import seaborn
+        
+        
+        
         return (1,)
 
-    title = 'test_categorical'
-    savefolder = '/vegas/scratch/womo1998/modal_uq/'
-    result_dir = '/vegas/scratch/womo1998/modal_uq/'
-    ray.init(address='auto', _redis_password='5241590000000000')
-        
-    ray.shutdown()
-    import seaborn
-    # if not os.path.exists(result_dir + title + '.nc') or True:
-        # data_manager = DataManager(title=title, working_dir='/dev/shm/womo1998/',
-                                   # result_dir=result_dir,
-                                   # overwrite=True)
-        # data_manager.generate_sample_inputs(names=['N',],
-                                            # distributions=[('uniform', (2, 4)),
-                                                           # ],
-                                            # num_samples=1)
-        
-        # data_manager.evaluate_samples(func=import_tester_fun, 
-                                      # arg_vars={'N':'N'},
-                                      # ret_names=['snrs'],
-                                      # chwdir=True, dry_run=False)
-        # data_manager.post_process_samples()
-    # if len(sys.argv) > 1:
-        # num = int(sys.argv[1])
-    # else:
-        # num = 4
-    # # for num in range(8):
-    # # 0x linear_decay, 1x friction_decay, 2x nonlinear_decay, 3x
-    # # general_decay, 4x linear_ambient, 5x friction_ambient, 6x
-    # # nonlinear_ambient, 7x general_ambient
+    title = 'test_imports'
+    savefolder = '/usr/scratch4/sima9999/work/modal_uq/'
+    result_dir = '/usr/scratch4/sima9999/work/modal_uq/'
+    #ray.init(address='auto', _redis_password='5241590000000000')
     #
-    # student_manager(num // 4, num // 2 % 2, num % 2)
-
-
+    #ray.shutdown()
+    if not os.path.exists(result_dir + title + '.nc') or True:
+        data_manager = DataManager(title=title, working_dir='/dev/shm/womo1998/',
+                                   result_dir=result_dir,
+                                   overwrite=True)
+        data_manager.generate_sample_inputs(names=['N',],
+                                            distributions=[('uniform', (2, 4)),
+                                                           ],
+                                            num_samples=1)
+                                            
+        data_manager.evaluate_samples(func=import_tester_fun, 
+                                      arg_vars={'N':'N'},
+                                      ret_names=['snrs'],
+                                      chwdir=True, dry_run=False)
+    data_manager = DataManager.from_existing(result_dir + title + '.nc', result_dir)
+    data_manager.post_process_samples()
+   
 
 def test():
 
     # generate input samples
     title = 'test3'
     dbfile_in = f'{title}.nc'
-    result_dir = f'/vegas/scratch/womo1998/modal_uq/{title}/'
+    result_dir = f'/usr/scratch4/sima9999/work/modal_uq/{title}/'
     # result_dir=f'/vegas/users/staff/womo1998/Projects/2019_OMA_UQ/data/{title}/'
 
     if False:
@@ -1400,9 +1527,9 @@ def test():
         #
     else:
         #data_manager = DataManager.from_existing(dbfile_in=dbfile_in,result_dir = result_dir)
-        #data_manager=DataManager.from_existing(dbfile_in='model_perf.nc', result_dir='/vegas/scratch/womo1998/modal_uq/')
+        #data_manager=DataManager.from_existing(dbfile_in='model_perf.nc', result_dir='/usr/scratch4/sima9999/work/modal_uq/')
         data_manager = DataManager.from_existing(
-            dbfile_in='model_perf2.nc', result_dir='/vegas/scratch/womo1998/modal_uq/')
+            dbfile_in='model_perf2.nc', result_dir='/usr/scratch4/sima9999/work/modal_uq/')
         with data_manager.get_database('merged') as ds:
             ds.load()
         ds = process_model_perf(ds)
