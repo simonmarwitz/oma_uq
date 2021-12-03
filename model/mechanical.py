@@ -474,7 +474,8 @@ class Mechanical(object):
         if jid is None:
             jid = 'file'
         ansys = pyansys.launch_mapdl(
-            exec_file='/usr/app-soft/ansys/v201/ansys/bin/ansys201',
+            exec_file='/usr/scratch4/app-soft/ansys/v202/ansys/bin/ansys202',
+            #exec_file='/usr/app-soft/ansys/v201/ansys/bin/ansys201',
             run_location=working_dir, override=True, loglevel='ERROR',
             nproc=1, log_apdl='w',
             log_broadcast=False, jobname=jid,
@@ -1297,11 +1298,11 @@ class Mechanical(object):
         
         #f = rng.normal(0, f_scale, (timesteps, num_nodes))
         
-        phase = rng.uniform(-np.pi, np.pi, (timesteps // 2 + 1, num_nodes))
-        Pomega = f_scale * np.ones_like(phase) * np.exp(1j * phase)
         f = np.empty((timesteps, num_nodes))
         for channel in range(num_nodes):
-            f[:, channel] = np.fft.irfft(Pomega[:, channel], timesteps)
+            phase = rng.uniform(-np.pi, np.pi, (timesteps // 2 + 1, ))
+            Pomega = f_scale * np.ones_like(phase) * np.exp(1j * phase)
+            f[:, channel] = np.fft.irfft(Pomega, timesteps)
         
         # TODO: implement correlated random processes here
         # TODO: implement random impulses here
@@ -1321,9 +1322,11 @@ class Mechanical(object):
                         break
                     lines_found = f.readlines()
                     block_counter -= 1
-                logger.error(str(lines_found[-10:]))
-
-                raise e
+                for i in range(1,min(1+len(lines_found),11)): # try to print only the last error message but not more than ten
+                    if lines_found[-i].startswith(' *** ERROR ***'):
+                        break
+                logger.error(str(lines_found[-i:]))            
+            raise e
 
         self.inp_hist_amb = f
         self.t_vals_amb = time_values
@@ -2191,13 +2194,13 @@ class Mechanical(object):
         chunksize = int(chunksize)
         num_chunks = timesteps // chunksize
         if num_chunks > 5 and not chunk_restart:
-            logger.debug(f"{num_chunks}>5 chunks will be computed, enabling chunk_restart")
+            logger.info(f"{num_chunks}>5 chunks will be computed. Enabling chunk_restart for efficiency.")
             chunk_restart = True
-#             prior_log_level = ansys._log.level
-#             ansys.set_log_level('INFO')
-            ansys.config("NRES", chunksize)
-#             ansys.set_log_level(prior_log_level)
-
+            ansys.config("NRES", chunksize + 1) 
+            # sometimes, an additional loadstep is computed, probably due to rounding errors in deltat,
+            # setting nres a little higher, avoids failure on  ANTYPE, REST
+        
+        # TODO:: Ensure no numerical damping is needed, even if only a subset of modes is to be used later
         delta, alpha, alphaf, alpham, tintopt = self.transient_parameters(**kwargs)
 
         if deltat is not None and timesteps is not None:
@@ -2222,7 +2225,8 @@ class Mechanical(object):
         ansys.trnopt(method='FULL', tintopt=tintopt)  # bug: vaout should be tintopt
 
         if chunk_restart:
-            ansys.rescontrol(action='DEFINE', ldstep='LAST', frequency='LAST')  # Controls file writing for multiframe restarts
+            #ansys.run("RESCONTROL, DEFINE, LAST, LAST, -1, , 3") # MAXTotalFiles is not implemented in pyansys rescontrol, let's see, if that stops .ldhi files from growing infinitely
+            ansys.rescontrol(action='DEFINE', ldstep='NONE', frequency='LAST')  # Controls file writing for multiframe restarts
         else:
             ansys.rescontrol(action='DEFINE', ldstep='NONE', frequency='NONE', maxfiles=-1)  # Controls file writing for multiframe restarts
 
@@ -2271,6 +2275,30 @@ class Mechanical(object):
         t_end = t_start
         t_start = time.time()
         logger.debug(f'setup  in {t_start-t_end} s')
+        
+        #if chunk_restart:
+            #out_a = []
+            #out_v = []
+            #out_d = []
+            #out_t = []
+            
+        # pre-allocate arrays to avoid memory errors after all has been computed
+        if "a" in out_quant:
+            all_disp_a = np.zeros((timesteps, len(self.meas_nodes), 3))
+        else:
+            all_disp_a = None
+            
+        if "v" in out_quant:
+            all_disp_v = np.zeros((timesteps, len(self.meas_nodes), 3))
+        else:
+            all_disp_v = None
+            
+        if "d" in out_quant:
+            all_disp_d = np.zeros((timesteps, len(self.meas_nodes), 3))
+        else:
+            all_disp_d = None
+            
+        time_values = np.zeros((timesteps,))
 
         # make sure time series start at t=deltat, a previous solve was done at t=deltat/2, and a constant deltim would shift everything by deltat/2
         # solve for consistent accelerations
@@ -2278,7 +2306,10 @@ class Mechanical(object):
             ansys.time(deltat)
 #             print(deltat)
             ansys.solve()
-
+        
+        pid = os.getpid()
+        truncated_fds = []
+        
         for chunknum in range(timesteps // chunksize + 1):
 
             if (chunknum + 1) * chunksize <= timesteps:
@@ -2316,145 +2347,183 @@ class Mechanical(object):
             ansys.output(fname='null', loc='/dev')
             ansys.solve()
             ansys.output(fname='term')
-            if chunk_restart:
-                shutil.copyfile(os.path.join(ansys.directory, ansys.jobname + '.rst'), os.path.join(ansys.directory, ansys.jobname + f'.rst.{chunknum}'))
-                ansys.get(par='RST_SUBSTEPS', entity='ACTIVE', item1='SOLU', it1num='NCMSS')
-                rst_substeps = int(ansys.parameters['RST_SUBSTEPS'])
-                ansys.finish()
-                # not needed, if we just move the rst file, but ansys throws a warning about a missing rst file
-                if False:
-                    os.remove(os.path.join(ansys.directory, ansys.jobname + '.rst'))
-                else:
-                    ansys.aux3()
-                    ansys.file(ansys.jobname, 'rst')
-                    ansys.delete(set='SET', nstart=1, nend=rst_substeps + 1)
-                    ansys.compress()
-                    ansys.finish()
-                # ansys.set_log_level('DEBUG')
-                # ansys.config(lab='stat')
-                ansys.slashsolu()
-                ansys.antype(status='rest')  # restart last analysis
-                # ansys.set_log_level("INFO")
-
-                # outres is not restored upon restart
-                if True:
-                    ansys.outres(item='ERASE')
-                    ansys.outres(item='ALL', freq='NONE')
-                    if 'd' in out_quant:
-                        ansys.outres(item='NSOL', freq='ALL', cname='MEAS_NODES')
-                    if 'a' in out_quant:
-                        ansys.outres(item='A', freq='ALL', cname='MEAS_NODES')
-                    if 'v' in out_quant:
-                        ansys.outres(item='V', freq='ALL', cname='MEAS_NODES')
-
+            
             t_end = t_start
             t_start = time.time()
-            logger.info(f'{stepsize} timesteps in {t_start-t_end:.3f} s')
+            
+            #if chunk_restart:
+            # TODO:: immediately process rst and delete afterwards to avoid disk out of space errors
+            #shutil.copyfile(os.path.join(ansys.directory, ansys.jobname + '.rst'), os.path.join(ansys.directory, ansys.jobname + f'.rst.{chunknum}'))
+            ind_s = chunknum*chunksize
+            ind_e = ind_s + stepsize
+                    
+            res = pyansys.read_binary(os.path.join(ansys.directory, ansys.jobname + f'.rst'))
 
-#         else:
-#             #TODO: align everything with the above procedure
-#             if timesteps%chunksize:
-#                 chunknum=timesteps//chunksize
-#                 if f is not Nonem:
-#                     table = np.zeros(((timesteps%chunksize)+1,self.num_nodes+1))
-#                     table[1:,0]=np.arange(chunknum*chunksize+1,chunknum*chunksize+timesteps%chunksize+1)*deltat
-#                     table[0,1:]=np.arange(1,self.num_nodes+1)
-#                     table[1:,1:]=f[chunknum*chunksize:chunknum*chunksize+timesteps%chunksize,:]
-#
-#                     np.savetxt(f'{self.jobname}.csv',table)
-#                     with supress_logging(ansys):
-#                         ansys.starset(par='EXCITATION')
-#                     ansys.dim(par='EXCITATION', type='TABLE', imax=timesteps%chunksize, jmax=self.num_nodes, kmax="",var1='TIME',var2='NODE')
-#                     ansys.tread(par='EXCITATION', fname=f'{self.jobname}', ext='csv')
-#
-#                     ansys.f(node='ALL', lab='FZ', value='%EXCITATION%')
-#
-#                 ansys.autots('off')
-#                 #ansys.deltim(dtime=deltat, dtmin=deltat, dtmax=deltat)
-#                 ansys.time((timesteps)*deltat)
-# #
-#                 ansys.solve()
-#                 if chunk_restart:
-#                     os.rename(os.path.join(ansys.directory, ansys.jobname+'.rst'), os.path.join(ansys.directory, ansys.jobname+f'.rst.{chunknum}'))
-#                 t_end=t_start
-#                 t_start = time.time()
-#                 logger.info(f'{timesteps%chunksize} timesteps in {t_start-t_end} s')
+            # sometimes, an additional sample for the last time step is computed, which we have to discard
+            
+            if not len(res.time_values)<=stepsize + 1:
+                raise ValueError(f"Size mismatch in ANSYS results {res.time_values[[0,1,-2,-1]]} should be {table[1:, 0][[0,1,-2,-1]]}")
+            time_values[ind_s:ind_e] = res.time_values[:stepsize]
 
-        ansys.set_log_level("WARNING")
-        ansys.finish()
-
-        #self.last_analysis = 'trans'
-
-        if chunk_restart:
-            out_a = []
-            out_v = []
-            out_d = []
-            out_t = []
-
-            for chunknum in range(timesteps // chunksize + int(bool(timesteps % chunksize))):
-                res = pyansys.read_binary(os.path.join(ansys.directory, ansys.jobname + f'.rst.{chunknum}'))
-                out_t.append(res.time_values)
-
-                solution_data_info = res._solution_header(0)
-                DOFS = solution_data_info['DOFS']
-                ux = DOFS.index(1)
-                uy = DOFS.index(2)
-                uz = DOFS.index(3)
-
-                if 'd' in out_quant:
-                    out_d.append(res.nodal_time_history('NSL')[1])
-                if 'a' in out_quant:
-                    out_a.append(res.nodal_time_history('ACC')[1])
-                if 'v' in out_quant:
-                    out_v.append(res.nodal_time_history('VEL')[1])
-
-            time_values = np.concatenate(out_t)
-
-            if 'a' in out_quant:
-                all_disp_a = np.concatenate(out_a, axis=0)[:, :, (ux, uy, uz)]
-            else:
-                all_disp_a = None
-            if 'v' in out_quant:
-                all_disp_v = np.concatenate(out_v, axis=0)[:, :, (ux, uy, uz)]
-            else:
-                all_disp_v = None
-            if 'd' in out_quant:
-                all_disp_d = np.concatenate(out_d, axis=0)[:, :, (ux, uy, uz)]
-            else:
-                all_disp_d = None
-
-        else:
-#             print("Reading binary")
-            res = pyansys.read_binary(os.path.join(ansys.directory, ansys.jobname + '.rst'))
-
-            time_values = res.time_values
+            #out_t.append(res.time_values)
 
             solution_data_info = res._solution_header(0)
             DOFS = solution_data_info['DOFS']
-            
             ux = DOFS.index(1)
             uy = DOFS.index(2)
             uz = DOFS.index(3)
             
             if 'd' in out_quant:
-                all_disp_d = res.nodal_time_history('NSL')[1][:, :, (ux, uy, uz)]
-            else:
-                all_disp_d = None
+                assert np.sum(all_disp_d[ind_s:ind_e,:,:])==0 # check to make sure, we get indexing right
+                all_disp_d[ind_s:ind_e,:,:] = res.nodal_time_history('NSL')[1][:stepsize, :, (ux, uy, uz)]
+                #out_d.append(res.nodal_time_history('NSL')[1])
             if 'a' in out_quant:
-                all_disp_a = res.nodal_time_history('ACC')[1][:, :, (ux, uy, uz)]
-            else:
-                all_disp_a = None
+                assert np.sum(all_disp_a[ind_s:ind_e,:,:])==0
+                all_disp_a[ind_s:ind_e,:,:] = res.nodal_time_history('ACC')[1][:stepsize, :, (ux, uy, uz)]
+                #out_a.append(res.nodal_time_history('ACC')[1])
             if 'v' in out_quant:
-                all_disp_v = res.nodal_time_history('VEL')[1][:, :, (ux, uy, uz)]
+                assert np.sum(all_disp_v[ind_s:ind_e,:,:])==0
+                all_disp_v[ind_s:ind_e,:,:] = res.nodal_time_history('VEL')[1][:stepsize, :, (ux, uy, uz)]
+                #out_v.append(res.nodal_time_history('VEL')[1])
+            
+            del res
+            
+            ansys.get(par='RST_SUBSTEPS', entity='ACTIVE', item1='SOLU', it1num='NCMSS')
+            rst_substeps = int(ansys.parameters['RST_SUBSTEPS'])
+            ansys.finish()
+            # not needed, if we just move the rst file, but ansys throws a warning about a missing rst file
+            if False:
+                os.remove(os.path.join(ansys.directory, ansys.jobname + '.rst'))
             else:
-                all_disp_v = None
+                ansys.aux3()
+                ansys.file(ansys.jobname, 'rst')
+                ansys.delete(set='SET', nstart=1, nend=rst_substeps + 1)
+                ansys.compress()
+                ansys.finish()
+            
+            # truncate open file references to free up disk space, probably caused somewhere in pyansys.read_binary
+            del_files = os.popen(f'ls -l /proc/{pid}/fd | grep deleted').readlines()
+            truncated=0
+            for fd in del_files:
+                this_fd = f'/proc/{pid}/fd/{fd.split()[8]}'
+                if this_fd in truncated_fds:
+                    continue
+                with open(this_fd,'w'): 
+                    truncated_fds.append(this_fd)
+                    truncated+=1
+            logger.debug(f'Truncated {truncated} orphaned file references.')
+            
+            # ansys.set_log_level('DEBUG')
+            # ansys.config(lab='stat')
+            ansys.slashsolu()
+            ansys.antype(status='rest')  # restart last analysis
+            # ansys.set_log_level("INFO")
+            
+            # delete .rxxx files
+            # for rxxfile in sorted(glob.glob(os.path.join(ansys.directory, ansys.jobname + '.r*[0-9]')))[:-1]:
+            #     os.remove(rxxfile)
+            # time.sleep(0.05)
+            
+            # outres is not restored upon restart
+            if True:
+                ansys.outres(item='ERASE')
+                ansys.outres(item='ALL', freq='NONE')
+                if 'd' in out_quant:
+                    ansys.outres(item='NSOL', freq='ALL', cname='MEAS_NODES')
+                if 'a' in out_quant:
+                    ansys.outres(item='A', freq='ALL', cname='MEAS_NODES')
+                if 'v' in out_quant:
+                    ansys.outres(item='V', freq='ALL', cname='MEAS_NODES')
+            
+            #if chunk_restart:
+                # try to reset RESCONTROL to delete evergrowing ldhi file
+                # that gives wrong res.time_values
+            #    ansys.rescontrol(action='NORESTART') 
+            #    ansys.rescontrol(action='DEFINE', ldstep='LAST', frequency='LAST')  # Controls file writing for multiframe restarts
 
+                
+            
+            
+            freedisk=shutil.disk_usage(ansys.directory).free/(1024**3)
+            while freedisk < 1:
+                logger.warning(f'Disk is almost full {freedisk} GB. Blocking 30 s.')
+                time.sleep(30)
+                freedisk=shutil.disk_usage(ansys.directory).free/(1024**3)
+                
+            logger.info(f'{chunknum * chunksize + chunksize} of {timesteps} timesteps in {t_start-t_end:.3f} s (Remaining ~{(timesteps-chunknum*chunksize)/chunksize * (t_start-t_end):.3f} s; Disk free: {freedisk:.2f} GB)')
+            
+        ansys.set_log_level("WARNING")
+        ansys.finish()
+
+        #self.last_analysis = 'trans'
+
+        # if chunk_restart:                
+        #     try:
+        #         time_values = np.concatenate(out_t)
+        #         if 'a' in out_quant:
+        #             all_disp_a = np.concatenate(out_a, axis=0)[:, :, (ux, uy, uz)]
+        #             del out_a
+        #         else:
+        #             all_disp_a = None
+        #         if 'v' in out_quant:
+        #             all_disp_v = np.concatenate(out_v, axis=0)[:, :, (ux, uy, uz)]
+        #             del out_v
+        #         else:
+        #             all_disp_v = None
+        #         if 'd' in out_quant:
+        #             all_disp_d = np.concatenate(out_d, axis=0)[:, :, (ux, uy, uz)]
+        #             del out_d
+        #         else:
+        #             all_disp_d = None
+        #     except np.core._exceptions._ArrayMemoryError: 
+        #         emergency_dir = kwargs.pop("emergency_dir", None)
+        #         if emergency_dir is not None:
+        #             logger.error("Could not allocate enough memory for concatenation.")
+        #             emergency_dict = {}
+        #             if 'a' in out_quant:
+        #                 emergency_dict.update({f'a_{i:04d}':arr for i, arr in enumerate(all_disp_a)})
+        #             if 'v' in out_quant:
+        #                 emergency_dict.update({f'v_{i:04d}':arr for i, arr in enumerate(all_disp_v)})
+        #             if 'd' in out_quant:
+        #                 emergency_dict.update({f'd_{i:04d}':arr for i, arr in enumerate(all_disp_d)})
+        #             self.save(emergency_dir, emergency_arrays=emergency_dict)
+        #             raise
+        #         else:
+        #             logger.error("Could not allocate enough memory for concatenation. Pass 'emergency_dir' kwarg to enable saving of results.")
+#
+#
+#         else:
+# #             print("Reading binary")
+#             res = pyansys.read_binary(os.path.join(ansys.directory, ansys.jobname + '.rst'))
+#
+#             time_values = res.time_values
+#
+#             solution_data_info = res._solution_header(0)
+#             DOFS = solution_data_info['DOFS']
+#
+#             ux = DOFS.index(1)
+#             uy = DOFS.index(2)
+#             uz = DOFS.index(3)
+#
+#             if 'd' in out_quant:
+#                 all_disp_d = res.nodal_time_history('NSL')[1][:, :, (ux, uy, uz)]
+#             else:
+#                 all_disp_d = None
+#             if 'a' in out_quant:
+#                 all_disp_a = res.nodal_time_history('ACC')[1][:, :, (ux, uy, uz)]
+#             else:
+#                 all_disp_a = None
+#             if 'v' in out_quant:
+#                 all_disp_v = res.nodal_time_history('VEL')[1][:, :, (ux, uy, uz)]
+#             else:
+#                 all_disp_v = None
+#             t_end = t_start
+#             t_start = time.time()
+#             logger.info(f'RST parsing in {t_start-t_end} s')
         if len(time_values) != timesteps:
             warnings.warn(f'The number of response values {len(time_values)} differs from the specified number of timesteps {timesteps} -> Convergence or substep errors.')
 
-        t_end = t_start
-        t_start = time.time()
-        logger.info(f'RST parsing in {t_start-t_end} s')
+       
 
         return time_values, [all_disp_d, all_disp_v, all_disp_a]
 
@@ -2618,7 +2687,7 @@ class Mechanical(object):
         
         return k, m, c
 
-    def save(self, save_dir):
+    def save(self, save_dir, emergency_arrays=None):
         '''
         save under save_dir/{jobname}_mechanical.npz
         
@@ -2632,6 +2701,8 @@ class Mechanical(object):
         if not os.path.isdir(save_dir):
             os.makedirs(save_dir)
         out_dict = {}
+        if emergency_arrays is not None:
+            out_dict.update(emergency_arrays)
         # 0:build_mdof, 1:free_decay, 2:ambient, 3:impulse_response, 4:modal  
         
         out_dict['self.state'] = self.state
@@ -2753,17 +2824,35 @@ class Mechanical(object):
         if state[1]:
             mech.decay_mode = in_dict['self.decay_mode'].item()
             mech.t_vals_decay = in_dict['self.t_vals_decay']
-            mech.resp_hist_decay = in_dict['self.resp_hist_decay']
+            mech.resp_hist_decay = [None, None, None]
+            for i, key in enumerate(['self.resp_hist_decayd',
+                                     'self.resp_hist_decayv',
+                                     'self.resp_hist_decaya']):
+                arr = in_dict[key]
+                if not arr.shape: arr = arr.item()
+                mech.resp_hist_decay[i] = arr
 
         if state[2]:
             mech.inp_hist_amb = in_dict['self.inp_hist_amb']
             mech.t_vals_amb = in_dict['self.t_vals_amb']
-            mech.resp_hist_amb = in_dict['self.resp_hist_amb']
+            mech.resp_hist_amb = [None, None, None]
+            for i, key in enumerate(['self.resp_hist_ambd',
+                                     'self.resp_hist_ambv',
+                                     'self.resp_hist_amba']):
+                arr = in_dict[key]
+                if not arr.shape: arr = arr.item()
+                mech.resp_hist_amb[i] = arr
 
         if state[3]:
             mech.inp_hist_imp = in_dict['self.inp_hist_imp']
             mech.t_vals_imp = in_dict['self.t_vals_imp']
-            mech.resp_hist_imp = in_dict['self.resp_hist_imp']
+            mech.resp_hist_imp = [None, None, None]
+            for i, key in enumerate(['self.resp_hist_impd',
+                                     'self.resp_hist_impv',
+                                     'self.resp_hist_impa']):
+                arr = in_dict[key]
+                if not arr.shape: arr = arr.item()
+                mech.resp_hist_imp[i] = arr
             mech.modal_imp_energies = in_dict['self.modal_imp_energies']
             mech.modal_imp_amplitudes = in_dict['self.modal_imp_amplitudes']
 
