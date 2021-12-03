@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 
 def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
                              num_nodes=101, num_modes=10, damping=0.01, freq_scale=1.0, num_meas_nodes=20, # structural properties
-                             f_scale=1000, dt_fact=0.01, num_cycles=500,  # time integration properties
+                             f_scale=1000, dt_fact=0.01, num_cycles=50,  # time integration properties
                              num_sensors=10, lumped=False, quant='a',  # sensor placement / properties
                              snr_db=-30.0, noise_power=0.0, ref_sig='channel',  # acquisition noise properties
                              nyq_rat=2.5, numtaps_fact=21, # sampling_properties
@@ -30,15 +30,24 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
                              ):
     
         
-
     skip_existing = True
     savefolder = os.path.join(result_dir, jid)
     jid_int = int.from_bytes(bytes(jid, 'utf-8'), 'big')
     
     # load/generate  mechanical object:
     # ambient response of a n dof rod,
-    if not os.path.exists(os.path.join(savefolder, f'{jid}_mechanical.npz')) or not skip_existing:
-        if False:
+    mech = None
+    if os.path.exists(os.path.join(savefolder, f'{jid}_mechanical.npz')) and skip_existing:
+        import zlib, zipfile
+        try:
+            mech = Mechanical.load(jid, savefolder)
+        except (EOFError, KeyError, zlib.error, zipfile.BadZipFile):
+            print(f'File {os.path.join(savefolder, f"{jid}_mechanical.npz")} corrupted. Deleting.')
+            raise
+            os.remove(os.path.join(savefolder, f'{jid}_mechanical.npz'))
+            
+    if mech is None:
+        if title=='uq_acqui':
             mech = Mechanical(ansys=ansys, jobname=jid, wdir=working_dir)
             mech.example_rod(num_nodes=num_nodes, damping=damping, num_modes=num_modes, freq_scale=freq_scale, num_meas_nodes=num_meas_nodes)
             mech.ambient_ifrf(f_scale, None, dt_fact, None, num_cycles, [quant], ['uz'], seed=jid_int)
@@ -48,17 +57,12 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
             mech = Mechanical(ansys=ansys, jobname=jid, wdir=working_dir)
             mech.example_rod(num_nodes=num_nodes, damping=damping, num_modes=num_modes, num_meas_nodes=num_meas_nodes)
             mech.ambient(f_scale, None, dt_fact, None, num_cycles, out_quant=[quant], seed=jid_int)
+            mech.numerical_response_parameters()
             # mech = generate_mdof_time_hist(ansys=ansys, num_nodes=num_nodes, damping=damping,
                                            # num_modes=num_modes, f_scale=f_scale,
                                            # dt_fact=dt_fact, num_cycles=num_cycles)
             mech.save(savefolder)
-    else:
-        try:
-            mech = MechanicalDummy.load(jid, savefolder)
-        except (EOFError, KeyError):
-            print(f'File {os.path.join(savefolder, f"{jid}_mechanical.npz")} corrupted. Deleting.')
-            os.remove(os.path.join(savefolder, f'{jid}_mechanical.npz'))
-            return
+        
         #mech = mechanical.Mechanical.load(jid, savefolder)
     # sig = mech.resp_hist_amb[2]
     # plt.figure()
@@ -90,13 +94,13 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
     
     acqui = Acquire.init_from_mech(mech, channel_defs=channel_defs)
     # sig = acqui.signal
-    # num_channels = acqui.num_channels
     # Fs = 1 / acqui.deltat
+    # num_channels = acqui.num_channels
     # fig, axes = plt.subplots(num_channels, 2, sharex='col', sharey='col', tight_layout=True)
     # axes = axes.T
     # for channel in range(num_channels):
-        # axes[0, channel].plot(acqui.t_vals, sig[channel, :], alpha=.5)
-        # axes[1, channel].psd(sig[channel, :], NFFT=8192, Fs=Fs, alpha=.5)
+    #     axes[0, channel].plot(acqui.t_vals, sig[channel, :], alpha=.5)
+    #     axes[1, channel].psd(sig[channel, :], NFFT=8192, Fs=Fs, alpha=.5)
 
     
     power_signal, power_noise = acqui.add_noise(snr_db=snr_db, noise_power=noise_power, ref_sig=ref_sig, seed=2*jid_int)
@@ -123,17 +127,16 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
     frequencies_a, damping_a, mode_shapes_a = acqui.modal_frequencies, acqui.modal_damping, acqui.mode_shapes
     
     # sig = acqui.signal
-    # Fs = 1 / acqui.deltat
     # for channel in range(num_channels):
-        # axes[0, channel].plot(acqui.t_vals, sig[channel, :], alpha=.5)
-        # node, dof, quantity = acqui.channel_defs[channel]
-        # label = f'{["dsp", "vel", "acc", ][quantity]} {node} {["x", "y", "z"][dof]}'
-        # axes[1, channel].psd(sig[channel, :], NFFT=8192, Fs=Fs, label=label, alpha=.5)
-        # axes[1, channel].legend()
-        # axes[1, channel].set_xlim((0, 150))
-        # for freq in acqui.modal_frequencies:
-            # axes[1, channel].axvline(freq, zorder=-10)
-            #
+    #     axes[0, channel].plot(acqui.t_vals, sig[channel, :], alpha=.5)
+    #     node, dof, quantity = acqui.channel_defs[channel]
+    #     label = f'{["dsp", "vel", "acc", ][quantity]} {node} {["x", "y", "z"][dof]}'
+    #     axes[1, channel].psd(sig[channel, :], NFFT=8192, Fs=Fs, label=label, alpha=.5)
+    #     axes[1, channel].legend()
+    #     axes[1, channel].set_xlim((0, 150))
+    #     for freq in acqui.modal_frequencies:
+    #         axes[1, channel].axvline(freq, zorder=-10)
+    #
     # plt.show()
     # pass to PreProcessingTools
     prep_data = PreprocessData(**acqui.to_prep_data())
@@ -202,8 +205,8 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
     
 def uq_acqui(step, working_dir, result_dir):
     
-    if step == 0 or not os.path.exists(os.path.join(result_dir, 'uq_acqui2.nc')):
-        data_manager = DataManager(title='uq_acqui2', working_dir=working_dir, result_dir=result_dir)
+    if step == 0 or not os.path.exists(os.path.join(result_dir, f'{title}.nc')):
+        data_manager = DataManager(title=title, working_dir=working_dir, result_dir=result_dir)
         
         #num_nodes=101,
         #num_meas_nodes = 100,
@@ -243,7 +246,7 @@ def uq_acqui(step, working_dir, result_dir):
                                                    # ('integers',(2,11)),
                                                     # ],
                                     # num_samples=1000)
-        data_manager.generate_sample_inputs(names=['bits',
+        data_manager.generate_sample_inputs(names=['bits2',
                                                     'nyq_rat',
                                                    'numtaps_fact'],
                                     distributions=[('integers',(8,33)),
@@ -254,15 +257,15 @@ def uq_acqui(step, working_dir, result_dir):
                                                    
         return
     if step == 1:
-        data_manager = DataManager.from_existing(dbfile_in='uq_acqui2.nc', result_dir=result_dir, working_dir=working_dir)
+        data_manager = DataManager.from_existing(dbfile_in=f'{title}.nc', result_dir=result_dir, working_dir=working_dir)
         # data_manager.clear_failed(True)
         data_manager.post_process_samples()
-
+        plt.show()
         return
     if step == 2:
         #ansys = Mechanical.start_ansys()
 
-        data_manager = DataManager.from_existing(dbfile_in='uq_acqui2.nc', result_dir=result_dir, working_dir=working_dir)
+        data_manager = DataManager.from_existing(dbfile_in=f'{title}.nc', result_dir=result_dir, working_dir=working_dir)
         func_kwargs = {'ansys':None, 'num_nodes':101, 'num_meas_nodes': 100,
                        'f_scale':1000, 'dt_fact':0.01, 'quant':'a', 'noise_power':0.0,
                        'ref_sig':'channel', 'sample_dur':None, 'margin':None, 'duration':None,
@@ -274,7 +277,7 @@ def uq_acqui(step, working_dir, result_dir):
                     'num_sensors':'num_sensors',
                     'lumped':'lumped',
                     'snr_db':'snr_db',
-                    'bits':'bits',
+                    'bits':'bits2',
                     'tau_max':'tau_max',
                     'window':'window',
                     'order_factor':'order_factor',
@@ -312,13 +315,13 @@ def uq_acqui(step, working_dir, result_dir):
                                       
                                       )
         #['d6075c96cfb7', 'b5c3a0c90604', 'e2cc12128797', '6251717cb53e','d60c3915887e', '79dc28c2f054', '9e6fd66b51c5']
-
+        os.system('bkill 0 -q BatchXL -u sima9999')
         return
     if step == 3:
         import matplotlib
         from helpers import get_pcd
         pcd = get_pcd()
-        data_manager = DataManager.from_existing(dbfile_in='uq_acqui2.nc', result_dir=result_dir, working_dir=working_dir)
+        data_manager = DataManager.from_existing(dbfile_in=f'{title}.nc', result_dir=result_dir, working_dir=working_dir)
         # data_manager.clear_failed(True)
         
         with matplotlib.rc_context(rc=pcd):
@@ -409,31 +412,63 @@ def uq_acqui(step, working_dir, result_dir):
 
         return
     if step == 4:
-        data_manager = DataManager.from_existing(dbfile_in='uq_acqui2.nc', result_dir=result_dir, working_dir=working_dir)
+        data_manager = DataManager.from_existing(dbfile_in=f'{title}.nc', result_dir=result_dir, working_dir=working_dir)
         data_manager.clear_failed(dryrun=True)
 
 def main():
     
-    working_dir = os.path.join('/run/user', str(os.getuid()), 'work')
+    
+    global title
+    title='uq_acqui2'
+    
+    working_dir = os.path.join('/dev/shm', str(os.getuid()), 'work')
+    
+    
     if os.getlogin()=='womo1998':
         base='/vegas/scratch/womo1998/'
     else:
         base='/usr/scratch4/sima9999/work/'
-    result_dir = os.path.join(base, 'modal_uq/uq_acqui/')
+    result_dir = os.path.join(base, f'modal_uq/{title}/')
     
     if False:        
-        import uuid
-        jid = '6892f3e8f39e'
+        jid = 'test123'
     
-        fun_out = model_acqui_signal_sysid(jid, result_dir, working_dir, window='None', order_factor=2)
+        import logging
+        #logging.getLogger('uncertainty.data_manager').setLevel(logging.DEBUG)
+        logging.getLogger('model.mechanical').setLevel(logging.DEBUG)
+        fun_out = model_acqui_signal_sysid(jid, result_dir, working_dir, num_cycles=5, snr_db=30)
         for a in fun_out:
-            print(a)
-            
+            print(a)    
     else:
-            
+        #pass    
         #import logging
         #logging.getLogger('uncertainty.data_manager').setLevel(logging.DEBUG)
-        uq_acqui(1, working_dir, result_dir)
+        uq_acqui(2, working_dir, result_dir)
+        
+def clear_wdirs():
+    wdir = os.path.join('/dev/shm', str(os.getuid()), 'work')
+
+    import ray
+    if not ray.is_initialized():
+        ray.init(address='auto', _redis_password='5241590000000000')
+    @ray.remote
+    def clear(wdir):
+        import shutil
+        import time
+        time.sleep(np.random.randint(0,6))
+        if os.path.exists(wdir):
+            shutil.rmtree(wdir)
+            print(f"Cleared {wdir} on {os.uname()[1]}. still exists? {os.path.exists(wdir)}")
+        else:
+            print(f"{wdir} on {os.uname()[1]} does not exist")
+        
+        time.sleep(30)
+    futures = []
+    for i in range(60):
+        worker_ref = clear.remote(wdir)
+        futures.append(worker_ref)
+    ray.wait(futures)
     
 if __name__ == '__main__':
+    #clear_wdirs()
     main()

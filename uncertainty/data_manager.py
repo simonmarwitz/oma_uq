@@ -384,7 +384,11 @@ class DataManager(object):
 
         '''
         if not dry_run and not ray.is_initialized():
-            ray.init(address='auto', _redis_password='5241590000000000')
+            if os.path.exists(os.path.expanduser('~/ipaddress.txt')):
+                address = open(os.path.expanduser('~/ipaddress.txt'),'rt').read().splitlines()[0]+':6379'
+            else:
+                address = 'auto'
+            ray.init(address=address, _redis_password='5241590000000000')
         '''
         Ray fails with import error .. static TLS
         this can be reconstructed by
@@ -412,7 +416,9 @@ class DataManager(object):
 
                 if not os.path.exists(result_dir):
                     os.makedirs(result_dir, exist_ok=True)
-
+                    
+                working_dir = os.path.join(f'/usr/tmp/{os.environ["LSB_JOBID"]}.tmpdir', jid)
+                
                 if working_dir is not None:
                     cwd = os.getcwd()
                     if not os.path.exists(working_dir):
@@ -423,15 +429,24 @@ class DataManager(object):
                 # save results in filesystem -> should be done in func, also
                 # with a shortcut in func to return, what has been done
                 # previously
+                error = False
                 try:
                     ret_vals = func(jid=jid, result_dir=result_dir,
                                     working_dir=working_dir, **fun_kwargs, **kwargs)
                     if not isinstance(ret_vals, tuple):
                         raise RuntimeError('The evaluation function must return a tuple.')
                 except Exception as e:
-                    logger.warning(f'function failed with exit message {e}')
+                    logger.warning(f'sample {jid} failed')
                     traceback.print_exc()
                     ret_vals = repr(e)
+                    error = True
+                    if working_dir is not None:
+                        err_file = os.path.join(working_dir, jid + '.err')
+                        dst = os.path.join(result_dir, jid + '.err')
+                        if os.path.exists(err_file):
+                            if os.path.exists(dst):
+                                os.remove(dst)
+                            shutil.move(err_file, dst)
                 finally:
                     if working_dir is not None:
                         os.chdir(cwd)
@@ -442,32 +457,56 @@ class DataManager(object):
                         else:
                             logger.warning(
                                 f"Cannot remove working_dir {working_dir} (contains subdirectories)")
-
-                    runtime = time.time() - now
-
+                        
+                        base_dir,_ = os.path.split(working_dir)
+                        freedisk=shutil.disk_usage(base_dir).free/(1024**3)
+                        nblock = 0
+                        while freedisk < 1 and nblock < 30: # other mysterious errors are caused by a full RAM disk (which we use as a working dir)
+                            logger.warning(f'Working dir disk is almost full: {freedisk} GB free. Blocking for 30 s.')
+                            time.sleep(30)
+                            freedisk=shutil.disk_usage(base_dir).free/(1024**3)
+                            nblock+=1
+                            
+                    if error:
+                        free = int(os.popen('free -t -g').readlines()[-1].split()[-1])
+                        nblock = 0
+                        while free < 2 and nblock < 30: # the cause of mysterious RuntimeError("") is OutOfMemory, when pexpect fails to startup ANSYS properly
+                            logger.warning(f"System memory low: {free} GB. Blocking further execution for 30 s.")
+                            time.sleep(30)
+                            free = int(os.popen('free -t -g').readlines()[-1].split()[-1])
+                            nblock+=1
+                    
+                    runtime = time.time() - now        
                     logger.info(
                         f'done computing sample {jid}. Runtime was {runtime} s')
-
+                    
                 return jid, ret_vals, runtime
             
         def save_samples(ret_sets, ret_names, num_samples, default_len):
             with self.get_database(database='out', rw=True) as out_ds:
+                
+                if not ret_sets:
+                    return
                 
                 for jid, ret_vals, runtime in ret_sets:  # first may have thrown an exception, then len() fails
                     if isinstance(ret_vals, (list, tuple)):
                         num_variables = len(ret_vals)
                         break
                 else:
-                    raise RuntimeError(f"All ret_sets are empty {ret_sets}")
+                    logger.warning(f"All ret_sets are empty {ret_sets}")
+                    #return
 
                 for jid, ret_vals, runtime in ret_sets:
 
+                    if '_exceptions' not in out_ds.data_vars:
+                        out_ds['_exceptions'] = (['ids'], np.full(
+                            shape=(num_samples,), fill_value=''))
                     if isinstance(ret_vals, str):  # exception repr
-                        if '_exceptions' not in out_ds.data_vars:
-                            out_ds['_exceptions'] = (['ids'], np.full(
-                                shape=(num_samples,), fill_value=''))
                         out_ds['_exceptions'][out_ds.ids == jid] = ret_vals
                         continue
+                    else:
+                        # reset previous exceptions
+                        out_ds['_exceptions'][out_ds.ids == jid] = ''
 
                     assert len(ret_names) == len(ret_vals)
 
@@ -528,8 +567,10 @@ class DataManager(object):
             for jid_ind in sorted(range(in_ds.ids.size),
                                   key=lambda _: np.random.random()):
 
-                if (not out_ds['_runtimes'][jid_ind].isnull()
-                        ) and re_eval_sample is None:
+                if (not out_ds['_runtimes'][jid_ind].isnull()) \
+                    and re_eval_sample is None \
+                    and out_ds['_exceptions'][jid_ind].data.item()=='':
+                    
                     continue
 
                 jid = in_ds['ids'][jid_ind].copy().item()
@@ -539,7 +580,7 @@ class DataManager(object):
                     fun_kwargs[arg] = in_ds[var][jid_ind].copy().item()
 
                 if chwdir:
-                    working_dir = self.working_dir + jid
+                    working_dir = os.path.join(self.working_dir, jid)
                 else:
                     working_dir = None
 
@@ -555,21 +596,23 @@ class DataManager(object):
                         func, jid, fun_kwargs, working_dir=working_dir, **kwargs)
                     
                     futures.append(worker_ref)
+        
+        futures = set(futures)
+        logger.info(f'{len(futures)} jobs have been submitted for evaluation.')
 
         if dry_run:
             return
 
-        futures = set(futures)
-        
         while True:
             ready, wait = ray.wait(
-                list(futures), num_returns=min(len(futures), 25))
-
-            ret_sets = ray.get(ready)
-
-            if not ret_sets:
-                logger.info("All jobs already computed!")
-                break
+                list(futures), num_returns=min(len(futures), 10), timeout=300)
+            try:
+                ret_sets = ray.get(ready)
+            except ray.exceptions.RayTaskError as e:
+                traceback.print_exc()
+                logger.warning(repr(e))
+                ret_sets = []
+                
             
             save_samples(ret_sets, ret_names, num_samples, default_len)
 
@@ -898,7 +941,7 @@ class DataManager(object):
             if '_exceptions' in ds.data_vars:
                 ind = ds._exceptions=='' # no exception
                 ds = ds.isel(ids=ind)    
-                              
+            print(f"number of samples {len(ds.ids)}")
             if names is None:
                 names = [name for name in ds.data_vars]
             
@@ -956,7 +999,8 @@ class DataManager(object):
             numvars = len(names)
             
             # TODO: might have to remove empty coordinates before
-            df = ds.reset_coords(['ids_','modes'])[names].to_dataframe()
+            #df = ds.reset_coords(['ids_','modes'])[names].to_dataframe()
+            df = ds[names].to_dataframe()
             #print(ds)
             
             
