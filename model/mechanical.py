@@ -4543,12 +4543,12 @@ def generate_mdof_time_hist(ansys, num_nodes=None, damping=None, nl_stiff=None, 
         meas_nodes = mech.meas_nodes
 
         if False:
-            from core import PreprocessingTools
+            from core import PreProcessingTools
             from core import PlotMSH
 
             mech.export_geometry(f'/dev/shm/womo1998/{jid}/')
-            geometry = PreprocessingTools.GeometryProcessor.load_geometry(f'/dev/shm/womo1998/{jid}/grid.txt', f'/dev/shm/womo1998/{jid}/lines.txt')
-            prep_data = PreprocessingTools.PreprocessData(resp_hist, 1 / (t_vals[1] - t_vals[0]))
+            geometry = PreProcessingTools.GeometryProcessor.load_geometry(f'/dev/shm/womo1998/{jid}/grid.txt', f'/dev/shm/womo1998/{jid}/lines.txt')
+            prep_data = PreProcessingTools.PreProcessSignals(resp_hist, 1 / (t_vals[1] - t_vals[0]))
             chan_dofs = prep_data.load_chan_dofs(f'/dev/shm/womo1998/{jid}/chan_dofs.txt')
             prep_data.add_chan_dofs(chan_dofs)
 
@@ -4703,8 +4703,8 @@ def generate_mdof_time_hist(ansys, num_nodes=None, damping=None, nl_stiff=None, 
         jid = ansys.jobname
 
         mech.export_geometry(f'/dev/shm/womo1998/{jid}/')
-        from core import PreprocessingTools
-        geometry = PreprocessingTools.GeometryProcessor.load_geometry(f'/dev/shm/womo1998/{jid}/grid.txt', f'/dev/shm/womo1998/{jid}/lines.txt')
+        from core import PreProcessingTools
+        geometry = PreProcessingTools.GeometryProcessor.load_geometry(f'/dev/shm/womo1998/{jid}/grid.txt', f'/dev/shm/womo1998/{jid}/lines.txt')
 
         if out_quant[0] == 'd':
             disp_channels = list(range(num_meas_nodes))
@@ -4724,7 +4724,7 @@ def generate_mdof_time_hist(ansys, num_nodes=None, damping=None, nl_stiff=None, 
 
         print(accel_channels, velo_channels, disp_channels, ref_channels,)
 
-        prep_data = PreprocessingTools.PreprocessData(dummy_meas, 1 / deltat, ref_channels=ref_channels,
+        prep_data = PreProcessingTools.PreProcessSignals(dummy_meas, 1 / deltat, ref_channels=ref_channels,
                                                       accel_channels=accel_channels,
                                                       velo_channels=velo_channels,
                                                       disp_channels=disp_channels,
@@ -5237,7 +5237,7 @@ def IRF_to_ssi(ansys=None, jid=None, **kwargs):
 
     from core.SSICovRef import BRSSICovRef
 
-    from core.PreprocessingTools import PreprocessData, GeometryProcessor
+    from core.PreProcessingTools import PreProcessSignals, GeometryProcessor
 
     # Modal Analysis PostProcessing Class e.g. Stabilization Diagram
     from core.StabilDiagram import StabilCalc, StabilPlot
@@ -5273,7 +5273,7 @@ def IRF_to_ssi(ansys=None, jid=None, **kwargs):
         jid = ansys.jobname
 
         mech.export_geometry(f'/dev/shm/womo1998/{jid}/')
-        import PreprocessingTools
+        import PreProcessingTools
 
         if out_quant[0] == 'd':
             disp_channels = list(range(num_meas_nodes))
@@ -5291,7 +5291,7 @@ def IRF_to_ssi(ansys=None, jid=None, **kwargs):
         ref_channels = [i for i, node in enumerate(meas_nodes) if node in ref_nodes]
         dummy_meas = np.zeros((timesteps, num_meas_nodes))
 
-        prep_data = PreprocessingTools.PreprocessData(dummy_meas, 1 / deltat, ref_channels=ref_channels,
+        prep_data = PreProcessingTools.PreProcessSignals(dummy_meas, 1 / deltat, ref_channels=ref_channels,
                                                       accel_channels=accel_channels,
                                                       velo_channels=velo_channels,
                                                       disp_channels=disp_channels,
@@ -5307,7 +5307,7 @@ def IRF_to_ssi(ansys=None, jid=None, **kwargs):
     # creating the geometry for plotting the identified modeshapes
     geometry_data = GeometryProcessor.load_geometry(f'/dev/shm/womo1998/{jid}/grid.txt', f'/dev/shm/womo1998/{jid}/lines.txt')
 
-    prep_data = PreprocessData.load_state(f'/dev/shm/womo1998/{jid}/prep_data.npz')
+    prep_data = PreProcessSignals.load_state(f'/dev/shm/womo1998/{jid}/prep_data.npz')
 
     arrs = np.load(f'/dev/shm/womo1998/{jid}/IRF_data.npz')
     t_vals = arrs['t_vals']
@@ -5321,8 +5321,8 @@ def IRF_to_ssi(ansys=None, jid=None, **kwargs):
 
     print(frequencies, damping, modeshapes)
 
-    tau_max = IRF_matrix.shape[2]
-    prep_data.tau_max = tau_max
+    n_lags = IRF_matrix.shape[2]
+    prep_data.n_lags = n_lags
     prep_data.corr_matrix = IRF_matrix
     prep_data.corr_matrices = [IRF_matrix]
 

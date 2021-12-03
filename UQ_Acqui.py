@@ -2,7 +2,7 @@ from uncertainty.data_manager import DataManager, HiddenPrints
 from model.mechanical import Mechanical, MechanicalDummy
 from model.acquisition import Acquire
 
-from core.PreprocessingTools import PreprocessData
+from core.PreProcessingTools import PreProcessSignals
 from core.SSICovRef import BRSSICovRef
 
 import os
@@ -14,10 +14,6 @@ import matplotlib.pyplot as plt
 
 #import ray
 
-
-
-
-
 def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
                              num_nodes=101, num_modes=10, damping=0.01, freq_scale=1.0, num_meas_nodes=20, # structural properties
                              f_scale=1000, dt_fact=0.01, num_cycles=500,  # time integration properties
@@ -25,7 +21,7 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
                              snr_db=-30.0, noise_power=0.0, ref_sig='channel',  # acquisition noise properties
                              nyq_rat=2.5, numtaps_fact=21, # sampling_properties
                              sample_dur=None, margin=None, bits=16, duration=None,  # quantization properties
-                             decimate_factor=None, tau_max=100, window='None',  # signal processing parameters
+                             decimate_factor=None, n_lags=100, window='None',  # signal processing parameters
                              order_factor=2,  # system identification parameters
                              ):
     
@@ -38,7 +34,7 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
     # load/generate  mechanical object:
     # ambient response of a n dof rod,
     if not os.path.exists(os.path.join(savefolder, f'{jid}_mechanical.npz')) or not skip_existing:
-        if False:
+        if True:
             mech = Mechanical(ansys=ansys, jobname=jid, wdir=working_dir)
             mech.example_rod(num_nodes=num_nodes, damping=damping, num_modes=num_modes, freq_scale=freq_scale, num_meas_nodes=num_meas_nodes)
             mech.ambient_ifrf(f_scale, None, dt_fact, None, num_cycles, [quant], ['uz'], seed=jid_int)
@@ -136,21 +132,26 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
             #
     # plt.show()
     # pass to PreProcessingTools
-    prep_data = PreprocessData(**acqui.to_prep_data())
+    prep_data = PreProcessSignals(**acqui.to_prep_data())
+    prep_data.save_state('/vegas/users/staff/womo1998/git/pyOMA/tests/files/prepsignals.npz')
+    print(frequencies_a, damping_a, mode_shapes_a)
+    print(snr_alias, snr_quant,snr_db_out)
+    asdfasdw
     #prep_data.plot_data(svd_spect=True)
     if decimate_factor is not None:  # implying signal shall be decimated
-        prep_data.decimate_data(decimate_factor, highpass=None, order=int(21 * decimate_factor), filter_type='brickwall')
+        prep_data.decimate_signals(decimate_factor, highpass=None, order=int(21 * decimate_factor), filter_type='brickwall')
     if window!='None':  # implying welch's method to be used
-        prep_data.corr_welch(tau_max, window)
+        prep_data.corr_welch(n_lags, window)
     else:
         with HiddenPrints():
-            prep_data.compute_correlation_matrices(tau_max)
+            prep_data.compute_correlation_matrices(n_lags)
+    
     #prep_data.plot_data(svd_spect=True)
     #plt.show()
     # pass to Modal System Identification
     model_order = num_modes * order_factor
     modal_data = BRSSICovRef(prep_data)
-    modal_data.build_toeplitz_cov(num_block_columns=tau_max // 2)
+    modal_data.build_toeplitz_cov(num_block_columns=n_lags // 2)
     modal_data.compute_state_matrices(max_model_order=model_order)
     modal_frequencies, modal_damping, mode_shapes, _, modal_contributions = modal_data.single_order_modal(order=model_order)
     
@@ -225,7 +226,7 @@ def uq_acqui(step, working_dir, result_dir):
         #                                            'lumped',
         #                                            'snr_db',
         #                                            'bits',
-        #                                            'tau_max'],
+        #                                            'n_lags'],
         #                             distributions=[('integers', (2, 21)),
         #                                            ('uniform', (0.01, 0.1)),
         #                                            ('uniform', (0.5, 2)),
@@ -275,7 +276,7 @@ def uq_acqui(step, working_dir, result_dir):
                     'lumped':'lumped',
                     'snr_db':'snr_db',
                     'bits':'bits',
-                    'tau_max':'tau_max',
+                    'n_lags':'n_lags',
                     'window':'window',
                     'order_factor':'order_factor',
                     'nyq_rat':'nyq_rat',
@@ -318,12 +319,12 @@ def uq_acqui(step, working_dir, result_dir):
         import matplotlib
         from helpers import get_pcd
         pcd = get_pcd()
-        data_manager = DataManager.from_existing(dbfile_in='uq_acqui2.nc', result_dir=result_dir, working_dir=working_dir)
+        data_manager = DataManager.from_existing(dbfile_in='uq_acqui.nc', result_dir=result_dir, working_dir=working_dir)
         # data_manager.clear_failed(True)
         
         with matplotlib.rc_context(rc=pcd):
             # influences of signal acquistion (quantization and sampling)
-            if False:
+            if True:
                 # with data_manager.get_database('processed', rw=True) as ds:
                     # ds['bits_eff']=(np.log(ds.margin*(2**ds.bits))/np.log(2)).mean('channels')
                 names = ['snr_db','bits','bits_eff', 'this_snr_quant','this_snr_db_out'] # effective bits = log(margin / 2**bits)/log(2)
@@ -333,14 +334,14 @@ def uq_acqui(step, working_dir, result_dir):
                 #fig.subplots_adjust(bottom=0.07, left=0.1)
                 fig.savefig('/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_KolloquiumVolkmar/figures/uq_quant.pdf', dpi=300)
             
-            if False:
+            if True:
                 names = ['snr_db', 'numtaps_fact', 'nyq_rat','sim_steps', 'dec_rate', 'this_snr_alias', 'this_snr_db_out'] # numtaps_fact = numtaps/dec_fact, nyq_rat=fs/cutoff, <- constant
                 labels = ['SNR\\textsubscript{dB}', '$\\sfrac{M}{d}$', '$\\sfrac{f_c}{f_s}$', '$N$', '$d$', 'SNR\\textsubscript{dB, alias}', 'SNR\\textsubscript{dB, tot}']
                 fig = data_manager.post_process_samples(names=names, db='processed', labels=labels, figsize=(5.92, 5.92))
                 fig.subplots_adjust(bottom=0.07, left=0.07)
                 fig.savefig('/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_KolloquiumVolkmar/figures/uq_samp.pdf', dpi=300)
             
-            if False:
+            if True:
                 names = ['this_snr_db_out','freq_diff','damp_diff','modal_assurance','unp_id','unp_num']
                 labels = ['SNR\\textsubscript{dB, tot}','$\\Delta_f$','$\\Delta_{\\zeta}$','MAC','$m_\\text{additional}$','$m_\\text{missing}$']
                 fig = data_manager.post_process_samples(names=names, db='processed', labels = labels, figsize=(5.92, 5.92))
@@ -349,7 +350,7 @@ def uq_acqui(step, working_dir, result_dir):
             
             
             # influences of sensors
-            if False:
+            if True:
                 names = ['num_sensors', 'lumped', 'freq_diff','damp_diff','modal_assurance','unp_id','unp_num'] # quant
                 labels=[ '$n_\\text{sensors}$','placement','$\\Delta_f$','$\\Delta_{\\zeta}$','MAC','$m_\\text{additional}$','$m_\\text{missing}$']
                 fig = data_manager.post_process_samples(names=names, db='processed', labels=labels, figsize=(5.92, 5.92))
@@ -371,8 +372,8 @@ def uq_acqui(step, working_dir, result_dir):
             
             
             # influences of signal processing and system identification
-            if False:
-                names = ['all_n_cycl','window','tau_max','order_factor','freq_diff','damp_diff','modal_assurance','unp_id','unp_num']
+            if True:
+                names = ['all_n_cycl','window','n_lags','order_factor','freq_diff','damp_diff','modal_assurance','unp_id','unp_num']
                 labels=[ '$n_\\text{cycles}$','spectral \\\\ estimator','$\\tau_\\text{max}$','model order \\\\ overrate','$\\Delta_f$','$\\Delta_{\\zeta}$','MAC','$m_\\text{additional}$','$m_\\text{missing}$']
                 fig = data_manager.post_process_samples(names=names, db='processed',labels=labels, figsize=(5.92, 5.92))
                 axes = fig.axes
@@ -421,11 +422,11 @@ def main():
         base='/usr/scratch4/sima9999/work/'
     result_dir = os.path.join(base, 'modal_uq/uq_acqui/')
     
-    if False:        
+    if True:
         import uuid
-        jid = '6892f3e8f39e'
+        jid = '8db9e569abe9'
     
-        fun_out = model_acqui_signal_sysid(jid, result_dir, working_dir, window='None', order_factor=2)
+        fun_out = model_acqui_signal_sysid(jid, result_dir, working_dir, window='None', order_factor=2, snr_db=6)
         for a in fun_out:
             print(a)
             
@@ -433,7 +434,7 @@ def main():
             
         #import logging
         #logging.getLogger('uncertainty.data_manager').setLevel(logging.DEBUG)
-        uq_acqui(1, working_dir, result_dir)
+        uq_acqui(3, working_dir, result_dir)
     
 if __name__ == '__main__':
     main()

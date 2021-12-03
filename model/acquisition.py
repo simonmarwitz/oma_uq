@@ -517,7 +517,7 @@ class Acquire(object):
         
         return max_amp * margin
     
-    def sample(self, fs=None, numtaps=21, cutoff=None, 
+    def sample(self, fs=None, numtaps=21, cutoff=None,
                bits=16, meas_range=None,
                duration=None):
         '''
@@ -864,9 +864,8 @@ class Acquire(object):
             accel_channels = None
             channel_headers = None
             
-        kwargs = {'measurement': signal.T,
+        kwargs = {'signals': signal.T,
                   'sampling_rate': fs,
-                  'total_time_steps': total_time_steps,
                   'accel_channels': accel_channels,
                   'velo_channels': velo_channels,
                   'disp_channels': disp_channels,
@@ -1267,7 +1266,7 @@ def filter_example():
     acqui.sample(*acqui.sample_helper(f_max=102.4))
     
     # pass to PreProcessingTools and create filter example with it
-    from core import PreprocessingTools
+    from core import PreProcessingTools
     figt, axest = plt.subplots(2, 2, sharex=True, sharey=True)
     axest = axest.flat
     figf, axesf = plt.subplots(2, 2, sharex=True, sharey=True)
@@ -1281,17 +1280,17 @@ def filter_example():
                                             ('cheby1', 6, 58.19, axest[3], axesf[3])
                                             ]:
         
-        prep_data = PreprocessingTools.PreprocessData(**acqui.to_prep_data())
+        prep_data = PreProcessingTools.PreProcessSignals(**acqui.to_prep_data())
         
         # use analytical example data
-        #prep_data = PreprocessingTools.PreprocessData(sig, fs)
+        #prep_data = PreProcessingTools.PreProcessSignals(sig, fs)
         
         channel = 18
-        prep_data.plot_data(channels=channel, NFFT=prep_data.total_time_steps // 8, axest=[ax1], axesf=[ax2], window='hamm', color='dimgrey', alpha=1)
+        prep_data.plot_signals(channels=channel, NFFT=prep_data.total_time_steps // 8, axest=[ax1], axesf=[ax2], window='hamm', color='dimgrey', alpha=1)
         
         axins = inset_axes(ax1, width='30%', height='18.5%', loc=2, axes_class=AxesZero, borderpad=.75)
-        prep_data.filter_data(ftype=filt, order=order, lowpass=cutoff, overwrite=True, plot_ax=[axins, ax2])
-        prep_data.plot_data(channels=channel, NFFT=prep_data.total_time_steps // 8, axest=[ax1], axesf=[ax2], window='hamm', color='black', alpha=1)
+        prep_data.filter_signals(ftype=filt, order=order, lowpass=cutoff, overwrite=True, plot_ax=[axins, ax2])
+        prep_data.plot_signals(channels=channel, NFFT=prep_data.total_time_steps // 8, axest=[ax1], axesf=[ax2], window='hamm', color='black', alpha=1)
         
         ax1.annotate(label_dict[filt], (0.05, 0.05), xycoords='axes fraction', backgroundcolor='#ffffff80')
         ax2.annotate(label_dict[filt], (0.05, 0.05), xycoords='axes fraction', backgroundcolor='#ffffff80')
@@ -1373,11 +1372,11 @@ def filter_example():
     # decimate and estimate decimation noise / quantization noise
     acqui.sample(f_max, fs_factor)
     
-    prep_data = PreprocessingTools.PreprocessData(**acqui.to_preprocessdata())
+    prep_data = PreProcessingTools.PreProcessSignals(**acqui.to_preprocessdata())
     
     nodes, lines, chan_dofs = mech.get_geometry()
     
-    geometry = PreprocessingTools.GeometryProcessor(nodes, lines)
+    geometry = PreProcessingTools.GeometryProcessor(nodes, lines)
         
     
     # 

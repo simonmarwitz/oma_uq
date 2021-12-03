@@ -6,7 +6,7 @@ import logging
 from model.mechanical import generate_mdof_time_hist, start_ansys
 from model.acquisition import Acquire
 from core.SSICovRef import BRSSICovRef
-from core.PreprocessingTools import PreprocessData, GeometryProcessor
+from core.PreProcessingTools import PreProcessSignals, GeometryProcessor
 
 matplotlib.use('qt5Agg')
 logging.basicConfig(level=logging.INFO)
@@ -88,7 +88,7 @@ def model_error_ERA_SSI(jid, result_dir, working_dir,
                         ) 
         
     3. System Identification / Modal Analysis [ERA, SSI] 
-            parameters ([tau_max==timesteps], 
+            parameters ([n_lags==timesteps], 
                          model order # ideally computed from a ratio of num_modes beforehand >=2*num_modes
                         )
     
@@ -150,7 +150,7 @@ def model_error_ERA_SSI(jid, result_dir, working_dir,
         imp_durs = np.ones((num_ref_nodes,)) * timesteps * deltat
         
         t_vals, IRF_matrix, F_matrix, ener_mat, amp_mat = mech.impulse_response([ref_nodes, imp_forces, imp_times, imp_durs], form='step', mode='matrix', deltat=deltat, dt_fact=dt_fact, timesteps=timesteps, num_cycles=num_cycles, out_quant=out_quant, **kwargs)
-        tau_max = timesteps
+        n_lags = timesteps
         frequencies_comp, damping_comp, modeshapes_comp = mech.numerical_response_parameters()
         meas_nodes = mech.meas_nodes
         
@@ -163,7 +163,7 @@ def model_error_ERA_SSI(jid, result_dir, working_dir,
                     'F_matrix': F_matrix,
                     'ener_mat': ener_mat,
                     'amp_mat': amp_mat,
-                    'tau_max': tau_max,
+                    'n_lags': n_lags,
                     'frequencies_comp': frequencies_comp,
                     'damping_comp': damping_comp,
                     'modeshapes_comp': modeshapes_comp,
@@ -180,7 +180,7 @@ def model_error_ERA_SSI(jid, result_dir, working_dir,
         F_matrix = arr['F_matrix']
         ener_mat = arr['ener_mat']
         amp_mat = arr['amp_mat']
-        tau_max = arr['tau_max']
+        n_lags = arr['n_lags']
         frequencies_comp = arr['frequencies_comp']
         damping_comp = arr['damping_comp']
         modeshapes_comp = arr['modeshapes_comp']
@@ -216,20 +216,20 @@ def model_error_ERA_SSI(jid, result_dir, working_dir,
     ref_channels = [i for i, node in enumerate(meas_nodes) if node in ref_nodes]
     dummy_meas = np.zeros((timesteps, num_meas_nodes))
 
-    prep_data = PreprocessData(dummy_meas, 1 / deltat, ref_channels=ref_channels,
+    prep_data = PreProcessSignals(dummy_meas, 1 / deltat, ref_channels=ref_channels,
                                                   accel_channels=accel_channels,
                                                   velo_channels=velo_channels,
                                                   disp_channels=disp_channels,
                                                   channel_headers=channel_headers)
     chan_dofs = prep_data.load_chan_dofs(f'{result_dir}/chan_dofs.txt')
     prep_data.add_chan_dofs(chan_dofs)
-    prep_data.tau_max = tau_max
+    prep_data.n_lags = n_lags
     prep_data.corr_matrix = IRF_matrix
     prep_data.corr_matrices = [IRF_matrix]
     prep_data.save_state(f'{result_dir}/prep_data.npz')
     
     modal_data = BRSSICovRef(prep_data)
-    num_block_columns=tau_max//2
+    num_block_columns=n_lags//2
     modal_data.build_toeplitz_cov(num_block_columns)
     modal_data.compute_state_matrices(model_order)
 
