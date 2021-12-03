@@ -403,7 +403,7 @@ class DataManager(object):
         also happens, when matplotlib is being loaded because it wants to load pyqt
         does not happen on a fresh python 3.9 install
         '''
-        @ray.remote
+        # @ray.remote
         def setup_eval(func, jid, fun_kwargs,
                        result_dir=self.result_dir, working_dir=None, **kwargs):
 
@@ -417,7 +417,10 @@ class DataManager(object):
                 if not os.path.exists(result_dir):
                     os.makedirs(result_dir, exist_ok=True)
                     
-                working_dir = os.path.join(f'/usr/tmp/{os.environ["LSB_JOBID"]}.tmpdir', jid)
+                try: #  to get LSF temporary working directory
+                    working_dir = os.path.join(f'/usr/tmp/{os.environ["LSB_JOBID"]}.tmpdir', jid)
+                except KeyError:
+                    working_dir = os.path.join('/dev/shm/womo1998/', jid)
                 
                 if working_dir is not None:
                     cwd = os.getcwd()

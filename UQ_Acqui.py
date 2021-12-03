@@ -2,7 +2,7 @@ from uncertainty.data_manager import DataManager, HiddenPrints
 from model.mechanical import Mechanical, MechanicalDummy
 from model.acquisition import Acquire
 
-from core.PreprocessingTools import PreprocessData
+from core.PreProcessingTools import PreProcessSignals
 from core.SSICovRef import BRSSICovRef
 
 import os
@@ -17,7 +17,6 @@ import matplotlib.pyplot as plt
 
 
 
-
 def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
                              num_nodes=101, num_modes=10, damping=0.01, freq_scale=1.0, num_meas_nodes=20, # structural properties
                              f_scale=1000, dt_fact=0.01, num_cycles=50,  # time integration properties
@@ -25,7 +24,7 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
                              snr_db=-30.0, noise_power=0.0, ref_sig='channel',  # acquisition noise properties
                              nyq_rat=2.5, numtaps_fact=21, # sampling_properties
                              sample_dur=None, margin=None, bits=16, duration=None,  # quantization properties
-                             decimate_factor=None, tau_max=100, window='None',  # signal processing parameters
+                             decimate_factor=None, n_lags=100, window=6, method='welch', # signal processing parameters
                              order_factor=2,  # system identification parameters
                              ):
     
@@ -47,6 +46,7 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
             os.remove(os.path.join(savefolder, f'{jid}_mechanical.npz'))
             
     if mech is None:
+        raise RuntimeError()
         if title=='uq_acqui':
             mech = Mechanical(ansys=ansys, jobname=jid, wdir=working_dir)
             mech.example_rod(num_nodes=num_nodes, damping=damping, num_modes=num_modes, freq_scale=freq_scale, num_meas_nodes=num_meas_nodes)
@@ -105,7 +105,7 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
     
     power_signal, power_noise = acqui.add_noise(snr_db=snr_db, noise_power=noise_power, ref_sig=ref_sig, seed=2*jid_int)
     '''
-    for sampling it is of primary interest, much noise results from sample-and-hold process
+    for sampling it is of primary interest, how much noise results from sample-and-hold process
     that means, how much noise results from inproper anti-aliasing -> snr_alias
     in physical sampling this is influenced by the order of the anti-aliasing filter 
     (i.e. the signal power above the cutoff) and the cutoff-to-nyquist-rate
@@ -139,21 +139,18 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
     #
     # plt.show()
     # pass to PreProcessingTools
-    prep_data = PreprocessData(**acqui.to_prep_data())
-    #prep_data.plot_data(svd_spect=True)
+    prep_signals = PreProcessSignals(**acqui.to_prep_data())
+    #prep_signals.plot_data(svd_spect=True)
     if decimate_factor is not None:  # implying signal shall be decimated
-        prep_data.decimate_data(decimate_factor, highpass=None, order=int(21 * decimate_factor), filter_type='brickwall')
-    if window!='None':  # implying welch's method to be used
-        prep_data.corr_welch(tau_max, window)
-    else:
-        with HiddenPrints():
-            prep_data.compute_correlation_matrices(tau_max)
-    #prep_data.plot_data(svd_spect=True)
+        prep_signals.decimate_signals(decimate_factor, highpass=None, order=int(21 * decimate_factor), filter_type='brickwall')
+    with HiddenPrints():
+        prep_signals.correlation(n_lags, method, window=window)
+    #prep_signals.plot_data(svd_spect=True)
     #plt.show()
     # pass to Modal System Identification
     model_order = num_modes * order_factor
-    modal_data = BRSSICovRef(prep_data)
-    modal_data.build_toeplitz_cov(num_block_columns=tau_max // 2)
+    modal_data = BRSSICovRef(prep_signals)
+    modal_data.build_toeplitz_cov(num_block_columns=n_lags // 2)
     modal_data.compute_state_matrices(max_model_order=model_order)
     modal_frequencies, modal_damping, mode_shapes, _, modal_contributions = modal_data.single_order_modal(order=model_order)
     
@@ -170,7 +167,7 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
         from GUI import StabilGUI
         stabil_calc = StabilDiagram.StabilCalc(modal_data)
         stabil_plot = StabilDiagram.StabilPlot(stabil_calc)
-        StabilGUI.start_stabil_gui(stabil_plot, modal_data, None, prep_data)
+        StabilGUI.start_stabil_gui(stabil_plot, modal_data, None, prep_signals)
     
     # all_nod_x = mech.meas_nodes
     # nod_x_a = meas_nodes
@@ -192,7 +189,10 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
                         # label=f'ident: {modal_frequencies[id_mode]:1.2f}, {modal_damping[id_mode]:1.2f}', ls='none', marker='o', fillstyle='none')
         # axes[mode].legend(title=f'mode: {mode}')
     # plt.show()
-        
+    
+    print(frequencies_a, modal_frequencies)
+    print(damping_a, modal_damping)
+    
     return (frequencies_a, damping_a, mode_shapes_a,  # reference output parameters
             np.array(numtaps), np.array(fs), np.array(cutoff), margin_quant_norm,  # derived input parameters 
             np.array(sim_timesteps), np.array(dec_rate), # control input parameters
@@ -246,15 +246,20 @@ def uq_acqui(step, working_dir, result_dir):
                                                    # ('integers',(2,11)),
                                                     # ],
                                     # num_samples=1000)
-        data_manager.generate_sample_inputs(names=['bits2',
-                                                    'nyq_rat',
-                                                   'numtaps_fact'],
-                                    distributions=[('integers',(8,33)),
-                                                    ('uniform',(2, 4)),
-                                                   ('integers',(11,42)),
+        # data_manager.generate_sample_inputs(names=['bits2',
+        #                                             'nyq_rat',
+        #                                            'numtaps_fact'],
+        #                             distributions=[('integers',(8,33)),
+        #                                             ('uniform',(2, 4)),
+        #                                            ('integers',(11,42)),
+        #                                             ],
+        #                             num_samples=1000)
+        data_manager.generate_sample_inputs(names=['window',
+                                                   'method'],
+                                    distributions=[('uniform',(0,16)),
+                                                   ('choice',(['welch','blackman-tukey'],)),
                                                     ],
-                                    num_samples=1000)
-                                                   
+                                    num_samples=1000)                                                   
         return
     if step == 1:
         data_manager = DataManager.from_existing(dbfile_in=f'{title}.nc', result_dir=result_dir, working_dir=working_dir)
@@ -278,8 +283,9 @@ def uq_acqui(step, working_dir, result_dir):
                     'lumped':'lumped',
                     'snr_db':'snr_db',
                     'bits':'bits2',
-                    'tau_max':'tau_max',
+                    'n_lags':'tau_max',
                     'window':'window',
+                    'method':'method',
                     'order_factor':'order_factor',
                     'nyq_rat':'nyq_rat',
                     'numtaps_fact':'numtaps_fact'}
@@ -311,7 +317,7 @@ def uq_acqui(step, working_dir, result_dir):
         #              'modal_contributions'  # intermediate output parameters
         #              ]
         data_manager.evaluate_samples(func=model_acqui_signal_sysid, arg_vars=arg_vars, ret_names=ret_names, **func_kwargs,
-                                      chwdir=True, dry_run=False, default_len={'modes':100, 'channels':10} # modes = max(num_modes) * max(order_factor) / 2
+                                      chwdir=True, dry_run=True, default_len={'modes':100, 'channels':10} # modes = max(num_modes) * max(order_factor) / 2
                                       
                                       )
         #['d6075c96cfb7', 'b5c3a0c90604', 'e2cc12128797', '6251717cb53e','d60c3915887e', '79dc28c2f054', '9e6fd66b51c5']
