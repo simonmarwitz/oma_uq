@@ -63,7 +63,7 @@ def main():
     
     rand_labels = ['Force', 'Position', 'Deflection']
     for i in range(3):
-        axes[i,i].hist(rand_vals[i], bins=50, cumulative=False, histtype='step')
+        axes[i,i].hist(rand_vals[i], bins=50, cumulative=True, histtype='step')
         for j in range(i):
             axes[i,j].plot(rand_vals[j][0],rand_vals[i][0], ls='none',marker=',')
             axes[i,j].plot(rand_vals[j][1],rand_vals[i][1], ls='none',marker=',')
