@@ -352,7 +352,7 @@ class DataManager(object):
         ds_new.to_netcdf(dbpath, engine='h5netcdf')
 
     def evaluate_samples(self, func, arg_vars, ret_names,
-                         chwdir=True, re_eval_sample=None, 
+                         chwdir=True, re_eval_sample=None,
                          dry_run=False, default_len=30, **kwargs):
         '''
 
@@ -362,7 +362,7 @@ class DataManager(object):
             returns values as named and in the order of ret_names
             may take additional kwargs
 
-        arg_vars  is a list of mappings (function argument, dataarray name in input dataset)
+        arg_vars  is a dictionary of mappings {function argument: dataarray name in input dataset, ...}
         
         ret_names Dict {'name1':('dimension1','dimension2',...),'name2':(),...} 
             (as of python 3.7 dicts keep their order)
@@ -564,7 +564,7 @@ class DataManager(object):
             futures = []
 
             # TODO: Improvement: Estimate job size and submit big jobs first,
-            # i.e. sort key = jobsize, but also add some smallest jobs
+            # i.e. sort key = jobsize, but also add some of the smallest jobs
             # to the beginning to see any errors quickly
             
             for jid_ind in sorted(range(in_ds.ids.size),
@@ -1183,7 +1183,7 @@ class DataManager(object):
                     # save and close database
                     ds.close()
                     logger.debug(f'Saving database to {dbpath}')
-                    ds.to_netcdf(dbpath, engine='h5netcdf')
+                    ds.to_netcdf(dbpath, engine='h5netcdf', invalid_netcdf=True)
                     #ds.to_netcdf(dbpath, format='netcdf4')
                     ds.close()
             # remove lock automatically

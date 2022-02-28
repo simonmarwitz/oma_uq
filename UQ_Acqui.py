@@ -332,7 +332,7 @@ def uq_acqui(step, working_dir, result_dir):
         
         with matplotlib.rc_context(rc=pcd):
             # influences of signal acquistion (quantization and sampling)
-            if False:
+            if True:
                 # with data_manager.get_database('processed', rw=True) as ds:
                     # ds['bits_eff']=(np.log(ds.margin*(2**ds.bits))/np.log(2)).mean('channels')
                 names = ['snr_db','bits','bits_eff', 'this_snr_quant','this_snr_db_out'] # effective bits = log(margin / 2**bits)/log(2)
@@ -340,25 +340,25 @@ def uq_acqui(step, working_dir, result_dir):
                 #scales = ['linear','log','log','linear','linear']
                 fig = data_manager.post_process_samples(names=names, db='processed', labels=labels, figsize=(5.92, 5.92))#, scales=scales)
                 #fig.subplots_adjust(bottom=0.07, left=0.1)
-                fig.savefig('/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_KolloquiumVolkmar/figures/uq_quant.pdf', dpi=300)
+                fig.savefig(f'/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_WeihnachstfeierVolkmar/figures/{title}_quant.pdf', dpi=300)
             
-            if False:
+            if True:
                 names = ['snr_db', 'numtaps_fact', 'nyq_rat','sim_steps', 'dec_rate', 'this_snr_alias', 'this_snr_db_out'] # numtaps_fact = numtaps/dec_fact, nyq_rat=fs/cutoff, <- constant
                 labels = ['SNR\\textsubscript{dB}', '$\\sfrac{M}{d}$', '$\\sfrac{f_c}{f_s}$', '$N$', '$d$', 'SNR\\textsubscript{dB, alias}', 'SNR\\textsubscript{dB, tot}']
                 fig = data_manager.post_process_samples(names=names, db='processed', labels=labels, figsize=(5.92, 5.92))
                 fig.subplots_adjust(bottom=0.07, left=0.07)
-                fig.savefig('/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_KolloquiumVolkmar/figures/uq_samp.pdf', dpi=300)
+                fig.savefig(f'/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_WeihnachstfeierVolkmar/figures/{title}_samp.pdf', dpi=300)
             
-            if False:
+            if True:
                 names = ['this_snr_db_out','freq_diff','damp_diff','modal_assurance','unp_id','unp_num']
                 labels = ['SNR\\textsubscript{dB, tot}','$\\Delta_f$','$\\Delta_{\\zeta}$','MAC','$m_\\text{additional}$','$m_\\text{missing}$']
                 fig = data_manager.post_process_samples(names=names, db='processed', labels = labels, figsize=(5.92, 5.92))
                 fig.subplots_adjust(left=0.07)
-                fig.savefig('/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_KolloquiumVolkmar/figures/uq_noise.pdf', dpi=300)
+                fig.savefig(f'/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_WeihnachstfeierVolkmar/figures/{title}_noise.pdf', dpi=300)
             
             
             # influences of sensors
-            if False:
+            if True:
                 names = ['num_sensors', 'lumped', 'freq_diff','damp_diff','modal_assurance','unp_id','unp_num'] # quant
                 labels=[ '$n_\\text{sensors}$','placement','$\\Delta_f$','$\\Delta_{\\zeta}$','MAC','$m_\\text{additional}$','$m_\\text{missing}$']
                 fig = data_manager.post_process_samples(names=names, db='processed', labels=labels, figsize=(5.92, 5.92))
@@ -376,12 +376,12 @@ def uq_acqui(step, working_dir, result_dir):
                     axis.set_ticks([0,1])
                     axis.set_ticklabels(['lump','dist'])
                 fig.subplots_adjust(left=0.08)        
-                fig.savefig('/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_KolloquiumVolkmar/figures/uq_sensors.pdf', dpi=300)
+                fig.savefig(f'/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_WeihnachstfeierVolkmar/figures/{title}_sensors.pdf', dpi=300)
             
             
             # influences of signal processing and system identification
-            if False:
-                names = ['all_n_cycl','window','tau_max','order_factor','freq_diff','damp_diff','modal_assurance','unp_id','unp_num']
+            if True:
+                names = ['all_n_cycl','method','tau_max','order_factor','freq_diff','damp_diff','modal_assurance','unp_id','unp_num']
                 labels=[ '$n_\\text{cycles}$','spectral \\\\ estimator','$\\tau_\\text{max}$','model order \\\\ overrate','$\\Delta_f$','$\\Delta_{\\zeta}$','MAC','$m_\\text{additional}$','$m_\\text{missing}$']
                 fig = data_manager.post_process_samples(names=names, db='processed',labels=labels, figsize=(5.92, 5.92))
                 axes = fig.axes
@@ -397,7 +397,7 @@ def uq_acqui(step, working_dir, result_dir):
                     axis.set_ticks([0,1])
                     axis.set_ticklabels(['b.-t.','welch'])
                 fig.subplots_adjust(left=0.08)        
-                fig.savefig('/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_KolloquiumVolkmar/figures/uq_sigid.pdf', dpi=300)
+                fig.savefig(f'/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_WeihnachstfeierVolkmar/figures/{title}_sigid.pdf', dpi=300)
             
             # influences of structural parameters
             if True:
@@ -405,7 +405,7 @@ def uq_acqui(step, working_dir, result_dir):
                 labels = [ '$\\zeta$','$\\delta_f$','$n_\\text{modes}$','$\\Delta_f$','$\\Delta_{\\zeta}$','MAC','$m_\\text{additional}$','$m_\\text{missing}$']
                 fig = data_manager.post_process_samples(names=names, db='processed', labels=labels, figsize=(5.92, 5.92))
                 fig.subplots_adjust(left=0.07)
-                fig.savefig('/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_KolloquiumVolkmar/figures/uq_struct.pdf', dpi=300)
+                fig.savefig(f'/vegas/users/staff/womo1998/Projects/2019_Promotion/2021_WeihnachstfeierVolkmar/figures/{title}_struct.pdf', dpi=300)
                 
             
             
@@ -449,7 +449,7 @@ def main():
         #pass    
         #import logging
         #logging.getLogger('uncertainty.data_manager').setLevel(logging.DEBUG)
-        uq_acqui(2, working_dir, result_dir)
+        uq_acqui(3, working_dir, result_dir)
         
 def clear_wdirs():
     wdir = os.path.join('/dev/shm', str(os.getuid()), 'work')

@@ -474,7 +474,8 @@ class Mechanical(object):
         if jid is None:
             jid = 'file'
         ansys = pyansys.launch_mapdl(
-            exec_file='/usr/scratch4/app-soft/ansys/v202/ansys/bin/ansys202',
+            # exec_file='/usr/scratch4/app-soft/ansys/v202/ansys/bin/ansys202',
+            exec_file='/vegas/apps/ansys/v201/ansys/bin/ansys201',
             #exec_file='/usr/app-soft/ansys/v201/ansys/bin/ansys201',
             run_location=working_dir, override=True, loglevel='ERROR',
             nproc=1, log_apdl='w',
