@@ -90,12 +90,30 @@ def example_chap_1():
         print(np.sqrt(sigma_z[i]**2*sigma_Omega[i]**2+sigma_z[i]**2*mu_Omega[i]**2+mu_Omega[i]**2*sigma_Omega[i]**2)/sigma_Y2-S_Z2[i]-S_Z2[i+r])
                             
 def main():
-    import chaospy
+    #import chaospy
+    import scipy.stats.qmc
+    
+    
+    
     num_distributions=10
-    distribution = chaospy.J(*[chaospy.Normal(0, 1) for i in range(num_distributions)])
-    samples = distribution.sample(100, rule='halton')
+    
+    engine = scipy.stats.qmc.Halton(num_distributions, scramble=False)
+    engine.fast_forward(1) # skip first point = [0,...,0]
+    samples = engine.random(1000).T
+    
+    print(samples.shape)
+    
     for i in range(num_distributions):
-        np.random.shuffle(samples[i,:]) # avoid structures (correlations) in scatter plots, while keeping low discrepancy, not sure if that is actually valid (saltelli p 87)
+        samples[i,:] = scipy.stats.arcsine(0,1).ppf(samples[i,:])
+        
+        
+        pass
+        
+    #distribution = chaospy.J(*[chaospy.Normal(0, 1) for i in range(num_distributions)])
+    #samples = distribution.sample(100, rule='halton')
+    
+    #for i in range(num_distributions):
+    #    np.random.shuffle(samples[i,:]) # avoid structures (correlations) in scatter plots, while keeping low discrepancy, not sure if that is actually valid (saltelli p 87)
     #print(samples.shape, type(samples))
     products = np.zeros((num_distributions,num_distributions))
     fig, axes = plot.subplots(nrows=num_distributions, ncols=num_distributions)
@@ -123,4 +141,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    plot.psd()
