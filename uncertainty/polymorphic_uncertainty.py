@@ -1,3 +1,5 @@
+
+
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -6,7 +8,17 @@ import scipy.stats
 import scipy.stats.qmc
 import scipy.optimize
 from itertools import product, chain
-from uncertainty.data_manager import HiddenPrints, simplePbar
+from uncertainty.data_manager import HiddenPrints, simplePbar, DataManager
+import uuid
+import sys
+import logging
+logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+
+logger = logging.getLogger(__name__)
+# logging.warning('test')
+logger.setLevel(level=logging.INFO)
+
+
 
 class UncertainVariable(object):
     '''
@@ -99,9 +111,9 @@ class RandomVariable(UncertainVariable):
                 eval_params.append(param.value)
             else:
                 eval_params.append(param)
-        rv = self.dist_fun(*eval_params)
+        # rv = self.dist_fun(*eval_params)
         
-        return rv.rvs(size=size)
+        return self.dist_fun.rvs(*eval_params, size=size)
     
     def prob_dens(self, values=None):
         # we need to have all uncertain parameters fixed
@@ -184,12 +196,18 @@ class MassFunction(UncertainVariable):
     
     @property
     def numeric_focals(self,):
+        return self.numeric_focal(None)
+        
+    def numeric_focal(self, i_hyc=None):
         # evaluates all focal sets to numeric values
         # raises error if nested UncertaunVariables are not frozen
         
         incremental = self.incremental
         focals = self._focals
-        numeric_focals = np.empty((self.n_focals, 2))
+        if i_hyc is not None:
+            focals = focals[i_hyc:i_hyc + 1]
+        n_focals = len(focals)
+        numeric_focals = np.empty((n_focals, 2))
         for i, (incvar, lbound, ubound) in enumerate(focals): # iterates over rows
             
 #             print(i, (incvar, lbound, ubound))
@@ -401,7 +419,6 @@ def aggregate_mass(focals_stats, hyc_mass, nbin_fact=1, cum_mass=False):
 
     return bel_stats, pl_stats, q_stats
 
-
  
 class PolyUQ(object):
     
@@ -524,12 +541,12 @@ class PolyUQ(object):
     
         N_mcs = max(N_mcs_ale,N_mcs_epi)
         
-        print("Generating low-discrepancy sequences for all variables... ")
+        logger.info("Generating low-discrepancy sequences for all variables... ")
         # sample N_mcs samples from a Halton Sequence and transform to uniform bounds
         if seed is None:
             seed = np.random.randint(np.iinfo(np.int32).max)
         else:
-            print("Warning: The usage of seeds is currently untested.")
+            logger.warning("The usage of seeds is currently untested.")
             
         seed_seq = np.random.SeedSequence(seed).spawn(1)[0]
         seed_seq = np.random.default_rng(seed_seq)
@@ -560,13 +577,135 @@ class PolyUQ(object):
         
         return
     
+    def to_data_manager(self, title, **kwargs):
+        '''
+        combining PolyUQ and DataManager
+        options: 
+            1) create a new class and copy the relevant parts from both
+            2) create a new class, subclassing both
+            3) create to/from methods in PolyUQ (possibly stripping of post-processing methods from DataManager into a different class), that would however eliminate the possibility for mapping-based interval optimization
+        
+        go with option 3:
+        in PolyUQ we need to create input samples as an xarray, save and load with DataManager
+        
+        keep in mind staged propagation to allow reusing the first pure aleatory/epistemic part of expensive model runs in a mixed-aleatory-epistemic grid
+        in a mixed grid, each aleatory sample is combined with all epistemic samples and vice versa
+        independent parts of the mapping function can thus be re-used in the combination part
+        these parts are most likely only the first few steps of the mapping function
+        but some logic is needed to ensure these parts are already computed, before any other samples try to use them
+        so basically, we have to pre-compute them in a separate run
+        assign aleId and epiId and save the results under aleId_epiId_stageNr
+        create separate mapping functions for pre-computation and actual run
+        
+        where would we generate the grid? 
+            in PolyUQ: that would not require any new logic from DataManager, 
+                return three DataManager databases: two for pre-computation (ale/epi) and one for final propagation
+            in DataManager: We need the logic in DataManager, i.e. is expansion necessary
+        
+        in PolyUQ also create a method to load output sample arrays created in DataManager
+        '''
+        
+        logger.info("Exporting samples to DataManager for distributed propagation...")
+        
+        # hypervariables (polymorphic outer variables) are only relevant in post-processing
+        
+        vars_epi = self.vars_epi
+        vars_ale = self.vars_ale
+        N_mcs_ale = self.N_mcs_ale
+        N_mcs_epi = self.N_mcs_epi
+        
+        inp_samp_prim = self.inp_samp_prim
+        
+        # determine, if primary variables are all the same type, or if mixed type inputs are present
+        loop_ale = np.any([var.primary for var in vars_ale])
+        if not loop_ale:
+            N_mcs_ale = 1
+        loop_epi = np.any([var.primary for var in vars_epi])
+        if not loop_epi:
+            N_mcs_epi = 1
+        
+        inds_ale, inds_epi = np.mgrid[0:N_mcs_ale, 0:N_mcs_epi]
+        inds_ale, inds_epi = inds_ale.ravel(), inds_epi.ravel()
+        
+        ids_ale = np.array([str(uuid.uuid4()).split('-')[-1] for _ in range(N_mcs_ale)])
+        ids_epi = np.array([str(uuid.uuid4()).split('-')[-1] for _ in range(N_mcs_epi)])
+        
+        names_ale = [var.name for var in vars_ale if var.primary]
+        names_epi = [var.name for var in vars_epi if var.primary]
+        names_grid = names_ale + names_epi
+        
+        arrays_ale = [inp_samp_prim[name].iloc[:N_mcs_ale] for name in names_ale]
+        arrays_epi = [inp_samp_prim[name].iloc[:N_mcs_epi] for name in names_epi]
+        
+        arrays_grid = [inp_samp_prim[name].iloc[inds_ale] for name in names_ale]
+        arrays_grid += [inp_samp_prim[name].iloc[inds_epi] for name in names_epi]
+        ids_grid = np.array(list(map('_'.join, zip(ids_ale[inds_ale], ids_epi[inds_epi]))))
+        
+        arrays_ale.append(ids_ale)
+        arrays_epi.append(ids_epi)
+        arrays_grid.append(ids_grid)
+        for names in (names_ale, names_epi, names_grid):
+            names.append('ids')
+        
+        manager_ale = DataManager(title + '_ale', entropy=self.seed, **kwargs)
+        manager_ale.provide_sample_inputs(arrays_ale, names_ale)
+        
+        manager_epi = DataManager(title + '_epi', entropy=self.seed, **kwargs)
+        manager_epi.provide_sample_inputs(arrays_epi, names_epi)
+        
+        manager_grid = DataManager(title, entropy=self.seed, **kwargs)
+        manager_grid.provide_sample_inputs(arrays_grid, names_grid)
+        
+        self.fcount = N_mcs_ale * N_mcs_epi
+        self.loop_ale = loop_ale
+        self.loop_epi = loop_epi
+        
+        return manager_grid, manager_ale, manager_epi
     
+    def from_data_manager(self, manager, ret_name):
+        
+        logger.info(f"Importing propagated samples from DataManager using the output variable {ret_name}")
+        
+        N_mcs_ale = self.N_mcs_ale
+        N_mcs_epi = self.N_mcs_epi
+        loop_ale = self.loop_ale
+        loop_epi = self.loop_epi
+        if not loop_ale:
+            N_mcs_ale = 1
+        if not loop_epi:
+            N_mcs_epi = 1
+        
+        with manager.get_database(database='out', rw=False) as out_ds:
+            '''
+            need to re-construct grid array from out_ds[ret_name]
+            how to handle intermediate processing? to be done in manager.process_samples()
+            
+            how to handle multi-valued outputs for polymorphic uncertainty quantification processing? 
+            e.g. modeshapes: either do the IvO individually or introduce some processed meassure e.g. MAC, strain energy, to work on
+            
+            do we need to keep indices around, just in case? don't think so:
+            interval optimization has to be performed for each output quantity individually
+            
+            get ret_name from out_ds
+            construct the grid from inds_ale (row indices) and inds_epi (column indices)
+            return out_samp
+            '''
+            out_flat = out_ds[ret_name]
+            assert out_flat.ndim == 1
+            
+            out_grid = np.empty((N_mcs_ale, N_mcs_epi))
+            # .flat returns a  C-style order flat iterator over the array
+            out_grid.flat = out_flat
+        
+        self.out_samp = out_grid
+            
+            
     def propagate(self, mapping, arg_vars):
         '''
         An input sample lattice using aleatory input samples in rows and 
         epistemic input samples in columns is used for uncertainty propagation.
         The output sample lattice can be used for stochastic/statistical analysis, 
-        approximate interval optimization, sensitivitz analyses or surrogate modeling. 
+        approximate interval optimization, sensitivity analyses or surrogate modeling. 
         
         Parameters:
         -----------
@@ -592,37 +731,30 @@ class PolyUQ(object):
         # determine, if primary variables are all the same type, or if mixed type inputs are present
         loop_ale = np.any([var.primary for var in vars_ale])
         loop_epi = np.any([var.primary for var in vars_epi])
-        
-        # generate grid indices
-        print("Generating grid...")
-        if loop_ale and loop_epi:
-            inds_ale, inds_epi = np.mgrid[0:N_mcs_ale:1, 0:N_mcs_epi:1]
-        elif loop_epi:
-            inds_ale, inds_epi = np.mgrid[0:1:1, 0:N_mcs_epi:1]
-        elif loop_ale:
-            inds_ale, inds_epi = np.mgrid[0:N_mcs_ale:1, 0:1:1]
-        else: 
-            raise RuntimeError("No primary variables defined.")
-        inds_alef = inds_ale.flatten()
-        inds_epif = inds_epi.flatten()
     
         # propagation
-        print("Propagating mapping function...")
+        logger.info("Propagating mapping function...")
         all_vars = vars_ale + vars_epi
         for var_name in arg_vars.values():
             for var in all_vars:
                 if var.primary and var.name == var_name: break
-            else: 
+            else:
                 raise RuntimeError(f'Variable {var} is not marked as primary but used as a function argument')
         for var in all_vars:
             if not var.primary: continue
             for var_name in arg_vars.values():
                 if var.name == var_name: break
-            else: 
+            else:
                 raise RuntimeError(f'Variable {var} is marked as primary but not used as a function argument')
         
         names_ale = [var.name for var in vars_ale if var.primary]
         names_epi = [var.name for var in vars_epi if var.primary]
+        
+        arg_vars_ale = {arg: var for arg, var in arg_vars.items() if var in names_ale}
+        arg_vars_epi = {arg: var for arg, var in arg_vars.items() if var in names_epi}
+        
+        inp_samp_ale = inp_samp_prim[list(arg_vars_ale.values())].values
+        inp_samp_epi = inp_samp_prim[list(arg_vars_epi.values())].values
         
         if loop_ale and loop_epi:
             out_samp = np.zeros((N_mcs_ale, N_mcs_epi))
@@ -631,35 +763,27 @@ class PolyUQ(object):
         elif loop_epi:
             out_samp = np.zeros((1, N_mcs_epi))
         
-        arg_vars_ale = {arg:var for arg,var in arg_vars.items() if var in names_ale}
-        arg_vars_epi = {arg:var for arg,var in arg_vars.items() if var in names_epi}
-        
-        inp_samp_ale = inp_samp_prim[list(arg_vars_ale.values())].values
-        inp_samp_epi = inp_samp_prim[list(arg_vars_epi.values())].values
-        
-        fcount=0
-        for ind_ale, ind_epi in np.nditer([inds_alef, inds_epif]):
+        fcount = 0
+        # for ind_ale, ind_epi in np.nditer([inds_alef, inds_epif]):
             # this_out = mapping(**{arg:inp_samp_prim.iloc[ind_ale][var] for arg, var in arg_vars.items() if var in names_ale}, 
             #                    **{arg:inp_samp_prim.iloc[ind_epi][var] for arg, var in arg_vars.items() if var in names_epi},)
+        for ind_ale in range(out_samp.shape[0]):
+            for ind_epi in range(out_samp.shape[1]):
             
-            this_out = mapping(**{arg:inp_samp_ale[ind_ale, ind_var] for ind_var, arg in enumerate(arg_vars_ale.keys())}, 
-                               **{arg:inp_samp_epi[ind_epi, ind_var] for ind_var, arg in enumerate(arg_vars_epi.keys())},)
-            fcount += 1
-            if loop_ale and loop_epi:
+                this_out = mapping(**{arg:inp_samp_ale[ind_ale, ind_var] for ind_var, arg in enumerate(arg_vars_ale.keys())}, 
+                                   **{arg:inp_samp_epi[ind_epi, ind_var] for ind_var, arg in enumerate(arg_vars_epi.keys())},)
+                fcount += 1
+                
                 out_samp[ind_ale, ind_epi] = this_out
-            elif loop_epi:
-                out_samp[0, ind_epi] = this_out
-            elif loop_ale:
-                out_samp[ind_ale, 0] = this_out
                 
         if loop_ale and loop_epi:
-            print(f'Mapping function was called {fcount} times in a mixed aleatory epistemic loop.')
+            logger.info(f'Mapping function was called {fcount} times in a mixed aleatory epistemic loop.')
         elif loop_ale:
-            print(f'Mapping function was called {fcount} times in a pure aleatory loop.')
+            logger.info(f'Mapping function was called {fcount} times in a pure aleatory loop.')
         elif loop_epi:
-            print(f'Mapping function was called {fcount} times in a pure epistemic loop.')
+            logger.info(f'Mapping function was called {fcount} times in a pure epistemic loop.')
             
-        print("Done... ")
+        
         self.loop_ale = loop_ale
         self.loop_epi = loop_epi
         self.out_samp = out_samp
@@ -681,7 +805,7 @@ class PolyUQ(object):
         
         # pass i_imp to compute weights only for imprecise hypercube number i_imp
         
-        print("Computing aleatory probability weights...")
+        logger.info("Computing aleatory probability weights...")
         # compute probabilities for approximately equally spaced (due to low-discrepancy sampling) bins
         # TODO: theoretically integration has to be performed
         
@@ -769,6 +893,8 @@ class PolyUQ(object):
         for each statistic
             compute bel, pl and q
         '''
+        logger.info("Estimating imprecision intervals from sampled output sequences")
+        
         # Variables
         vars_ale = self.vars_ale
         vars_imp = self.vars_imp
@@ -837,14 +963,14 @@ class PolyUQ(object):
                     # if n_ale==5: print(var, var.value)
             
             # find the indices of all epistemic samples that are within the boundaries defined by the stochastic sample
-            hyc_dat_inds = self.hypercube_sample_indices(inp_samp_prim, vars_imp, imp_hyc_foc_inds, N_mcs_imp) # no-imp: np.ones(1, N_mcs_imp)
+            hyc_dat_inds = self.hypercube_sample_indices(inp_samp_prim, vars_imp, imp_hyc_foc_inds, N_mcs_imp)  # no-imp: np.ones(1, N_mcs_imp)
             
             if check_sample_sizes:
                 hyc_num_elems = np.sum(hyc_dat_inds, axis=1)
-                sample_sizes[n_ale,:] = hyc_num_elems   
+                sample_sizes[n_ale,:] = hyc_num_elems
             
             # compute output intervals / focal sets for each imprecise hypercube
-            imp_foc[n_ale, :, :] = approximate_out_intervals(this_out, hyc_dat_inds) # no-imp: [np.min(output), np.max(output)] where min==max
+            imp_foc[n_ale, :, :] = approximate_out_intervals(this_out, hyc_dat_inds)  # no-imp: [np.min(output), np.max(output)] where min==max
             
             if fig is not None:
                 # plot the hypercube part of xvar,yvar as a rectangle over the sampled output points
@@ -872,10 +998,10 @@ class PolyUQ(object):
                 else:
                     hist, bins = [1,], [0, sample_sizes[0, i_imp_hyc]]
             
-                print(f'Imprecise hypercube {i_imp_hyc} epistemic sample size distribution:')
+                logger.debug(f'Imprecise hypercube {i_imp_hyc} epistemic sample size distribution:')
                 for lbin, ubin, count in zip(bins[:-1], bins[1:], hist):
                     if count == 0: continue
-                    print(f'{lbin} < n < {ubin}: {count} aleatory samples')
+                    logger.debug(f'{lbin} < n < {ubin}: {count} aleatory samples')
         
         # for no-imp: imp_foc[n_ale, 0, :] = [ np.min(output[n_ale]), np.max(output[n_ale])] where min==max
         
@@ -907,6 +1033,8 @@ class PolyUQ(object):
                 an array holding the focal sets / intervals for each statistic and combined epistemic hypercube
         
         '''
+        logger.info('Estimating incompleteness by sampling statistics...')
+        
         # Samples
         imp_foc = self.imp_foc
         
@@ -983,7 +1111,7 @@ class PolyUQ(object):
         hyc_dat_inds = self.hypercube_sample_indices(inp_suppl_epi, vars_inc, inc_hyc_foc_inds, N_mcs_inc)
         
         hyc_num_elems = np.sum(hyc_dat_inds, axis=1)
-        print(f"Incompleteness hypercube sample sizes: {hyc_num_elems}")   
+        logger.debug(f"Incompleteness hypercube sample sizes: {hyc_num_elems}")   
         
         hyc_mass = np.empty((n_hyc,))
         
@@ -1037,9 +1165,9 @@ class PolyUQ(object):
             with HiddenPrints():
                 p_weights = self.probabilities_imp(i_imp_hyc)
             stat = stat_fun(samples, p_weights, i_stat, **stat_fun_kwargs)
-            return min_max * stat 
+            return min_max * stat
         
-        
+        logger.info('Estimating incompleteness intervals by direct L-BFGS optimization of statistics over input hypercubes...')
         # Samples
         imp_foc = self.imp_foc
         
@@ -1065,7 +1193,7 @@ class PolyUQ(object):
         hyc_mass = np.empty((n_hyc,))
         
         if vars_inc:
-            pbar = simplePbar(n_imp_hyc*n_inc_hyc*n_stat)
+            pbar = simplePbar(n_imp_hyc * n_inc_hyc*n_stat)
             for i_imp_hyc in range(n_imp_hyc):
                 for i_inc_hyc in range(n_inc_hyc):
                     i_hyc = i_imp_hyc * n_inc_hyc + i_inc_hyc
@@ -1074,14 +1202,18 @@ class PolyUQ(object):
                     init = [np.mean(bound) for bound in bounds]
                     for i_stat in range(n_stat):
                         # lower boundary
-                        resll = scipy.optimize.minimize(wrapper, init, ( 1, stat_fun, imp_foc[:,i_imp_hyc, 0], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
-                        resul = scipy.optimize.minimize(wrapper, init, (-1, stat_fun, imp_foc[:,i_imp_hyc, 0], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
-                        # high boundary
-                        reslu = scipy.optimize.minimize(wrapper, init, ( 1, stat_fun, imp_foc[:,i_imp_hyc, 1], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
-                        resuu = scipy.optimize.minimize(wrapper, init, (-1, stat_fun, imp_foc[:,i_imp_hyc, 1], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
-                        
-                        focals_stats[i_stat, i_hyc, 0] = min( resll.fun,  reslu.fun)
-                        focals_stats[i_stat, i_hyc, 1] = max(-resul.fun, -resuu.fun)
+                        logging.disable(logging.FATAL)
+                        try:
+                            resll = scipy.optimize.minimize(wrapper, init, ( 1, stat_fun, imp_foc[:,i_imp_hyc, 0], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
+                            resul = scipy.optimize.minimize(wrapper, init, (-1, stat_fun, imp_foc[:,i_imp_hyc, 0], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
+                            # high boundary
+                            reslu = scipy.optimize.minimize(wrapper, init, ( 1, stat_fun, imp_foc[:,i_imp_hyc, 1], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
+                            resuu = scipy.optimize.minimize(wrapper, init, (-1, stat_fun, imp_foc[:,i_imp_hyc, 1], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
+                            
+                        finally:
+                            logging.disable(logging.NOTSET)
+                            focals_stats[i_stat, i_hyc, 0] = min( resll.fun,  reslu.fun)
+                            focals_stats[i_stat, i_hyc, 1] = max(-resul.fun, -resuu.fun)
                 
                         next(pbar)
                         
@@ -1108,7 +1240,7 @@ class PolyUQ(object):
             N_mcs_epi = samples.shape[0]
         
         
-        print("Checking sample sizes for approximation of epistemic focal sets...")
+        logger.info("Checking sample sizes for approximation of epistemic focal sets...")
         for var in vars_epi:
             if var.is_poly:
                 sample_sizes=np.empty((N_mcs_ale, var.n_focals), dtype=int)
@@ -1137,10 +1269,10 @@ class PolyUQ(object):
                 else:
                     hist, bins = [1,], [sample_sizes[0, i_foc], sample_sizes[0, i_foc]]
                     
-                print(f'Focal set {i_foc} of variable {var} epistemic sample size distribution:')
+                logger.info(f'Focal set {i_foc} of variable {var} epistemic sample size distribution:')
                 for lbin, ubin, count in zip(bins[:-1], bins[1:], hist):
                     if count == 0: continue
-                    print(f'{lbin} < n < {ubin}: {count} aleatory samples')
+                    logger.info(f'{lbin} < n < {ubin}: {count} aleatory samples')
                 
     @property
     def hyc_hyp_vars(self, ):
@@ -1175,9 +1307,12 @@ class PolyUQ(object):
         elif self.dim_ex=='hadamard':
             # for fuzzy sets, an alpha level would be chosen, which results in a single focal set per variable and thus a single hypercube
             # each variable must have the same number of focal sets
-            n_focals = vars_[0].n_focals
             n_vars = len(vars_)
-            return [[i_foc, ] * n_vars for i_foc in range(n_focals)]
+            if not n_vars:
+                return [()]
+            else:
+                n_focals = vars_[0].n_focals
+                return [[i_foc, ] * n_vars for i_foc in range(n_focals)]
         elif self.dim_ex=='vacuous':
             raise NotImplementedError('Vacuous extension currently not implemented')
         else:
@@ -1249,7 +1384,7 @@ class PolyUQ(object):
         numeric_focals = [var.numeric_focals for var in vars_epi] # no-imp []
         for i_hyc, hypercube in enumerate(hyc_foc_inds):
             # get focal sets / intervals
-            focals = [focals[ind] for focals,ind in zip(numeric_focals, hypercube)] # no-imp []
+            focals = [focals[ind] for focals, ind in zip(numeric_focals, hypercube)] # no-imp []
             # select matching epistemic inp_samples
             selector = hyc_dat_inds[i_hyc,:]
             # for (boundl,boundr), var in zip(focals,vars_epi):
@@ -1260,8 +1395,136 @@ class PolyUQ(object):
                 selector &= inp_samples[:, i_var]<=boundr 
                 # no-imp: [1,1,...,1,1] select all samples
                 
-        return hyc_dat_inds    
+        return hyc_dat_inds
+    
+    def naive_uq(self, N_mcs, mapping, arg_vars):
+        
+        def imp_stat(x):
+            for i, var in enumerate(vars_inc):
+                var.freeze(x[i])
+            # print(x)
+            hypercube = imp_hyc_foc_inds[i_imp_hyc]
+            
+            imp_foc = np.empty((N_mcs, 2))
+            
+            rvs_ale = np.empty((len(vars_ale), N_mcs))
+            for i, var_ale in enumerate(vars_ale):
+                rvs_ale[i, :] = var_ale.rvs(size=N_mcs)
+            
+            bound_vars = []
+            for i, (arg, var) in enumerate(arg_vars.items()):
+                for var_ale in vars_ale:
+                    if not var_ale.primary: continue
+                    if var_ale.name == var:
+                        bound_vars.append(var_ale)
+                        break
+                else:
+                    for j, var_imp in enumerate(vars_imp):
+                        if not var_imp.primary: continue
+                        if var_imp.name == var:
+                            bound_vars.append((var_imp, j))
+                            break
+                    else:
+                        raise RuntimeError(f'Could not find var {var} for argument {arg}, neither in {vars_imp} nor {vars_ale}')
+            
+            for n_ale in range(N_mcs):
+                for i in range(len(vars_ale)):
+                    vars_ale[i].freeze(rvs_ale[i,n_ale])
+                    
+                bounds = np.zeros((len(arg_vars), 2))
+                
+                for i in range(len(arg_vars)):
+                    if isinstance(bound_vars[i], RandomVariable):
+                        bounds[i, :] = bound_vars[i].value
+                    else:
+                        var_imp, j = bound_vars[i]
+                        bounds[i, :] = var_imp.numeric_focal(hypercube[j])
+                
+                # init = [np.mean(bound) for bound in bounds]
+                # resl = scipy.optimize.minimize(lambda x:  mapping(*x), init, bounds=bounds)
+                # resu = scipy.optimize.minimize(lambda x: -mapping(*x), init, bounds=bounds)
+                #
+                # imp_foc[n_ale,:] = (resl.fun, -resu.fun)
+                
+                imp_foc[n_ale, :] = mapping(bounds[0, :], bounds[1, :])
+            
+            Pf = np.sum(imp_foc >= 260, axis=0) / N_mcs
+            # print(Pf)
+            return Pf
+        # Variables
+        vars_inc = self.vars_inc
+        vars_ale = self.vars_ale
+        vars_imp = self.vars_imp
+        
+        
+        # Epistemic Hypercubes
+        imp_hyc_foc_inds = self.imp_hyc_foc_inds # no-imp: is a list containing a single empty tuple
+        n_imp_hyc = len(imp_hyc_foc_inds) # no-imp: would be 1
+        imp_hyc_mass = self.imp_hyc_mass # no-imp: is a list containing a single 1.0
+        
+        inc_hyc_foc_inds = self.inc_hyc_foc_inds
+        n_inc_hyc = len(inc_hyc_foc_inds)
+        inc_hyc_mass = self.inc_hyc_mass 
+        # no-inc: sizes are analogous to the no-imp case
+        
+        n_hyc = n_imp_hyc * n_inc_hyc
+        
+        n_stat = 1
+        
+        num_focals_inc = [var.numeric_focals for var in vars_inc]
+                
+        # compute belief functions for each statistic
+        focals_stats = np.empty((n_stat, n_hyc, 2))
+        hyc_mass = np.empty((n_hyc,))
+        
+        if vars_inc:
+            # print(vars_inc)
+            pbar = simplePbar(n_imp_hyc * n_inc_hyc * n_stat)
+            for i_imp_hyc in range(n_imp_hyc):
+                for i_inc_hyc in range(n_inc_hyc):
+                    i_hyc = i_imp_hyc * n_inc_hyc + i_inc_hyc
+                    
+                    bounds = [focs[ind] for focs, ind in zip(num_focals_inc, inc_hyc_foc_inds[i_inc_hyc])]
 
+                    init = [np.mean(bound) for bound in bounds]
+                    for i_stat in range(n_stat):
+                        
+                        if np.all(np.diff(bounds, axis=1)==0): # complete variable
+                            focals_stats[i_stat, i_hyc,:] = imp_stat(init)
+                        else:
+                            
+                            '''
+                            optimizing a  stochastic objective requires carefully chosen initial guesses, as it is very noisy due to randomness
+                            '''
+                            initial_simplex = np.empty((5, 4))
+                            for i in range(2):
+                                for j in range(2):
+                                    initial_simplex[i*2 + j,:]=[bounds[0][i],bounds[1][j], bounds[2][j],bounds[3][i]]
+                            initial_simplex[-1,:] = init
+                            # lower boundary
+                            # print(f'Minimizing within {bounds}')
+                            resll = scipy.optimize.minimize(lambda x:  imp_stat(x)[0], init, options={'initial_simplex':initial_simplex}, method='Nelder-Mead', bounds=bounds)
+                            # resul = scipy.optimize.minimize(lambda x: -imp_stat(x)[0], init, bounds=bounds)
+                            # high boundary
+                            # reslu = scipy.optimize.minimize(lambda x:  imp_stat(x)[1], init, bounds=bounds)
+                            # print(f'Maximizing within {bounds}')
+                            resuu = scipy.optimize.minimize(lambda x: -imp_stat(x)[1], init, options={'initial_simplex':initial_simplex}, method='Nelder-Mead', bounds=bounds)
+                            
+                            # focals_stats[i_stat, i_hyc, 0] = min( resll.fun,  reslu.fun)
+                            # focals_stats[i_stat, i_hyc, 1] = max(-resul.fun, -resuu.fun)
+                            focals_stats[i_stat, i_hyc, :] = (resll.fun, resuu.fun)
+                
+                        next(pbar)
+                        
+                hyc_mass[i_imp_hyc * n_inc_hyc: (i_imp_hyc + 1 ) * n_inc_hyc ] = inc_hyc_mass * imp_hyc_mass[i_imp_hyc] 
+        else: #no incompleteness
+            for i_imp_hyc in range(n_imp_hyc):
+                stat = imp_stat(None)
+                focals_stats[:, i_imp_hyc, :] = stat
+            hyc_mass = imp_hyc_mass
+        
+        return focals_stats, hyc_mass
+            
         
 def generate_histogram_bins(data, axis=1, nbin_fact=1):
     # generate the bins
@@ -1283,9 +1546,195 @@ def generate_histogram_bins(data, axis=1, nbin_fact=1):
     
     return bins_densities
         
+def example_a():
+    example_num = 0
+
+    q1 = RandomVariable(name='q1', dist='norm', params=[15, 4], primary=True)
+    q2 = RandomVariable(name='q2', dist='norm', params=[8, 2], primary=True)
+    
+    dim_ex='hadamard'
+    
+    vars_ale = [q1,q2]
+    vars_epi = []
+    return example_num, dim_ex, vars_ale, vars_epi,
+    
+def example_b():
+    example_num = 1
+    
+    inc_q1a1 = (RandomVariable(name='q1', dist='norm', params=[15,4], primary=False), # set same name to share input samples
+               )
+    inc_q1a0 = (inc_q1a1[0],
+                RandomVariable(name='q1a0l', dist='norm', params=[-0.4,0.1], primary=False), 
+                RandomVariable(name='dq1a0r', dist='norm', params=[0.5,0.06], primary=False))
+    q1 = MassFunction(name='q1', focals=[inc_q1a1, inc_q1a0], masses=[0.5,0.5], primary=True, incremental=True)
+    
+    inc_q2a1 = (RandomVariable(name='q2', dist='norm', params=[8,2], primary=False), # set same name to share input samples
+               )
+    inc_q2a0 = (inc_q2a1[0],
+                RandomVariable(name='dq2a0l', dist='norm', params=[-0.6,0.08], primary=False), 
+                RandomVariable(name='dq2a0r', dist='norm', params=[0.4,0.11], primary=False))
+    q2 = MassFunction(name='q2', focals=[inc_q2a1, inc_q2a0], masses=[0.5,0.5], primary=True, incremental=True)
+    
+    dim_ex='hadamard'
+    
+    vars_ale = [*inc_q1a0,*inc_q2a0]
+    vars_epi = [q1, q2]
+    return example_num, dim_ex, vars_ale, vars_epi,
+    
+
+def example_c():
+    example_num = 2
+
+    mu1 = MassFunction(name='mu1', focals=[(14.79,14.79),(13.96,15.61)], masses=[0.5,0.5], primary=False)
+    sig1 = MassFunction(name='sig1', focals=[(4.17,4.17),(3.66,4.85)], masses = [0.5, 0.5], primary=False)
+    q1 = RandomVariable(name='q1', dist='norm', params=[mu1, sig1])
+    
+    mu2 = MassFunction(name='mu2', focals=[(8.1,8.1),(7.67,8.52)], masses=[0.5,0.5], primary=False)
+    sig2 = MassFunction(name='sig2', focals=[(2.14,2.14),(1.88,2.48)], masses = [0.5, 0.5], primary=False)
+    q2 = RandomVariable(name='q2', dist='norm', params=[mu2, sig2])
+    
+    dim_ex='hadamard'
+    
+    vars_epi = [mu1,sig1, mu2, sig2]
+    vars_ale = [q1, q2]
+    return example_num, dim_ex, vars_ale, vars_epi,
+    
+def example_d():
+    example_num = 3
+
+    q1a1mu    = MassFunction(name='q1a1mu',    focals=[(14.62,      ), (13.8, 15.45)], masses=[0.5,0.5],  primary=False)
+    q1a1sig   = MassFunction(name='q1a1sig',   focals=[(4.16 ,      ), (3.65, 4.83)], masses=[0.5,0.5],   primary=False)
+    q1a1      = RandomVariable(name='q1',    dist='norm', params=[q1a1mu, q1a1sig], primary=False)
+    
+    dq1a0lmu  = MassFunction(name='dq1a0lmu',  focals=[(-0.41,      ), (-0.46, -0.38)], masses=[0.5,0.5],  primary=False)
+    dq1a0lsig = MassFunction(name='dq1a0lsig', focals=[( 0.10,      ), ( 0.09,  0.12)], masses=[0.5,0.5],  primary=False)
+    dq1a0l    = RandomVariable(name='dq1a0l',  dist='norm', params=[dq1a0lmu, dq1a0lsig], primary=False)
+    
+    dq1a0rmu  = MassFunction(name='dq1a0rmu',  focals=[( 0.50,      ), ( 0.49,  0.52)], masses=[0.5,0.5],  primary=False)
+    dq1a0rsig = MassFunction(name='dq1a0sig',  focals=[( 0.06,      ), ( 0.05,  0.08)], masses=[0.5,0.5],  primary=False)
+    dq1a0r    = RandomVariable(name='dq1a0r',  dist='norm', params=[dq1a0rmu, dq1a0rsig], primary=False)
+    
+    q1        = MassFunction(name='q1', focals=[(q1a1, 0, 0), (q1a1, dq1a0l, dq1a0r)], masses=[0.5,0.5], primary=True, incremental=True)
+    
+    q2a1mu    = MassFunction(name='q2a1mu',   focals=[(8.10,     ), (7.67, 8.52)], masses=[0.5,0.5],  primary=False)
+    q2a1sig   = MassFunction(name='q2a1sig',  focals=[(2.12,     ), (1.86, 2.46)], masses=[0.5,0.5],   primary=False)
+    q2a1      = RandomVariable(name='q2',   dist='norm', params=[q2a1mu, q2a1sig], primary=False)
+    
+    dq2a0lmu  = MassFunction(name='dq2a0lmu',  focals=[(-0.59,      ), (-0.61, -0.57)], masses=[0.5,0.5],  primary=False)
+    dq2a0lsig = MassFunction(name='dq2a0lsig', focals=[( 0.08,      ), ( 0.07,  0.09)], masses=[0.5,0.5],  primary=False)
+    dq2a0l    = RandomVariable(name='dq2a0l',  dist='norm', params=[dq2a0lmu, dq2a0lsig], primary=False)
+    
+    dq2a0rmu  = MassFunction(name='dq2a0rmu',  focals=[(0.40,     ), (0.38, 0.42)], masses=[0.5,0.5],  primary=False)
+    dq2a0rsig = MassFunction(name='dq2a0sig',  focals=[(0.10,     ), (0.09, 0.12)], masses=[0.5,0.5],  primary=False)
+    dq2a0r    = RandomVariable(name='dq2a0r',  dist='norm', params=[dq2a0rmu, dq2a0rsig], primary=False)
+    
+    q2        = MassFunction(name='q2', focals=[(q2a1,     ), (q2a1, dq2a0l, dq2a0r)], masses=[0.5,0.5], primary=True, incremental=True)
+    
+    dim_ex='hadamard'
+    
+    vars_epi = [q1a1mu, q1a1sig, dq1a0lmu, dq1a0lsig, dq1a0rmu, dq1a0rsig, q1,
+                q2a1mu, q2a1sig, dq2a0lmu, dq2a0lsig, dq2a0rmu, dq2a0rsig, q2]
+    vars_ale = [q1a1, dq1a0l, dq1a0r,
+                q2a1, dq2a0l, dq2a0r,]
+    return example_num, dim_ex, vars_ale, vars_epi,
+
+def example_e():
+    example_num = 4
+
+    mu1 = MassFunction(name='mu1', focals=[(14.79,14.79),(13.96,15.61)], masses=[0.5,0.5], primary=False)
+    sig1 = MassFunction(name='sig1', focals=[(4.17,4.17),(3.66,4.85)], masses = [0.5, 0.5], primary=False)
+    q1 = RandomVariable(name='q1', dist='norm', params=[mu1, sig1])
+    
+    inc_q2a1 = (RandomVariable(name='q2', dist='norm', params=[8,2], primary=False),) # set same name to share input samples
+    inc_q2a0 = (inc_q2a1[0],
+                RandomVariable(name='dq2a0l', dist='norm', params=[-0.6,0.08], primary=False), 
+                RandomVariable(name='dq2a0r', dist='norm', params=[0.4,0.11], primary=False))
+    q2 = MassFunction(name='q2', focals=[inc_q2a1, inc_q2a0], masses=[0.5,0.5], primary=True, incremental=True)
+    
+    dim_ex='cartesian'
+    vars_epi = [mu1,sig1, q2]
+    vars_ale = [q1, *inc_q2a0]
+    
+    return example_num, dim_ex, vars_ale, vars_epi,
+
+def test_to_dm():
+    logger2 = logging.getLogger('uncertainty.data_manager')
+    logger2.setLevel(level=logging.WARNING)
+    arg_vars = {'q1':'q1', 'q2':'q2'}
+    
+    def deterministic_mapping2(q1,q2, jid=None, result_dir='', working_dir=''):
+        return np.array((189/500*q1+3*q2)*16/3),
+
+    example_num, dim_ex, vars_ale, vars_epi = example_e()
+    
+    N_mcs_ale = 1000
+    N_mcs_epi = 100
+    
+    poly_uq = PolyUQ(vars_ale, vars_epi, dim_ex=dim_ex)
+    poly_uq.sample_qmc(N_mcs_ale, N_mcs_epi, check_sample_sizes=False)
+    dm_grid, dm_ale, dm_epi = poly_uq.to_data_manager('example',
+                                                    working_dir='/dev/shm/womo1998/',
+                                                    result_dir='/vegas/scratch/womo1998/modal_uq/poly_to_manager',
+                                                    overwrite=True)
+    dm_grid.evaluate_samples(deterministic_mapping2, arg_vars, {'stress': ()}, dry_run=True)
+    ':type dm_grid: DataManager'
+    dm_grid.clear_locks()
+    poly_uq.from_data_manager(dm_grid, 'stress')
+    intervals = poly_uq.estimate_imp(False)
+    #%%snakeviz
+
+    def stat_fun(a, weight, i_stat):
+        exceed = a>=260
+        return np.sum(weight[exceed])
+    
+    # def stat_fun(a, weight,):
+    #     return [np.average(a, weights=weight),]
+    
+    
+    n_stat = 1
+    # focals_Pf, hyc_mass = poly_uq.estimate_inc(intervals, stat_fun, n_stat)
+    focals_Pf, hyc_mass = poly_uq.optimize_inc(stat_fun, n_stat)
+    
+    if example_num==0: # Example 1
+        print(f'Result: \t {focals_Pf[0,0,0]*1e4} - {focals_Pf[0,0,1]*1e4}')
+        print('Reference:\t 10.03 - 10.03')
+    elif example_num==1: # Example b
+        print("Alpha-level 1 (Hypercube 0)")
+        print(f'Result: \t {focals_Pf[0,0,0]*1e4} (- {focals_Pf[0,0,1]*1e4})')
+        print('Reference:\t 10.27')
+        
+        print("Alpha-level 0 (Hypercube 3)")
+        print(f'Result: \t {focals_Pf[0,1,0]*1e4} - {focals_Pf[0,1,1]*1e4}')
+        print('Reference:\t 3.21 - 21.94')
+    elif example_num==2: # Example c
+        print("Alpha-level 1 (Hypercube 0)")
+        print(f'Result: \t {focals_Pf[0,0,0]*1e4} (- {focals_Pf[0,0,1]*1e4})')
+        print('Reference:\t 20.10')
+        
+        print("Alpha-level 0 (Hypercube 15)")
+        print(f'Result: \t {focals_Pf[0,1,0]*1e4} - {focals_Pf[0,1,1]*1e4}')
+        print('Reference:\t 2.33 - 120.16')
+    else:
+        n_hyc = len(hyc_mass)
+        for i_hyc in range(n_hyc):
+            print(f"(Hypercube {i_hyc})")
+    #         print(f'Result: \t {focals_Pf[0,i_hyc,0]*1e4} - {focals_Pf[0,i_hyc,1]*1e4}')
+            print(f'Result: \t {focals_Pf[0,i_hyc,0]*1e4} - {focals_Pf[0,i_hyc,1]*1e4}')
+        '''
+        Hypercube     Hypercube Imp     Hypercube Inc
+        0             0 (precise)       0 (complete)      alpha=1, beta=1  19.12 -  19.12
+        1             0 (precise)       1 (incomplete)    alpha=1, beta=0   1.66 - 111.55
+        2             1 (imprecise)     0 (complete)      alpha=0, beta=1   7.6  -  37.07
+        3             1 (imprecise)     1 (incomplete)    alpha=0, beta=0   0.54 - 183.12
+        missing       (consolidated with hyc 3)           alpha=0, beta=0   4.29 -  53.56
+         '''
+        
             
+    
+    
+
 if __name__ == '__main__':
-    pass
+    test_to_dm()
 
     # mu1 = MassFunction(name='mu1', focals=[(14.78,14.80),(13.96,15.61)], masses=[0.5,0.5], primary=False)
     # sig1 = MassFunction(name='sig1', focals=[(4.16,4.18),(3.66,4.85)], masses = [0.5, 0.5], primary=False)
@@ -1299,3 +1748,4 @@ if __name__ == '__main__':
     #           RandomVariable(name='dq1a0r', dist='norm', params=[0.5,0.06], primary=False))
     # q1 = MassFunction(name='q1', focals=[inc_q1a1, inc_q1a0], masses=[0.5,0.5], primary=True, incremental=True)
     # print(q1.support())
+    

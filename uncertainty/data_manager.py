@@ -54,10 +54,6 @@ lsrun ray start --address=$IPADDRESS:6379 --redis-password='5241590000000000' --
 
 # connect to dashboard at  http://141.54.148.100:5990/
 
-# encountered errors
-# workers fail due to slurm killing them
-# workers fail, if too many different jobs are submitted, i.e. this script is run too many times
-
 '''
 
 class HiddenPrints:
@@ -145,7 +141,8 @@ class MultiLock():
 
 class DataManager(object):
     def __init__(self, title, dbfile_in=None, dbfile_out=None,
-                 result_dir=None, working_dir=None, overwrite=False):
+                 result_dir=None, working_dir=None, overwrite=False, 
+                 entropy=None):
         '''
         initializes the object and checks all the provided directories and filenames
         '''
@@ -194,7 +191,11 @@ class DataManager(object):
                 logger.warning(
                     f'Output database file {os.path.join(result_dir, dbfile_out)} already exists and will be overwritten')
                 os.remove(os.path.join(result_dir, dbfile_out))
-
+        
+        if entropy is None:
+            entropy = np.random.randint(np.iinfo(np.int32).max)
+        self.entropy = entropy
+        
         if not os.path.exists(os.path.join(result_dir, dbfile_in)):
             # initialize database file
             with self.get_database(database='in', rw=True) as ds:
@@ -439,11 +440,12 @@ class DataManager(object):
 
                 if not os.path.exists(result_dir):
                     os.makedirs(result_dir, exist_ok=True)
-                    
-                try: #  to get LSF temporary working directory
-                    working_dir = os.path.join(f'/usr/tmp/{os.environ["LSB_JOBID"]}.tmpdir', jid)
-                except KeyError:
-                    working_dir = os.path.join('/dev/shm/womo1998/', jid)
+                
+                if working_dir is True:
+                    try: #  to get LSF temporary working directory
+                        working_dir = os.path.join(f'/usr/tmp/{os.environ["LSB_JOBID"]}.tmpdir', jid)
+                    except KeyError:
+                        working_dir = os.path.join('/dev/shm/womo1998/', jid)
                 
                 if working_dir is not None:
                     cwd = os.getcwd()
@@ -556,7 +558,7 @@ class DataManager(object):
                             #     if dim not in out_ ds.coords:
                             #         out_ds.coords[dim] = np.arange(default_len)
                         
-                        pos_dict = {dim:slice(None,siz) for dim, siz in zip(dims, value.shape)}
+                        pos_dict = {dim: slice(None, siz) for dim, siz in zip(dims, value.shape)}
                             
                         out_ds[name].loc[jid][pos_dict] = value
 
@@ -569,7 +571,7 @@ class DataManager(object):
         if isinstance(dry_run, str):
             if re_eval_sample is None:
                 re_eval_sample = dry_run
-            if re_eval_sample!=dry_run:
+            if re_eval_sample != dry_run:
                 logger.warning(f'Trying to debug sample {dry_run} but re-evaluating {re_eval_sample}')
                      
         # open database read-only, without locking
@@ -594,8 +596,8 @@ class DataManager(object):
                                   key=lambda _: np.random.random()):
 
                 if (not out_ds['_runtimes'][jid_ind].isnull()) \
-                    and re_eval_sample is None \
-                    and out_ds['_exceptions'][jid_ind].data.item()=='':
+                        and re_eval_sample is None \
+                        and out_ds['_exceptions'][jid_ind].data.item() == '':
                     
                     continue
 
@@ -658,7 +660,6 @@ class DataManager(object):
         '''
         drawing scatterplot matrices, bar charts, box plots etc.
         '''
-
         
         def categorize_data(datax, datay, categories):
             categories = np.array(categories)
@@ -916,8 +917,6 @@ class DataManager(object):
                 hexbinplot instead of scatter
                 histplot for double categorical data
                 
-                
-            
             seaborn likes to use pandas.DataFrame
             xarray.DataArrays can be converted to_pandas
                 0D -> xarray.DataArray
@@ -944,25 +943,7 @@ class DataManager(object):
 
             '''
             if func is not None:
-                rw = kwargs.pop('rw', False)
-                logger.info(f'Applying user-supplied function {func.__name__} to dataset and save results ({rw})...')
-                    
-                    
-                ds = func(ds, **kwargs)
-                if ds is None:
-                    logger.warning(f'{func} did not return a dataset. Exiting!')
-                
-                # workaround, since func may have returned a new object of ds, also with new indices etc.
-                # adding a underscore to be on the safe side
-                if rw:
-                    file, ext = os.path.splitext(self.dbfile_in)
-                    dbfile_out = file + '_processed' + ext
-                    dbpath = os.path.join(self.result_dir, dbfile_out)
-                    logger.debug(f'Saving database to {dbpath}')
-                    ds.close()
-                    ds.to_netcdf(dbpath, engine='h5netcdf')
-                    ds.close
-                    logger.info('We saved the database outside the safe loop, ensure to load the "processed" db for future use')
+                ds = self.apply_func(ds, func, **kwargs)
             
             if '_exceptions' in ds.data_vars:
                 ind = ds._exceptions=='' # no exception
@@ -1070,7 +1051,30 @@ class DataManager(object):
                            **kwargs)
         
         return fig
-
+    
+    def process_samples(self, ds, func, **kwargs):
+        rw = kwargs.pop('rw', False)
+        logger.info(f'Applying user-supplied function {func.__name__} to dataset and save results ({rw})...')
+            
+            
+        ds = func(ds, **kwargs)
+        if ds is None:
+            logger.warning(f'{func} did not return a dataset. Exiting!')
+        
+        # workaround, since func may have returned a new object of ds, also with new indices etc.
+        # adding a underscore to be on the safe side
+        if rw:
+            file, ext = os.path.splitext(self.dbfile_in)
+            dbfile_out = file + '_processed' + ext
+            dbpath = os.path.join(self.result_dir, dbfile_out)
+            logger.debug(f'Saving database to {dbpath}')
+            ds.close()
+            ds.to_netcdf(dbpath, engine='h5netcdf')
+            ds.close
+            logger.info('The database was saved outside the safe loop, ensure to load the "processed" db for future use')
+        
+        return ds
+        
     @classmethod
     def from_existing(cls, dbfile_in,
                       result_dir='/usr/scratch4/sima9999/work/modal_uq/',
@@ -1166,8 +1170,7 @@ class DataManager(object):
                     ds.attrs['dbfile_out'] = self.dbfile_out
                     ds.attrs['date'] = date.today().__repr__()
                     ds.attrs['title'] = self.title
-                    ds.attrs['entropy'] = np.random.randint(
-                        np.iinfo(np.int32).max)
+                    ds.attrs['entropy'] = self.entropy
                     ds.to_netcdf(dbpath, engine='h5netcdf')
                     #ds.to_netcdf(dbpath, format='netcdf4')
                     ds.close()
