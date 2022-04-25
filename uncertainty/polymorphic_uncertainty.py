@@ -7,18 +7,25 @@ import pandas as pd
 import scipy.stats
 import scipy.stats.qmc
 import scipy.optimize
+import scipy.interpolate
 from itertools import product, chain
 from uncertainty.data_manager import HiddenPrints, simplePbar, DataManager
 import uuid
+import os
 import sys
 import logging
+from hypothesis.strategies._internal.misc import none
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
 logger = logging.getLogger(__name__)
 # logging.warning('test')
 logger.setLevel(level=logging.INFO)
 
-
+'''
+TODO:
+save/load PolyUQ
+restore PolyUQ results from a finished DataManager run
+'''
 
 class UncertainVariable(object):
     '''
@@ -94,7 +101,13 @@ class RandomVariable(UncertainVariable):
         supp = [np.infty, -np.infty]
         for params in product(*eval_params): # nested for loop over all eval_params -> cartesian product = full factorial
             rv = self.dist_fun(*params)
-            this_supp = rv.ppf(percentiles)
+            if isinstance(self.dist_fun, scipy.stats.rv_continuous):
+                this_supp = rv.ppf(percentiles)
+            elif isinstance(self.dist_fun, scipy.stats.rv_discrete):
+                this_supp = rv.support()
+            else:
+                raise TypeError(f"Random variable {self} is neither discrete nor continuous but {type(rv)}.")
+            
             supp[0] = min(supp[0], this_supp[0])
             supp[1] = max(supp[1], this_supp[1])
         if np.isnan(supp).any():
@@ -127,7 +140,13 @@ class RandomVariable(UncertainVariable):
                 eval_params.append(param)
         # rv = self.dist_fun(*eval_params)
         # pdf = rv.pdf(*eval_params,values)
-        pdf = self.dist_fun.pdf(values, *eval_params)
+        dist_fun = self.dist_fun
+        if isinstance(dist_fun, scipy.stats.rv_continuous):
+            pdf = self.dist_fun.pdf(values, *eval_params)
+        elif isinstance(dist_fun, scipy.stats.rv_discrete):
+            pdf = self.dist_fun.pmf(values, *eval_params)
+        else:
+            raise RuntimeError('Distribution function is neither continuous nor discrete. Check your definitions.')
         return pdf
 #         return pdf / pdf.sum()
     
@@ -260,7 +279,7 @@ class MassFunction(UncertainVariable):
             if isinstance(ubound, UncertainVariable):
                 ubound = ubound.support(*args, **kwargs)[1]
             elif np.isnan(ubound):  # crisp set / interval / singleton
-                ubound = 0
+                ubound = lsupp[1]
                 
             if isinstance(incvar, UncertainVariable):
                 incsupp = incvar.support(*args, **kwargs)
@@ -405,7 +424,7 @@ def aggregate_mass(focals_stats, hyc_mass, nbin_fact=1, cum_mass=False):
      
     n_stat, n_hyc, _ = focals_stats.shape 
     n_bins_bel = np.ceil(np.sqrt(n_hyc) * nbin_fact).astype(int)
-    bins_bel = np.linspace(0, np.nanmax(focals_stats), n_bins_bel)
+    bins_bel = np.linspace(np.nanmin(focals_stats), np.nanmax(focals_stats), n_bins_bel)
     bel_stats = np.empty((n_stat, n_bins_bel))
     pl_stats = np.empty((n_stat, n_bins_bel))
     q_stats = np.empty((n_stat, n_bins_bel))    
@@ -417,7 +436,7 @@ def aggregate_mass(focals_stats, hyc_mass, nbin_fact=1, cum_mass=False):
         pl_stats[i_bin, :] = pl
         q_stats[i_bin, :] = q
 
-    return bel_stats, pl_stats, q_stats
+    return bel_stats, pl_stats, q_stats, bins_bel
 
  
 class PolyUQ(object):
@@ -450,8 +469,26 @@ class PolyUQ(object):
         self.vars_inc = tuple([var for var in vars_epi if not var.primary])
         
         self.dim_ex = dim_ex
+                  
+        self.N_mcs_ale = None
+        self.N_mcs_epi = None
+        self.percentiles = None
+        self.seed = None
+        self.inp_samp_prim = None
+        self.inp_suppl_ale = None
+        self.inp_suppl_epi = None
+                          
+        self.fcount = None
+        self.loop_ale = None
+        self.loop_epi = None
+        self.out_samp = None
+                          
+        self.imp_foc = None
+                          
+        self.focals_stats = None
+        self.focals_mass = None
         
-    def sample_qmc(self, N_mcs_ale=1000000, N_mcs_epi=100, percentiles=(0.0001, 0.9999), seed=None, check_sample_sizes=True):
+    def sample_qmc(self, N_mcs_ale=1000000, N_mcs_epi=100, percentiles=(0.0001, 0.9999), sample_hypercubes=False, seed=None, check_sample_sizes=True):
         '''
         A function to generate quasi Monte Carlo samples for mixed aleatory-epistemic uncertainty quantification
         
@@ -529,13 +566,23 @@ class PolyUQ(object):
         
         all_vars = list(all_vars.values()) 
              
-        # get (truncated) support (define upper and lower bounds, e.g. 99.99 % quantiles, 0.01% quantiles) 
-        supports = [var.support(percentiles) for var in all_vars]
-        # print(supports, all_vars)
-    
+        # get (truncated) support (define upper and lower bounds, e.g. 99.99 % quantiles, 0.01% quantiles)     
         # define equivalent uniform distributions
-        vars_unif =[scipy.stats.uniform(supp[0], supp[1] - supp[0]) for supp in supports] 
-    
+        vars_unif =[]
+        for var in all_vars:
+            supp = var.support(percentiles)
+            
+            assert np.all(np.abs(supp)!=np.infty)
+            
+            if isinstance(var, RandomVariable):    
+                if isinstance(var.dist_fun, scipy.stats.rv_discrete):
+                    vars_unif.append(scipy.stats.randint(*supp))
+                else:
+                    vars_unif.append(scipy.stats.uniform(supp[0], supp[1] - supp[0]))
+            else:
+                vars_unif.append(scipy.stats.uniform(supp[0], supp[1] - supp[0]))
+                 
+        
         # sampling parameters
         N_vars = len(all_vars)
     
@@ -662,10 +709,15 @@ class PolyUQ(object):
         
         return manager_grid, manager_ale, manager_epi
     
-    def from_data_manager(self, manager, ret_name):
+    def from_data_manager(self, manager, ret_name, ret_ind=None):
+        '''
+        ret_ind: dict 
+            {'dim':ndindex, ...}
+        '''
         
         logger.info(f"Importing propagated samples from DataManager using the output variable {ret_name}")
         
+        assert isinstance(ret_ind, dict)
         N_mcs_ale = self.N_mcs_ale
         N_mcs_epi = self.N_mcs_epi
         loop_ale = self.loop_ale
@@ -690,8 +742,17 @@ class PolyUQ(object):
             construct the grid from inds_ale (row indices) and inds_epi (column indices)
             return out_samp
             '''
+            assert out_ds.entropy == self.seed
             out_flat = out_ds[ret_name]
+            if ret_ind is not None:
+                out_flat = out_flat[ret_ind]
             assert out_flat.ndim == 1
+            if np.any(np.isnan(out_flat)):
+                logger.warning('Output contains NaNs, expect subsequent routines to behave unexpectedly.')
+            if np.any(np.isinf(out_flat)):
+                logger.warning('Output contains +/- infty, expect subsequent routines to behave unexpectedly.')
+            if not out_flat.dtype.kind in set('buif'):
+                logger.warning(f'Output dtype ({out_flat.dtype}) may cause trouble.')
             
             out_grid = np.empty((N_mcs_ale, N_mcs_epi))
             # .flat returns a  C-style order flat iterator over the array
@@ -855,9 +916,13 @@ class PolyUQ(object):
             # normalize
             p_weights[:, i_weight] /= np.sum(p_weights[:, i_weight])
         
-        return p_weights
+        if i_imp is None:
+            return p_weights
+        else:
+            return p_weights[:,0]
+        
     
-    def estimate_imp(self, check_sample_sizes=True, fig=None, xvar='', yvar=''):
+    def estimate_imp(self, interpolate=True, fig=None, xvar='', yvar='', opt_meth='Nelder-Mead'):
         
         '''    
         Estimate imprecise (quasi) Monte Carlo Samples from pre-computed mapping
@@ -893,8 +958,11 @@ class PolyUQ(object):
         for each statistic
             compute bel, pl and q
         '''
-        logger.info("Estimating imprecision intervals from sampled output sequences")
-        
+        if not interpolate:
+            logger.info("Estimating imprecision intervals from sampled output sequences...")
+        else:
+            logger.info(f"Estimating imprecision intervals by surrogate optimization ({opt_meth})...")
+            
         # Variables
         vars_ale = self.vars_ale
         vars_imp = self.vars_imp
@@ -925,7 +993,7 @@ class PolyUQ(object):
             ncols = np.ceil(n_imp_hyc/nrows).astype(int)
             axes = fig.subplots(nrows, ncols, sharex=True, sharey=True, squeeze=False).ravel()
             
-            for var in vars_ale+vars_imp:
+            for var in vars_ale + vars_imp:
                 if var.name == xvar:
                     xl, xu = var.support(self.percentiles)
                 elif var.name == yvar:
@@ -941,9 +1009,14 @@ class PolyUQ(object):
         # quantifiying imprecise QMC samples for all stochastic samples             
         # allocate arrays for interval optimization and subsequent statistical analyses
         imp_foc = np.full((N_mcs_ale, n_imp_hyc, 2), np.nan)
-        if check_sample_sizes:
-            sample_sizes = np.empty((N_mcs_ale, n_imp_hyc))
-        pbar = simplePbar(N_mcs_ale)
+        # if check_sample_sizes:
+        #     sample_sizes = np.empty((N_mcs_ale, n_imp_hyc))
+        
+        if interpolate:
+            pbar = simplePbar(n_imp_hyc * N_mcs_ale)
+        else:
+            pbar = simplePbar(N_mcs_ale)
+            
         for n_ale in range(N_mcs_ale):
             # each supplementary aleatory sample defines boundaries on imprecise variables
             #    do interval optimization using the pre-computed samples within these boundaries
@@ -961,17 +1034,66 @@ class PolyUQ(object):
                 if not var.primary:
                     var.freeze(this_inp_suppl[var.name])
                     # if n_ale==5: print(var, var.value)
-            
-            # find the indices of all epistemic samples that are within the boundaries defined by the stochastic sample
-            hyc_dat_inds = self.hypercube_sample_indices(inp_samp_prim, vars_imp, imp_hyc_foc_inds, N_mcs_imp)  # no-imp: np.ones(1, N_mcs_imp)
-            
-            if check_sample_sizes:
-                hyc_num_elems = np.sum(hyc_dat_inds, axis=1)
-                sample_sizes[n_ale,:] = hyc_num_elems
-            
-            # compute output intervals / focal sets for each imprecise hypercube
-            imp_foc[n_ale, :, :] = approximate_out_intervals(this_out, hyc_dat_inds)  # no-imp: [np.min(output), np.max(output)] where min==max
-            
+            if interpolate:
+                
+                # extract underlying numpy array in order of vars_epi for faster indexing 
+                xobs = inp_samp_prim[[var.name for var in vars_imp]].values[:N_mcs_epi, :]
+                nvars = len(vars_imp) 
+                # max_interp = scipy.interpolate.RBFInterpolator(xobs, -this_out)
+                interp = scipy.interpolate.RBFInterpolator(xobs,  this_out)
+                    
+                numeric_focals = [var.numeric_focals for var in vars_imp] # no-imp []
+                for i_hyc, hypercube in enumerate(imp_hyc_foc_inds):
+                    # get focal sets / intervals
+                    focals = [focals[ind] for focals, ind in zip(numeric_focals, hypercube)]
+                    
+                    if True:
+                        bounds = focals
+                        init = np.array([np.mean(bound) for bound in bounds])[:, np.newaxis]
+                        
+                        if opt_meth=='Nelder-Mead':
+                            initial_simplex = np.random.random((nvars+1,nvars))
+                            for i, (start, stop) in enumerate(bounds):
+                                initial_simplex[:, i] *= stop - start
+                                initial_simplex[:, i] += start
+                            options = {'initial_simplex':initial_simplex, 'adaptive':True}
+                        else:
+                            options={}
+                        
+                        resl = scipy.optimize.minimize(lambda x:  interp(x[np.newaxis,:]), init,  method=opt_meth, bounds=bounds, options=options)
+                        if not resl.success:
+                            logger.warning(f'Lower interval optimization did not succeed on hypercube {i_hyc} with message: {resl.message}')
+                            
+                        resu = scipy.optimize.minimize(lambda x: -interp(x[np.newaxis,:]), init,  method=opt_meth,  bounds=bounds, options=options)
+                        if not resu.success:
+                            logger.warning(f'Upper interval optimization did not succeed on hypercube {i_hyc} with message: {resu.message}')
+                        
+                        imp_foc[n_ale, i_hyc, :] = resl.fun, -resu.fun
+                    else:
+                        slices = []
+                        for start,stop in focals:
+                            if start==stop:
+                                step=1
+                            else:
+                                step= (stop - start) / 40
+                            slices.append(slice(start, stop + step, step))
+                        gridflat = np.mgrid[slices].reshape(nvars, -1).T
+                        
+                        out_interp = interp(gridflat)
+                        imp_foc[n_ale, i_hyc, :] = np.min(out_interp), np.max(out_interp)
+                    next(pbar)
+            else:
+                # find the indices of all epistemic samples that are within the boundaries defined by the stochastic sample
+                hyc_dat_inds = self.hypercube_sample_indices(inp_samp_prim, vars_imp, imp_hyc_foc_inds, N_mcs_imp)  # no-imp: np.ones(1, N_mcs_imp)
+                
+                # if check_sample_sizes:
+                #     hyc_num_elems = np.sum(hyc_dat_inds, axis=1)
+                #     sample_sizes[n_ale,:] = hyc_num_elems
+                
+                # compute output intervals / focal sets for each imprecise hypercube
+                imp_foc[n_ale, :, :] = approximate_out_intervals(this_out, hyc_dat_inds)  # no-imp: [np.min(output), np.max(output)] where min==max
+                next(pbar)
+                
             if fig is not None:
                 # plot the hypercube part of xvar,yvar as a rectangle over the sampled output points
                 numeric_focals = [var.numeric_focals for var in vars_imp]
@@ -984,24 +1106,24 @@ class PolyUQ(object):
                         yl, yu = numeric_focals[yind][foc_inds[yind]]
                         ax.add_patch(Rectangle((xl, yl), xu - xl, yu - yl, color='grey', alpha=0.5))
                         # ax.annotate(f'{n_ale}',((xl+xu)/2,(yl+yu)/2))
-            next(pbar)
             
-        if check_sample_sizes:
-            for i_imp_hyc in range(n_imp_hyc):
-                
-                max_samples = np.max(sample_sizes[:,i_imp_hyc])
-                if max_samples:
-                    bins = [10 ** i for i in range(-1, int(np.ceil(np.log10(max_samples))) + 1)]
-                    bins[0]=0
-                    bins[-1] = max_samples
-                    hist, bins = np.histogram(sample_sizes[:,i_imp_hyc],bins=bins)
-                else:
-                    hist, bins = [1,], [0, sample_sizes[0, i_imp_hyc]]
             
-                logger.debug(f'Imprecise hypercube {i_imp_hyc} epistemic sample size distribution:')
-                for lbin, ubin, count in zip(bins[:-1], bins[1:], hist):
-                    if count == 0: continue
-                    logger.debug(f'{lbin} < n < {ubin}: {count} aleatory samples')
+        # if check_sample_sizes:
+        #     for i_imp_hyc in range(n_imp_hyc):
+        #
+        #         max_samples = np.max(sample_sizes[:,i_imp_hyc])
+        #         if max_samples:
+        #             bins = [10 ** i for i in range(-1, int(np.ceil(np.log10(max_samples))) + 1)]
+        #             bins[0]=0
+        #             bins[-1] = max_samples
+        #             hist, bins = np.histogram(sample_sizes[:,i_imp_hyc],bins=bins)
+        #         else:
+        #             hist, bins = [1,], [0, sample_sizes[0, i_imp_hyc]]
+        #
+        #         logger.info(f'Imprecise hypercube {i_imp_hyc} epistemic sample size distribution:')
+        #         for lbin, ubin, count in zip(bins[:-1], bins[1:], hist):
+        #             if count == 0: continue
+        #             logger.info(f'{lbin} < n < {ubin}: {count} aleatory samples')
         
         # for no-imp: imp_foc[n_ale, 0, :] = [ np.min(output[n_ale]), np.max(output[n_ale])] where min==max
         
@@ -1072,6 +1194,7 @@ class PolyUQ(object):
         # imp_inc_prob = np.empty((N_mcs_inc, N_mcs_ale, n_imp_hyc))
         imp_stat_samp =  np.empty((N_mcs_inc, n_stat, n_imp_hyc, 2))
         pbar = simplePbar(N_mcs_inc)
+        logging.disable(logging.FATAL)
         for n_inc in range(N_mcs_inc):
             # incompleteness changes only the probability weights for already existing aleatory samples or aleatory imprecise intervals
 
@@ -1084,13 +1207,16 @@ class PolyUQ(object):
 
             # compute PDF/CDF for each interval boundary in each hypercube        
             # compute statistic(s) for each boundary and hypercube
+            
             for i_imp_hyc in range(n_imp_hyc):
                 for high_low in range(2):
                     
+                        
                     stat = stat_fun(imp_foc[:, i_imp_hyc, high_low], p_weights[:, i_imp_hyc], None, **stat_fun_kwargs)                    
                     imp_stat_samp[n_inc, :, i_imp_hyc, high_low] = stat
             next(pbar)
-                    
+        
+        logging.disable(logging.NOTSET)            
         '''
         histogram gives sample counts per bin
         consider a single bin and computing histograms of the upper and lower boundaries of random intervals
@@ -1136,13 +1262,18 @@ class PolyUQ(object):
                 
             hyc_mass[i_imp_hyc * n_inc_hyc: (i_imp_hyc + 1 ) * n_inc_hyc ] = imp_hyc_mass[i_imp_hyc] * inc_hyc_mass
             # print(hyc_mass[i_imp_hyc * n_inc_hyc: (i_imp_hyc + 1 ) * n_inc_hyc ])
-            
+        
+        self.focals_stats = focals_stats
+        self.focals_mass = hyc_mass
+        
         return focals_stats, hyc_mass
     
     def optimize_inc(self, stat_fun, n_stat, stat_fun_kwargs={}):
         
         '''
-
+        stat_fun must accept the following arguments:
+                samples, p_weights, i_stat (=the index of the statistic for multivalued statistics, e.g the number of a histogram bin)
+        stat_fun may additionally accept stat_fun_kwargs
         
         '''
         
@@ -1157,6 +1288,8 @@ class PolyUQ(object):
                 all but one entry of these are discarded -> resolved
             
             nevertheless it might be needed for verification purposes
+            
+            
             
             '''
             vars_inc = self.vars_inc
@@ -1226,7 +1359,10 @@ class PolyUQ(object):
                     stat = stat_fun(imp_foc[:, i_imp_hyc, high_low], p_weights[:, i_imp_hyc], None, **stat_fun_kwargs)                    
                     focals_stats[:, i_imp_hyc, high_low] = stat
             hyc_mass = imp_hyc_mass
-            
+        
+        self.focals_stats = focals_stats
+        self.focals_mass = hyc_mass
+        
         return focals_stats, hyc_mass
     
     def check_sample_sizes(self, vars_epi, samples, N_mcs_ale=None, N_mcs_epi=None):
@@ -1525,7 +1661,108 @@ class PolyUQ(object):
         
         return focals_stats, hyc_mass
             
+    def save_state(self, fname):
+
+        dirname, _ = os.path.split(fname)
+        if not os.path.isdir(dirname):
+            os.makedirs(dirname)
+        logger.info(f'Saving state of PolyUQ to {fname}. Make sure to store your variable definitions script externally...')
+        out_dict = {}
         
+        out_dict['self.dim_ex'] = self.dim_ex
+        
+        out_dict['self.N_mcs_ale'] = self.N_mcs_ale
+        out_dict['self.N_mcs_epi'] = self.N_mcs_epi
+        out_dict['self.percentiles'] = self.percentiles
+        out_dict['self.seed'] = self.seed
+        out_dict['self.inp_samp_prim'] = self.inp_samp_prim
+        out_dict['self.inp_suppl_ale'] = self.inp_suppl_ale
+        out_dict['self.inp_suppl_epi'] = self.inp_suppl_epi
+        
+        if self.inp_samp_prim is not None:
+            out_dict['self.inp_samp_prim.columns'] = self.inp_samp_prim.columns
+        else:
+            out_dict['self.inp_samp_prim.columns'] = None
+        if self.inp_suppl_ale is not None:
+            out_dict['self.inp_suppl_ale.columns'] = self.inp_suppl_ale.columns
+        else:
+            out_dict['self.inp_suppl_ale.columns'] = none
+        if self.inp_suppl_epi is not None:
+            out_dict['self.inp_suppl_epi.columns'] = self.inp_suppl_epi.columns
+        else:
+            out_dict['self.inp_suppl_epi.columns'] = None
+            
+        out_dict['self.fcount'] = self.fcount
+        out_dict['self.loop_ale'] = self.loop_ale
+        out_dict['self.loop_epi'] = self.loop_epi
+        out_dict['self.out_samp'] = self.out_samp
+        
+        out_dict['self.imp_foc'] = self.imp_foc
+        
+        out_dict['self.focals_stats'] = self.focals_stats
+        out_dict['self.focals_mass'] = self.focals_mass
+
+        np.savez_compressed(fname, **out_dict)
+        
+    def load_state(self, fname):
+        
+        def validate_array(arr):
+            '''
+            Determine whether the argument has a numeric datatype and if
+            not convert the argument to a scalar object or a list.
+        
+            Booleans, unsigned integers, signed integers, floats and complex
+            numbers are the kinds of numeric datatype.
+        
+            Parameters
+            ----------
+            array : array-like
+                The array to check.
+            
+            '''
+            _NUMERIC_KINDS = set('buifc')
+            if not arr.shape:
+                return arr.item()
+            elif arr.dtype.kind in _NUMERIC_KINDS:
+                return arr
+            else:
+                return list(arr)
+            
+        def to_dataframe(arr, columns):
+            if arr is None:
+                return None
+            else:
+                return pd.DataFrame(data=arr, columns=columns)
+        
+        logger.info('Now loading previous results from  {}'.format(fname))
+        
+        in_dict = np.load(fname, allow_pickle=True)
+        
+        self.dim_ex = validate_array(in_dict['self.dim_ex'])
+        
+        self.N_mcs_ale = validate_array(in_dict['self.N_mcs_ale'])
+        self.N_mcs_epi = validate_array(in_dict['self.N_mcs_epi'])
+        self.percentiles = validate_array(in_dict['self.percentiles'])
+        self.seed = validate_array(in_dict['self.seed'])
+        
+        self.inp_samp_prim = to_dataframe(validate_array(in_dict['self.inp_samp_prim']),
+                                          validate_array(in_dict['self.inp_samp_prim.columns']))
+        self.inp_suppl_ale = to_dataframe(validate_array(in_dict['self.inp_suppl_ale']),
+                                          validate_array(in_dict['self.inp_suppl_ale.columns']))
+        self.inp_suppl_epi = to_dataframe(validate_array(in_dict['self.inp_suppl_epi']),
+                                          validate_array(in_dict['self.inp_suppl_epi.columns']))
+        
+        self.fcount = validate_array(in_dict['self.fcount'])
+        self.loop_ale = validate_array(in_dict['self.loop_ale'])
+        self.loop_epi = validate_array(in_dict['self.loop_epi'])
+        self.out_samp = validate_array(in_dict['self.out_samp'])
+        
+        self.imp_foc = validate_array(in_dict['self.imp_foc'])
+        
+        self.focals_stats = validate_array(in_dict['self.focals_stats'])
+        self.focals_mass = validate_array(in_dict['self.focals_mass'])
+        
+    
 def generate_histogram_bins(data, axis=1, nbin_fact=1):
     # generate the bins
     # modified Freedman-Diaconis rule 
@@ -1658,6 +1895,9 @@ def example_e():
     return example_num, dim_ex, vars_ale, vars_epi,
 
 def test_to_dm():
+
+    
+    
     logger2 = logging.getLogger('uncertainty.data_manager')
     logger2.setLevel(level=logging.WARNING)
     arg_vars = {'q1':'q1', 'q2':'q2'}
@@ -1667,14 +1907,14 @@ def test_to_dm():
 
     example_num, dim_ex, vars_ale, vars_epi = example_e()
     
-    N_mcs_ale = 1000
+    N_mcs_ale = 100
     N_mcs_epi = 100
     
     poly_uq = PolyUQ(vars_ale, vars_epi, dim_ex=dim_ex)
     poly_uq.sample_qmc(N_mcs_ale, N_mcs_epi, check_sample_sizes=False)
     dm_grid, dm_ale, dm_epi = poly_uq.to_data_manager('example',
                                                     working_dir='/dev/shm/womo1998/',
-                                                    result_dir='/vegas/scratch/womo1998/modal_uq/poly_to_manager',
+                                                    result_dir='/usr/scratch4/sima9999/work/modal_uq/poly-dm-test',
                                                     overwrite=True)
     dm_grid.evaluate_samples(deterministic_mapping2, arg_vars, {'stress': ()}, dry_run=True)
     ':type dm_grid: DataManager'

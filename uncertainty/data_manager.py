@@ -76,17 +76,21 @@ def simplePbar(total):
     For the last call, additionally a carriage return must be printed
     
     '''
-    stepsize = 100 / total
-    last = 0
-    ncalls = 0
-    while True:
-        ncalls += 1
-        while ncalls * stepsize // 1 > last:
-            print('.', end='', flush=True)
-            last += 1
-        if ncalls == total:#np.isclose(step, 100):
-            print('', end='\n', flush=True)
-        yield
+    if 'RAY_JOB_ID' in os.environ:
+        while True:
+            yield
+    else:
+        stepsize = 100 / total
+        last = 0
+        ncalls = 0
+        while True:
+            ncalls += 1
+            while ncalls * stepsize // 1 > last:
+                print('.', end='', flush=True)
+                last += 1
+            if ncalls == total:#np.isclose(step, 100):
+                print('', end='\n', flush=True)
+            yield
         
 class MultiLock():
     '''
@@ -413,27 +417,17 @@ class DataManager(object):
             else:
                 address = 'auto'
             ray.init(address=address, _redis_password='5241590000000000')
-        '''
-        Ray fails with import error .. static TLS
-        this can be reconstructed by
-        import ray
-        ray.init()
-        from PyQt5 import QtCore, QtGui, QtWidgets
-        from scipy.linalg import _fblas
-        
-        probably because of intel optimized scipy ? 
-        but probably this is caused for another reason
-        
-        also happens, when matplotlib is being loaded because it wants to load pyqt
-        does not happen on a fresh python 3.9 install
-        '''
-        # @ray.remote
+
+        @ray.remote
         def setup_eval(func, jid, fun_kwargs,
                        result_dir=self.result_dir, working_dir=None, **kwargs):
-
+            return _setup_eval(func, jid, fun_kwargs, result_dir, working_dir, **kwargs)
+            
+        def _setup_eval(func, jid, fun_kwargs,
+                       result_dir=self.result_dir, working_dir=None, **kwargs):
             # lock files will stay there, make sure to delete them afterwards
             with simpleflock.SimpleFlock(os.path.join(self.result_dir, f'{jid}.lock'), timeout=1):
-                logger.info(f'start computing sample {jid}')
+                logger.debug(f'start computing sample {jid}')
 
                 now = time.time()
                 # create the working directory
@@ -480,7 +474,7 @@ class DataManager(object):
                         os.chdir(cwd)
                         subdirs = next(os.walk(working_dir))[1]
                         if len(subdirs) == 0:
-                            logger.info(f"Removing working_dir {working_dir}")
+                            logger.debug(f"Removing working_dir {working_dir}")
                             shutil.rmtree(working_dir, ignore_errors=True)
                         else:
                             logger.warning(
@@ -505,7 +499,7 @@ class DataManager(object):
                             nblock+=1
                     
                     runtime = time.time() - now        
-                    logger.info(
+                    logger.debug(
                         f'done computing sample {jid}. Runtime was {runtime} s')
                     
                 return jid, ret_vals, runtime
@@ -567,7 +561,8 @@ class DataManager(object):
                     out_ds['_runtimes'][out_ds.ids == jid] = runtime
 
                     logger.debug(out_ds['_runtimes'][out_ds.ids == jid])
-        
+              
+            
         if isinstance(dry_run, str):
             if re_eval_sample is None:
                 re_eval_sample = dry_run
@@ -616,8 +611,10 @@ class DataManager(object):
                     if isinstance(dry_run, str) and dry_run!=jid:
                         continue
                     # evaluates samples in the regular way, i.e. one at a time
-                    ret_sets = [setup_eval(func, jid, fun_kwargs, working_dir=working_dir, **kwargs)]
+                    ret_sets = [_setup_eval(func, jid, fun_kwargs, working_dir=working_dir, **kwargs)]
                     save_samples(ret_sets, ret_names, num_samples, default_len)
+                    
+                    logger.info(f"Finished another sample out of {in_ds.ids.size}.")
                 else:
                     #print(fun_kwargs)
                     worker_ref = setup_eval.remote(
@@ -633,7 +630,7 @@ class DataManager(object):
 
         while True:
             ready, wait = ray.wait(
-                list(futures), num_returns=min(len(futures), 10), timeout=300)
+                list(futures), num_returns=min(len(futures), 1000), timeout=180)
             try:
                 ret_sets = ray.get(ready)
             except ray.exceptions.RayTaskError as e:
