@@ -6,7 +6,7 @@
 #SBATCH --threads-per-core=1	                        # number of threads per core
 #SBACTH --ntasks=1
 #SBATCH --mem=3875					# 3875 (16 jobs per node = 62 GB)
-#SBATCH --array=24-50					# with task limit %N to avoid overusing licenses
+#SBATCH --array=16-50					# with task limit %N to avoid overusing licenses
 #SBATCH --output=/vegas/scratch/womo1998/modal_uq/log/conv_polyUQ_%A_%a.out # %A jobid, %a taskid
 #SBATCH --job-name=conv_polyUQ
 

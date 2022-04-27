@@ -14,7 +14,6 @@ import uuid
 import os
 import sys
 import logging
-from hypothesis.strategies._internal.misc import none
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
 logger = logging.getLogger(__name__)
@@ -1040,7 +1039,12 @@ class PolyUQ(object):
                 xobs = inp_samp_prim[[var.name for var in vars_imp]].values[:N_mcs_epi, :]
                 nvars = len(vars_imp) 
                 # max_interp = scipy.interpolate.RBFInterpolator(xobs, -this_out)
-                interp = scipy.interpolate.RBFInterpolator(xobs,  this_out)
+                if interpolate == 'rbf':
+                    interp = scipy.interpolate.RBFInterpolator(xobs,  this_out)
+                elif interpolate == 'linear':
+                    interp = scipy.interpolate.LinearNDInterpolator(xobs,  this_out)
+                else:
+                    interp = scipy.interpolate.NearestNDInterpolator(xobs,  this_out)
                     
                 numeric_focals = [var.numeric_focals for var in vars_imp] # no-imp []
                 for i_hyc, hypercube in enumerate(imp_hyc_foc_inds):
@@ -1059,11 +1063,14 @@ class PolyUQ(object):
                             options = {'initial_simplex':initial_simplex, 'adaptive':True}
                         else:
                             options={}
-                        
-                        resl = scipy.optimize.minimize(lambda x:  interp(x[np.newaxis,:]), init,  method=opt_meth, bounds=bounds, options=options)
+                        if isinstance(interp, scipy.interpolate.interpnd.LinearNDInterpolator):
+                            interp.fill_value = np.max(this_out)
+                        resl = scipy.optimize.minimize(lambda x: interp(x[np.newaxis,:]), init,  method=opt_meth, bounds=bounds, options=options)
                         if not resl.success:
                             logger.warning(f'Lower interval optimization did not succeed on hypercube {i_hyc} with message: {resl.message}')
                             
+                        if isinstance(interp, scipy.interpolate.interpnd.LinearNDInterpolator):
+                            interp.fill_value = np.min(this_out)
                         resu = scipy.optimize.minimize(lambda x: -interp(x[np.newaxis,:]), init,  method=opt_meth,  bounds=bounds, options=options)
                         if not resu.success:
                             logger.warning(f'Upper interval optimization did not succeed on hypercube {i_hyc} with message: {resu.message}')
@@ -1343,6 +1350,9 @@ class PolyUQ(object):
                             reslu = scipy.optimize.minimize(wrapper, init, ( 1, stat_fun, imp_foc[:,i_imp_hyc, 1], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
                             resuu = scipy.optimize.minimize(wrapper, init, (-1, stat_fun, imp_foc[:,i_imp_hyc, 1], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
                             
+                            for res in [resll, resul, reslu, resuu]:
+                                if not res.success:
+                                    logger.warning(f'Interval optimization did not succeed on hypercube {i_hyc} with message: {res.message}')
                         finally:
                             logging.disable(logging.NOTSET)
                             focals_stats[i_stat, i_hyc, 0] = min( resll.fun,  reslu.fun)

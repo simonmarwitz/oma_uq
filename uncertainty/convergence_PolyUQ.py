@@ -134,22 +134,22 @@ def main():
     arg_vars = {'q1':'q1', 'q2':'q2'}
     
     N_mcs = int(10**(float(sys.argv[2])/8))
-    # 2 - 7 in steps of 0.125 -> 16 ... 56
+    # 2 - 7 in steps of 0.125 -> 100...1333521 -> 16...50
     example_num = int(sys.argv[1])
-    
+    print('N_mcs', N_mcs)
     # if example_num==4:
         # N_mcs = np.floor(np.sqrt(N_mcs)).astype(int) # that makes N_mcs == fcount
 
     now = time.time()
     _, dim_ex, vars_ale, vars_epi, = [example_a, example_b, example_c, example_d, example_e][example_num]()
-    
+    # 1 3 4
     poly_uq = PolyUQ(vars_ale, vars_epi, dim_ex=dim_ex)
     if True:
         poly_uq.sample_qmc(N_mcs, N_mcs, check_sample_sizes=False)
         
         poly_uq.propagate(deterministic_mapping2, arg_vars)
         fcount = poly_uq.fcount
-        poly_uq.estimate_imp(False)
+        poly_uq.estimate_imp(True, opt_meth = 'Nelder-Mead')
         
         def stat_fun(a, weight, i_stat):
             exceed = a>=260
@@ -330,14 +330,14 @@ def analyze2():
         fig.legend(handles=legend_elements, loc=(0.625,0.24)).set_draggable(True)
         fig.subplots_adjust(top=0.97,bottom=0.110, left=0.075, right=0.9, hspace=0.07, wspace=0.035)
         plt.xlim((1e3,1333521))
-        fig.savefig(f'/vegas/users/staff/womo1998/Projects/2019_OMA_UQ/tex/figures/math_basics/convergence_poly_uq.pdf')
-        fig.savefig(f'/vegas/users/staff/womo1998/Projects/2019_OMA_UQ/tex/figures/math_basics/convergence_poly_uq.png', dpi=300)
+        # fig.savefig(f'/vegas/users/staff/womo1998/Projects/2019_OMA_UQ/tex/figures/math_basics/convergence_poly_uq.pdf')
+        # fig.savefig(f'/vegas/users/staff/womo1998/Projects/2019_OMA_UQ/tex/figures/math_basics/convergence_poly_uq.png', dpi=300)
 
         plt.show()
 
 if __name__ == '__main__':
-    # sys.argv.append(4)
-    # sys.argv.append(44)
+    sys.argv.append(3)
+    sys.argv.append(30)
     main()
     # for i in range(8):
         # plt.figure()
