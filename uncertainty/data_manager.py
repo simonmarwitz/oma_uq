@@ -6,23 +6,20 @@ import sys
 import time
 from datetime import date
 import simpleflock
+import psutil
 #import ray
-import coloredlogs
 import logging
 from contextlib import contextmanager
 import uuid
 import numpy as np
 import xarray as xr
-#import itertools
-#coloredlogs.install()
-#global logger
-#LOG = logging.getLogger('')
+
 logger = logging.getLogger(__name__)
 logger.setLevel(level=logging.INFO)
 
 global pid
 pid = str(os.getpid())
-        
+
 # importing here to resolve import errors in ray
 # as usually, data_manager is part of the environment
 # all of its dependencies are pickled and so on
@@ -76,21 +73,20 @@ def simplePbar(total):
     For the last call, additionally a carriage return must be printed
     
     '''
-    if 'RAY_JOB_ID' in os.environ:
-        while True:
-            yield
-    else:
-        stepsize = 100 / total
-        last = 0
-        ncalls = 0
-        while True:
-            ncalls += 1
-            while ncalls * stepsize // 1 > last:
+    stepsize = 100 / total
+    last = 0
+    ncalls = 0
+    while True:
+        ncalls += 1
+        while ncalls * stepsize // 1 > last:
+            if 'RAY_JOB_ID' in os.environ:
+                print(f'Progress: {ncalls / total * 100:1.3f} %')
+            else:
                 print('.', end='', flush=True)
-                last += 1
-            if ncalls == total:#np.isclose(step, 100):
-                print('', end='\n', flush=True)
-            yield
+            last += 1
+        if ncalls == total:#np.isclose(step, 100):
+            print('', end='\n', flush=True)
+        yield
         
 class MultiLock():
     '''
@@ -266,6 +262,8 @@ class DataManager(object):
             ds.coords['ids'] = ids
             ds['_runtimes'] = (['ids'], np.full(
                 shape=(num_samples,), fill_value=np.nan))
+            ds['_exceptions'] = (['ids'], np.full(
+                shape=(num_samples,), fill_value=''))
 
     def provide_sample_inputs(self, arrays, names=None, attrs=None):
         '''
@@ -317,6 +315,8 @@ class DataManager(object):
             ds.coords['ids'] = ids
             ds['_runtimes'] = (['ids'], np.full(
                 shape=(num_samples,), fill_value=np.nan))
+            ds['_exceptions'] = (['ids'], np.full(
+                shape=(num_samples,), fill_value=''))
 
     def enrich_sample_set(self, total_samples):
         '''
@@ -369,6 +369,8 @@ class DataManager(object):
             new_ds.coords['ids'] = ids
             new_ds['_runtimes'] = (['ids'], np.full(
                 shape=(num_samples,), fill_value=np.nan))
+            new_ds['_exceptions'] = (['ids'], np.full(
+                shape=(num_samples,), fill_value=''))
             for name in ds:
                 new_ds[name] = (['ids'], np.full(
                     shape=(num_samples,), fill_value=np.nan))
@@ -381,7 +383,10 @@ class DataManager(object):
 
     def evaluate_samples(self, func, arg_vars, ret_names,
                          chwdir=True, re_eval_sample=None,
-                         dry_run=False, default_len=30, **kwargs):
+                         dry_run=False, default_len=30, 
+                         chunks_submit=None, chunks_save=1000,
+                         check_diskspace=False, scramble_evaluation=True,
+                         **kwargs):
         '''
 
         func is a function that
@@ -407,8 +412,7 @@ class DataManager(object):
         dry_run may be a boolean, or a specific id_number for debugging purposes
         
         uses ray to distribute tasks to a number of workers.
-        a ray head process must be started on stratos
-        see top of file for a sbatch file to start a ray worker
+        a ray head process must be started in an interactive session
 
         '''
         if not dry_run and not ray.is_initialized():
@@ -420,16 +424,19 @@ class DataManager(object):
 
         @ray.remote
         def setup_eval(func, jid, fun_kwargs,
-                       result_dir=self.result_dir, working_dir=None, **kwargs):
-            return _setup_eval(func, jid, fun_kwargs, result_dir, working_dir, **kwargs)
+                       result_dir=self.result_dir, working_dir=None, 
+                       check_diskspace=False, **kwargs):
+            return _setup_eval(func, jid, fun_kwargs, result_dir, working_dir, 
+                               check_diskspace, **kwargs)
             
         def _setup_eval(func, jid, fun_kwargs,
-                       result_dir=self.result_dir, working_dir=None, **kwargs):
+                       result_dir=self.result_dir, working_dir=None, 
+                       check_diskspace=False,**kwargs):
             # lock files will stay there, make sure to delete them afterwards
-            with simpleflock.SimpleFlock(os.path.join(self.result_dir, f'{jid}.lock'), timeout=1):
+            now = time.time()
+            with simpleflock.SimpleFlock(os.path.join(result_dir, f'{jid}.lock'), timeout=1):
                 logger.debug(f'start computing sample {jid}')
-
-                now = time.time()
+                
                 # create the working directory
 
                 if not os.path.exists(result_dir):
@@ -458,7 +465,11 @@ class DataManager(object):
                     if not isinstance(ret_vals, tuple):
                         raise RuntimeError('The evaluation function must return a tuple.')
                 except Exception as e:
-                    logger.warning(f'sample {jid} failed')
+                    if "LSB_JOBID" in os.environ:
+                        lsb_jobid = os.environ["LSB_JOBID"]
+                    else:
+                        lsb_jobid = None
+                    logger.warning(f'sample {jid} in job {lsb_jobid} failed')
                     traceback.print_exc()
                     ret_vals = repr(e)
                     error = True
@@ -471,6 +482,9 @@ class DataManager(object):
                             shutil.move(err_file, dst)
                 finally:
                     if working_dir is not None:
+                        # for open_file in psutil.Process().open_files():
+                        #     if working_dir in open_file.path:
+                        #         os.close(open_file.fd)
                         os.chdir(cwd)
                         subdirs = next(os.walk(working_dir))[1]
                         if len(subdirs) == 0:
@@ -480,14 +494,15 @@ class DataManager(object):
                             logger.warning(
                                 f"Cannot remove working_dir {working_dir} (contains subdirectories)")
                         
-                        base_dir,_ = os.path.split(working_dir)
-                        freedisk=shutil.disk_usage(base_dir).free/(1024**3)
-                        nblock = 0
-                        while freedisk < 1 and nblock < 30: # other mysterious errors are caused by a full RAM disk (which we use as a working dir)
-                            logger.warning(f'Working dir disk is almost full: {freedisk} GB free. Blocking for 30 s.')
-                            time.sleep(30)
+                        if check_diskspace:
+                            base_dir,_ = os.path.split(working_dir)
                             freedisk=shutil.disk_usage(base_dir).free/(1024**3)
-                            nblock+=1
+                            nblock = 0
+                            while freedisk < 1 and nblock < 30: # other mysterious errors are caused by a full RAM disk (which we use as a working dir)
+                                logger.warning(f'Working dir disk is almost full: {freedisk} GB free. Blocking for 30 s.')
+                                time.sleep(30)
+                                freedisk=shutil.disk_usage(base_dir).free/(1024**3)
+                                nblock+=1
                             
                     if error:
                         free = int(os.popen('free -t -g').readlines()[-1].split()[-1])
@@ -498,15 +513,20 @@ class DataManager(object):
                             free = int(os.popen('free -t -g').readlines()[-1].split()[-1])
                             nblock+=1
                     
-                    runtime = time.time() - now        
-                    logger.debug(
-                        f'done computing sample {jid}. Runtime was {runtime} s')
+            runtime = time.time() - now        
+            logger.debug(f'done computing sample {jid}. Runtime was {runtime} s')
                     
-                return jid, ret_vals, runtime
+                    
+            return jid, ret_vals, runtime
             
-        def save_samples(ret_sets, ret_names, num_samples, default_len):
-            with self.get_database(database='out', rw=True) as out_ds:
-                
+        def save_samples(ret_sets, ret_names, total_num_samples, default_len):
+            
+            if dry_run: rw=False
+            else: rw=True
+            # rw=True
+            # now=time.time()
+            with self.get_database(database='out', rw=rw) as out_ds, self.get_database('in', False) as in_ds:
+                # print(f'Cum runtime get_database {time.time() - now :1.3f}')
                 if not ret_sets:
                     return
                 
@@ -517,18 +537,41 @@ class DataManager(object):
                 else:
                     logger.warning(f"All ret_sets are empty {ret_sets}")
                     #return
-
+                # initialize arrays in output database
+                for (name, dims), value in zip(ret_names.items(), ret_vals):
+                    if not isinstance(value, np.ndarray):
+                        logger.warning(f'Output for {name} should be a (0- or higher-dimensional) numpy array.')
+                        value = np.array(value)
+                    if name not in out_ds.data_vars:
+                        ndims = len(dims)
+                        dtype = value.dtype
+                        if isinstance(default_len,(int,float)):
+                            shape = (total_num_samples, *[default_len] * ndims)
+                        elif isinstance(default_len, (dict)):  # dict of {dim:len,...}
+                            shape = [total_num_samples]
+                            for dim in dims:
+                                shape.append(default_len[dim])
+                            
+                        out_ds[name] = (('ids', *dims), np.full(
+                            shape=shape, fill_value=np.nan, dtype=dtype))
+                
+                if '_exceptions' not in out_ds.data_vars:
+                    out_ds['_exceptions'] = (['ids'], np.full(
+                        shape=(total_num_samples,), fill_value=''))
+                    
                 for jid, ret_vals, runtime in ret_sets:
-
-                    if '_exceptions' not in out_ds.data_vars:
-                        out_ds['_exceptions'] = (['ids'], np.full(
-                            shape=(num_samples,), fill_value=''))
+                    
+                    # avoid multiple coordinate lookups, 
+                    # careful handling of copies vs. view is required, 
+                    # e.g. assign single values to index: [{}] otherwise it is a copy
+                    this_ds = out_ds.loc[dict(ids=jid)]
+                    
                     if isinstance(ret_vals, str):  # exception repr
-                        out_ds['_exceptions'][out_ds.ids == jid] = ret_vals
+                        this_ds['_exceptions'][{}] = ret_vals
                         continue
                     else:
                         # reset previous exceptions
-                        out_ds['_exceptions'][out_ds.ids == jid] = ''
+                        this_ds['_exceptions'][{}] = ''
 
                     assert len(ret_names) == len(ret_vals)
 
@@ -536,31 +579,22 @@ class DataManager(object):
                         if not isinstance(value, np.ndarray):
                             logger.warning(f'Output for {name} should be a (0- or higher-dimensional) numpy array.')
                             value = np.array(value)
-                        if name not in out_ds.data_vars:
-                            ndims = len(dims)
-                            dtype = value.dtype
-                            if isinstance(default_len,(int,float)):
-                                shape = (num_samples, *[default_len] * ndims)
-                            elif isinstance(default_len, (dict)):  # dict of {dim:len,...}
-                                shape = [num_samples]
-                                for dim in dims:
-                                    shape.append(default_len[dim])
-                                
-                            out_ds[name] = (('ids', *dims), np.full(
-                                shape=shape, fill_value=np.nan, dtype=dtype))
-                            # for dim in dims:
-                            #     if dim not in out_ ds.coords:
-                            #         out_ds.coords[dim] = np.arange(default_len)
                         
                         pos_dict = {dim: slice(None, siz) for dim, siz in zip(dims, value.shape)}
                             
-                        out_ds[name].loc[jid][pos_dict] = value
+                        this_ds[name][pos_dict] = value
 
-                        logger.debug(out_ds[name][out_ds.ids == jid])
+                        # logger.debug(out_ds[name].loc[jid])
 
-                    out_ds['_runtimes'][out_ds.ids == jid] = runtime
-
-                    logger.debug(out_ds['_runtimes'][out_ds.ids == jid])
+                    this_ds['_runtimes'][{}] = runtime
+                    
+                    if logger.isEnabledFor(logging.DEBUG): 
+                        logger.debug(out_ds.loc[dict(ids=jid)])
+                        logger.debug(in_ds.loc[dict(ids=jid)])
+                
+                # print(f'Cum runtime: loop over samples {time.time() - now :1.3f}')
+            
+            # print(f'Cum runtime: save/close database {time.time() - now :1.3f}')
               
             
         if isinstance(dry_run, str):
@@ -576,31 +610,45 @@ class DataManager(object):
                 os.chdir(self.working_dir)
                 logger.debug(f'current working directory {self.working_dir}')
 
-            num_samples = in_ds.ids.size
+            total_num_samples = in_ds.ids.size
             
             if re_eval_sample is not None:
                 in_ds = in_ds.sel(ids=[re_eval_sample])
-
+                ids=in_ds.ids
+            else:
+                # ids=in_ds.ids
+                done_ids = (~out_ds['_runtimes'].isnull()) & (out_ds['_exceptions']=='')
+                # done_ids = (~out_ds['damp_freqs'].isnull().all(dim='modes')) & (out_ds['_exceptions']=='')
+                ids = in_ds.ids[~done_ids]
+            
             futures = []
 
             # TODO: Improvement: Estimate job size and submit big jobs first,
             # i.e. sort key = jobsize, but also add some of the smallest jobs
             # to the beginning to see any errors quickly
+            if chunks_submit is None:
+                chunks_submit = ids.size
             
-            for jid_ind in sorted(range(in_ds.ids.size),
-                                  key=lambda _: np.random.random()):
-
-                if (not out_ds['_runtimes'][jid_ind].isnull()) \
-                        and re_eval_sample is None \
-                        and out_ds['_exceptions'][jid_ind].data.item() == '':
-                    
-                    continue
-
-                jid = in_ds['ids'][jid_ind].copy().item()
+            logger.info(f'{len(ids)} samples out of {total_num_samples} to be done . Submitting at most {chunks_submit}.')
+            
+            now=time.time()
+            
+            if scramble_evaluation: # if scramble sample evaluation
+                keyfun = lambda _: np.random.random()
+            else:
+                keyfun = None
+            
+            for jid_ind in sorted(range(ids.size),
+                                  key=keyfun):
+                
+                jid=ids[jid_ind].item()
+                
+                this_ds = in_ds.sel(ids=jid).copy()
+                
 
                 fun_kwargs = {}
                 for arg, var in arg_vars.items():
-                    fun_kwargs[arg] = in_ds[var][jid_ind].copy().item()
+                    fun_kwargs[arg] = this_ds[var].item()
 
                 if chwdir:
                     working_dir = os.path.join(self.working_dir, jid)
@@ -611,45 +659,60 @@ class DataManager(object):
                     if isinstance(dry_run, str) and dry_run!=jid:
                         continue
                     # evaluates samples in the regular way, i.e. one at a time
-                    ret_sets = [_setup_eval(func, jid, fun_kwargs, working_dir=working_dir, **kwargs)]
-                    save_samples(ret_sets, ret_names, num_samples, default_len)
+                    
+                    futures.append(_setup_eval(func, jid, fun_kwargs, working_dir=working_dir,
+                                            check_diskspace=check_diskspace, **kwargs))
                     
                     logger.info(f"Finished another sample out of {in_ds.ids.size}.")
                 else:
                     #print(fun_kwargs)
                     worker_ref = setup_eval.remote(
-                        func, jid, fun_kwargs, working_dir=working_dir, **kwargs)
+                        func, jid, fun_kwargs, working_dir=working_dir, 
+                        check_diskspace=check_diskspace, **kwargs)
                     
                     futures.append(worker_ref)
+                    
+                    if len(futures)>= chunks_submit:
+                        break
         
         futures = set(futures)
         logger.info(f'{len(futures)} jobs have been submitted for evaluation.')
 
         if dry_run:
+            
+            save_samples(futures, ret_names, total_num_samples, default_len)
             return
-
+        
+        sav_time = 480
         while True:
             ready, wait = ray.wait(
-                list(futures), num_returns=min(len(futures), 1000), timeout=180)
+                list(futures), num_returns=min(len(futures), chunks_save), timeout=int(sav_time * 2))
+            
+            comp_time = time.time() - now
+            
             try:
                 ret_sets = ray.get(ready)
             except ray.exceptions.RayTaskError as e:
                 traceback.print_exc()
                 logger.warning(repr(e))
                 ret_sets = []
-                
+            logger.info(f'Finished {len(ready)} samples in {time.time() - now:1.2f} s')    
             
-            save_samples(ret_sets, ret_names, num_samples, default_len)
-
+            now=time.time()
+            save_samples(ret_sets, ret_names, total_num_samples, default_len)
+            sav_time = time.time() - now
+            
             if len(wait) == 0:
-                break
+                logger.info(                
+                    f"Finished all remaining {len(ready)} samples in {comp_time:1.2f} s (async. save time: {sav_time:1.2f} s).")
 
-            size_before = len(futures)
+                break
+            
             futures.difference_update(ready)
             logger.info(
-                f"Finished {len(ready)} samples. Remaining {len(futures)} samples. (before {size_before})")
-        ray.shutdown()
-        return
+                f"Finished {len(ready)} samples in {comp_time:1.2f} s (async. save time: {sav_time:1.2f} s). Remaining {len(futures)} samples.")
+        # ray.shutdown()
+        return len(ids) - chunks_submit
 
     def post_process_samples(self, db='merged', func=None, 
                              names=None, labels=None,
@@ -1091,7 +1154,10 @@ class DataManager(object):
 
             title = ds.attrs['title']
             cls.title = title
-
+            
+            entropy = ds.attrs['entropy']
+            cls.entropy = entropy 
+            
             result_dir_ = ds.attrs['result_dir']
             if result_dir_ != result_dir:
                 logger.warning(
@@ -1104,6 +1170,8 @@ class DataManager(object):
 
             dbfile_out = ds.attrs['dbfile_out']
             cls.dbfile_out = dbfile_out
+            
+            
             # create and  populate output db with the ids at least
             if not os.path.exists(os.path.join(result_dir, dbfile_out)):
                 logger.info(
@@ -1113,6 +1181,8 @@ class DataManager(object):
                     out_ds.coords['ids'] = ids
                     out_ds['_runtimes'] = (['ids'], np.full(
                         shape=(len(ids),), fill_value=np.nan))
+                    out_ds['_exceptions'] = (['ids'], np.full(
+                        shape=(len(ids),), fill_value=''))
 
         return cls(title, dbfile_in, dbfile_out, result_dir, working_dir)
 
@@ -1157,7 +1227,7 @@ class DataManager(object):
 
         if not os.path.exists(dbpath):
             logger.debug(f'file {dbfile} will be created')
-            with MultiLock(dbpath):
+            with simpleflock.SimpleFlock(f"{dbpath}.lock"):
                 # create database, if it does not exist
                 if not os.path.exists(dbpath):
                     ds = xr.Dataset()
@@ -1191,14 +1261,16 @@ class DataManager(object):
         else:
             # create lock
             # TODO: locks seem to race on each other....
-            with MultiLock(dbpath):
+            with simpleflock.SimpleFlock(f"{dbpath}.lock"):
                 try:
+                    # print(f'open database {dbpath}')
                     # open database
                     ds = xr.open_dataset(dbpath, engine='h5netcdf')
                     #ds = xr.open_dataset(dbpath)
                     ds.load()
                     # ds.close()
                     # yield database
+                    # print(f'yield database {dbpath}')
                     yield ds
                 except BaseException:
                     raise
@@ -1206,10 +1278,16 @@ class DataManager(object):
                     # save and close database
                     ds.close()
                     logger.debug(f'Saving database to {dbpath}')
-                    ds.to_netcdf(dbpath, engine='h5netcdf', invalid_netcdf=True)
-                    #ds.to_netcdf(dbpath, format='netcdf4')
+                    tempfile = dbpath + '.tmp'
+                    # ensure any error during saving does not destroy previous results
+                    ds.to_netcdf(tempfile, engine='h5netcdf', invalid_netcdf=True)
                     ds.close()
-            # remove lock automatically
+                    # that still leaves the copy process vulnerable to interrupts, etc.
+                    # shutil.copy(tempfile, dbpath)
+                    if os.path.exists(dbpath):
+                        os.remove(dbpath)
+                    os.rename(tempfile, dbpath)
+                # remove lock automatically
 
         return
 
@@ -1648,5 +1726,55 @@ def test():
         # data_manager.clear_locks()
         
 if __name__ == '__main__':
-    test_imports()
+    logger.setLevel(level=logging.INFO)
+    result_dir = '/usr/scratch4/sima9999/work/modal_uq/uq_modal_beam/samples/'
+    
+    dm_grid = DataManager.from_existing('uq_modal_beam.nc', result_dir, 
+                                        working_dir='/dev/shm/womo1998/')
+    dm_grid.dbfile_out = os.path.join(dm_grid.result_dir, 'uq_modal_beam_valid.nc')
+    
+    from UQ_Modal_Beam import mapping_validate
+    arg_vars = {'b':'b',
+            't':'t',
+            'add_mass':'add_mass',
+            'N_wire':'N_wire',
+            'A_wire':'A_wire',
+            'zeta':'zeta',
+            'dD':'dD',
+            'ice_occ':'ice_occ',
+            'ice_mass':'ice_mass',}
+    
+    # populate output db with the ids at least
+    # with dm_grid.get_database(database='out', rw=True) as out_ds, dm_grid.get_database(database='in', rw=False) as in_ds:
+    #     ids = in_ds.coords['ids']
+    #     num_samples=len(ids)
+    #     out_ds.coords['ids'] = ids
+    #     out_ds['_runtimes'] = (['ids'], np.full(
+    #         shape=(num_samples,), fill_value=np.nan))
+    #     out_ds['_exceptions'] = (['ids'], np.full(
+    #         shape=(num_samples,), fill_value=''))
+    
+    dm_grid.evaluate_samples(mapping_validate, arg_vars, ret_names={'valid':(),'time':()}, chwdir=False, dry_run=True, chunks_submit=100000)
+    
+    # with dm_grid.get_database('in') as in_ds:
+    #     res=True
+    #     n=0
+    #     while True:
+    #         n+=1
+    #         jid_ind = np.random.randint(0,9999693)
+    #         ds = in_ds.isel(ids=jid_ind)
+    #         ds = in_ds.sel(ids='5ce124bb763f_fb454419231b')
+    #         print(ds)
+    #         jid = ds['ids'].item()
+    #         fun_kwargs={}
+    #         for arg,var in arg_vars.items():
+    #             fun_kwargs[arg]=ds[var].item()
+    #         print(fun_kwargs)
+    #         res=mapping_validate(**fun_kwargs,jid=jid, working_dir='/dev/shm/womo1998',result_dir='/usr/scratch4/sima9999/work/modal_uq/uq_modal_beam/samples/', skip_existing=False)
+    #         print(res)
+    #         break
+
+        
+    # test_imports()
+    
     #test_categorical()

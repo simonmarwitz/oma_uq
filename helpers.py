@@ -1,6 +1,6 @@
 def get_pcd():
     print_context_dict = {'text.usetex':True,
-                     'text.latex.preamble':"\\usepackage{siunitx}\n \\usepackage{xfrac}",
+                     'text.latex.preamble':r"\usepackage{siunitx}\n\usepackage{xfrac}", # on preamble related errors, make sure to show plot within rc context-manager
                      'font.size':10,
                      'legend.fontsize':10,
                      'xtick.labelsize':10,

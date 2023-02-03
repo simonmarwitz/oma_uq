@@ -1,29 +1,34 @@
 
-
-import matplotlib
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy.stats
 import scipy.stats.qmc
 import scipy.optimize
 import scipy.interpolate
+import matplotlib
+import matplotlib.pyplot as plt
+import seaborn as sns
 from itertools import product, chain
 from uncertainty.data_manager import HiddenPrints, simplePbar, DataManager
 import uuid
 import os
+import copy
+import time
 import sys
+import warnings
+from uncertainty import data_manager
+
+warnings.filterwarnings("ignore", message="Initial guess is not within the specified bounds")
 import logging
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
-
 logger = logging.getLogger(__name__)
-# logging.warning('test')
 logger.setLevel(level=logging.INFO)
 
 '''
 TODO:
-save/load PolyUQ
-restore PolyUQ results from a finished DataManager run
+- Implement Importance Sampling rather than just uniform
+- Implement sensitivities in estimate_imp to allow for vacuous dimension extension on non-sensitive variables
+
 '''
 
 class UncertainVariable(object):
@@ -113,7 +118,7 @@ class RandomVariable(UncertainVariable):
             raise RuntimeError(f"Variable {self} has invalid support. Check your definitions")
         return supp
     
-    def rvs(self, size=1):
+    def rvs(self, size=1, **kwargs):
         # we need to have all uncertain parameters fixed
         eval_params = []
         for param in self.params:
@@ -125,7 +130,7 @@ class RandomVariable(UncertainVariable):
                 eval_params.append(param)
         # rv = self.dist_fun(*eval_params)
         
-        return self.dist_fun.rvs(*eval_params, size=size)
+        return self.dist_fun.rvs(*eval_params, size=size, **kwargs)
     
     def prob_dens(self, values=None):
         # we need to have all uncertain parameters fixed
@@ -301,6 +306,12 @@ class MassFunction(UncertainVariable):
             raise RuntimeError(f"Variable {self} has invalid support. Check your definitions")
         return supp
     
+    def rvs(self, size=1, *args, **kwargs):
+        # get the support
+        supp = self.support(*args, **kwargs)
+        
+        return scipy.stats.uniform.rvs(supp[0], supp[1] - supp[0], size=size, **kwargs)
+    
     def mass(self, value=None):
         # only single values may be provided        
         # value may be in more than one focal set, bel and pl are better used instead
@@ -332,47 +343,47 @@ def approximate_out_intervals(output, hyc_dat_inds):
             #print('Encountered empty hypercube -> no focal set assigned.')
     return intervals 
 
-def optimize_out_intervals(mapping, arg_vars, hyc_foc_inds, vars_epi, vars_ale=None, fun_kwargs=None):
-    
-    print('This function is not implemented correctly, currently a placeholder, a wrapper must be written to account for arg_vars')
-    '''
-    This function may either be used to quantify incompleteness or imprecision:
-        incompleteness: 
-            mapping is stat_fun, needs stochastic samples and weights, weights are obtained by freezing aleatory variables in each optimization step (need a wrapper around stat_fun)
-            arg_vars is a dict mapping argument names to stochastic samples and weights
-            hyc_foc_inds are inc_hyc_foc_inds
-            vars_epi are vars_inc
-            vars_ale are not needed?
-            fun_kwargs are additional function keyword arguments, e.g. histogram bins, etc.
-        imprecision:
-            mapping is model function
-            arg_vars is a dict mapping argument names to variable names
-            hyc_foc_inds are imp_hyc_foc_inds
-            vars_epi are vars_imp
-            vars_ale are not needed?
-            fun_kwargs are additional function keyword arguments, e.g. model parameters
-    bounds and initial conditions for each hypercube are obtained from vars_epi for each variable in arg_vars
-    
-    
-    '''
-    
-#     this_out = mapping(**{arg:samples[var].iloc[ind_ale] for arg, var in arg_vars.items() if var in names_ale}, 
-#                    **{arg:samples[var].iloc[ind_epi] for arg, var in arg_vars.items() if var in names_epi},)
-    numeric_focals = [var.numeric_focals for var in vars_epi]
-    n_hyc = len(hyc_foc_inds)
-    intervals = np.full((n_hyc ,2), np.nan)
-    
-    for i_hyc in range(n_hyc):
-        
-        bounds = [...]
-        init = [np.mean(bound) for bound in bounds]
-        
-        resl = scipy.optimize.minimize(lambda x, args: mapping(*x, args), init, fun_args, bounds = bounds)
-        resu = scipy.optimize.minimize(lambda x, args: -mapping(*x, args), init, fun_args, bounds = bounds)
-        
-        intervals[i_hyc, :] = [resl.fun, -resu.fun]
-    
-    return intervals
+# def optimize_out_intervals(mapping, arg_vars, hyc_foc_inds, vars_epi, vars_ale=None, fun_kwargs=None):
+#
+#     print('This function is not implemented correctly, currently a placeholder, a wrapper must be written to account for arg_vars')
+#     '''
+#     This function may either be used to quantify incompleteness or imprecision:
+#         incompleteness: 
+#             mapping is stat_fun, needs stochastic samples and weights, weights are obtained by freezing aleatory variables in each optimization step (need a wrapper around stat_fun)
+#             arg_vars is a dict mapping argument names to stochastic samples and weights
+#             hyc_foc_inds are inc_hyc_foc_inds
+#             vars_epi are vars_inc
+#             vars_ale are not needed?
+#             fun_kwargs are additional function keyword arguments, e.g. histogram bins, etc.
+#         imprecision:
+#             mapping is model function
+#             arg_vars is a dict mapping argument names to variable names
+#             hyc_foc_inds are imp_hyc_foc_inds
+#             vars_epi are vars_imp
+#             vars_ale are not needed?
+#             fun_kwargs are additional function keyword arguments, e.g. model parameters
+#     bounds and initial conditions for each hypercube are obtained from vars_epi for each variable in arg_vars
+#
+#
+#     '''
+#
+# #     this_out = mapping(**{arg:samples[var].iloc[ind_ale] for arg, var in arg_vars.items() if var in names_ale}, 
+# #                    **{arg:samples[var].iloc[ind_epi] for arg, var in arg_vars.items() if var in names_epi},)
+#     numeric_focals = [var.numeric_focals for var in vars_epi]
+#     n_hyc = len(hyc_foc_inds)
+#     intervals = np.full((n_hyc ,2), np.nan)
+#
+#     for i_hyc in range(n_hyc):
+#
+#         bounds = [...]
+#         init = [np.mean(bound) for bound in bounds]
+#
+#         resl = scipy.optimize.minimize(lambda x, args: mapping(*x, args), init, fun_args, bounds = bounds)
+#         resu = scipy.optimize.minimize(lambda x, args: -mapping(*x, args), init, fun_args, bounds = bounds)
+#
+#         intervals[i_hyc, :] = [resl.fun, -resu.fun]
+#
+#     return intervals
 
 def compute_belief(focals, masses, cumulative=False, bins=None):
     if bins is None:
@@ -437,6 +448,142 @@ def aggregate_mass(focals_stats, hyc_mass, nbin_fact=1, cum_mass=False):
 
     return bel_stats, pl_stats, q_stats, bins_bel
 
+def plot_grid(df, output='y'):
+    global hue_norm
+    hue_norm = matplotlib.colors.Normalize(3/2*np.min(df[output])-1/2*np.max(df[output]),np.max(df[output]))
+    grid = sns.pairplot(df, hue=output, diag_kind='scatter', corner=True, markers='.', plot_kws={'s':25, 'hue_norm':hue_norm}, palette='cubehelix', )
+    grid.fig.set_size_inches(5.92,5.92)
+    grid.fig.set_dpi(150)
+    grid.fig.subplots_adjust(top=0.97,bottom=0.08, left=0.12, right=0.9)
+    grid.fig.align_labels()
+    for i, x_var in enumerate(grid.x_vars):
+        
+        grid.axes[i,i].set_axis_off()
+        ax = grid.axes[i,i].twinx()
+        sns.scatterplot(data=df, x=x_var,y=output, hue=output, markers='.',s=5, palette=grid._orig_palette, hue_norm=hue_norm, ax=ax, legend=False)
+        grid.axes[i,i] = ax
+    global rectangles
+    rectangles=[]
+    global scatters
+    scatters=[]
+    return grid
+
+def plot_hyc_grid(df_hyc, grid, output='y', maxx=None, minx=None, out_up=None, out_low=None):
+    # n_vars_imp = inputs_hyc.shape[1]
+    # df_hyc = pd.DataFrame(inputs_hyc, columns=[f'$x_{i}$' for i in range(n_vars_imp)])
+    # df_hyc['$y$']=outputs_hyc
+    
+    global scatters
+    global hue_norm
+    create_legend = not scatters
+    for obj in scatters:
+        obj.remove()
+    scatters=[]
+    for i, x_var in enumerate(grid.x_vars):
+        for j, y_var in enumerate(grid.y_vars):
+            if i==j: continue
+            ax = grid.axes[j,i]
+            if ax is None: continue
+            sns.scatterplot(data=df_hyc, x=x_var,y=y_var, hue=output, 
+                            markers='.',s=3, palette=grid._orig_palette, 
+                            hue_norm=hue_norm, ax=ax, legend=False)
+            scatters.append(ax.collections[-1])
+            if maxx is not None:
+                p=ax.scatter(maxx[i],maxx[j], marker='x',color='k')
+                scatters.append(p)
+            if minx is not None:
+                p=ax.scatter(minx[i],minx[j], marker='x',color='k')
+                scatters.append(p)
+
+        ax = grid.axes[i,i]
+
+        sns.scatterplot(data=df_hyc, x=x_var,y=output, hue=output, 
+                        markers='.',s=3, palette=grid._orig_palette, 
+                        hue_norm=hue_norm, ax=ax, legend=False)
+        scatters.append(ax.collections[-1])
+        if maxx is not None and out_up is not None:
+            p=ax.scatter(maxx[i],out_up, marker='x',color='k')
+            scatters.append(p)
+        if minx is not None and out_low is not None:
+            p=ax.scatter(minx[i],out_low, marker='x',color='k', label='sampled opt.')
+            scatters.append(p)
+        else:
+            p = None
+        
+    if create_legend:
+        if p is not None:
+            grid.fig.legends[0].legendHandles.append(p)
+        grid.fig.legend(handles=grid.fig.legends[0].legendHandles, title=output)
+        grid.fig.legends[0].remove()
+
+def plot_opt_res_grid(grid, vars_opt,
+                      x_low, x_up,
+                      focals,
+                      out_min, out_max,
+                      out_low, out_up):
+    
+    opt_var_inds=np.cumsum(vars_opt) - 1
+    global rectangles
+    
+    create_legend = not rectangles
+    
+    for obj in rectangles:
+        obj.remove()
+    rectangles = []
+    for i,var1 in enumerate(grid.x_vars):
+        # opt_var_ind1 = opt_var_inds[i]
+        foc_1=focals[i]
+        # (x_low[i], x_up[i]) should be foc1 
+        if not vars_opt[i]: 
+            xl1 = foc_1[0]
+            xu1 = foc_1[1]
+        else:
+            xl1 = x_low[0, i]
+            xu1 = x_up[0, i]
+        for j,var2 in enumerate(grid.y_vars):
+            
+            if var1==var2: continue
+            ax = grid.axes[j,i]
+            if ax is None: continue
+            
+            # opt_var_ind2 = opt_var_inds[j]
+            foc_2=focals[j]
+            
+            # (x_low[j], x_up[j]) should be foc2 
+            if not vars_opt[j]: 
+                xl2 = foc_2[0]
+                xu2 = foc_2[1]
+            else:
+                xl2 = x_low[0, j]
+                xu2 = x_up[0, j]
+                
+            # plot nearest neighbor of optimal point
+            p=ax.scatter(xl1,xl2, marker='o',edgecolors='k',color='none')
+            rectangles.append(p)
+            
+            p=ax.scatter(xu1,xu2, marker='o',edgecolors='k',color='none')
+            rectangles.append(p)
+
+            # plot design hypercube
+            p=ax.add_patch(matplotlib.patches.Rectangle((foc_1[0], foc_2[0]), foc_1[1] - foc_1[0], foc_2[1] - foc_2[0], fill=False, ls='dashed', color='k', alpha=0.5))
+            rectangles.append(p)
+
+        #plot optimal hypercube
+        ax = grid.axes[i, i]
+
+        # plot design hypercube
+        p=ax.add_patch(matplotlib.patches.Rectangle((foc_1[0], out_min), foc_1[1] - foc_1[0], out_max - out_min, fill=False, ls='dashed', color='k', alpha=0.5))
+        rectangles.append(p)
+
+        # plot nearest neighbor of optimal point
+        p=ax.scatter(xl1,out_low, marker='o',edgecolors='k',color='none')
+        rectangles.append(p)
+        p=ax.scatter(xu1,out_up, marker='o',edgecolors='k', label='appr. opt.',color='none')
+        rectangles.append(p)
+    if create_legend:
+        grid.fig.legends[0].legendHandles.append(p)
+        grid.fig.legend(handles=grid.fig.legends[0].legendHandles, title='y')
+        grid.fig.legends[0].remove()
  
 class PolyUQ(object):
     
@@ -473,6 +620,7 @@ class PolyUQ(object):
         self.N_mcs_epi = None
         self.percentiles = None
         self.seed = None
+        self.var_supp = None
         self.inp_samp_prim = None
         self.inp_suppl_ale = None
         self.inp_suppl_epi = None
@@ -480,14 +628,21 @@ class PolyUQ(object):
         self.fcount = None
         self.loop_ale = None
         self.loop_epi = None
+        self.out_name = None
         self.out_samp = None
+        self.out_valid = [-np.infty, np.infty]
                           
         self.imp_foc = None
+        self.val_samp_prim = None
+        self.intp_errors = None
+        self.intp_exceed = None
+        self.intp_undershot = None
                           
         self.focals_stats = None
         self.focals_mass = None
         
-    def sample_qmc(self, N_mcs_ale=1000000, N_mcs_epi=100, percentiles=(0.0001, 0.9999), sample_hypercubes=False, seed=None, check_sample_sizes=True):
+    def sample_qmc(self, N_mcs_ale=1000000, N_mcs_epi=100, percentiles=(0.0001, 0.9999), 
+                   sample_hypercubes=False, seed=None, check_sample_sizes=True, **kwargs):
         '''
         A function to generate quasi Monte Carlo samples for mixed aleatory-epistemic uncertainty quantification
         
@@ -524,7 +679,7 @@ class PolyUQ(object):
         from the RandomVariables' probability densities using the given input samples.
         
         UNTESTED:
-        To enrich a sample set this function can simply be called again, with identical inputs. Ensure 
+        To enrich a sample set, this function can simply be called again, with identical inputs. Ensure 
         to provide the same seed, as stored as class variable from the previous function call.
 
         Parameters:
@@ -544,9 +699,13 @@ class PolyUQ(object):
         vars_ale = self.vars_ale 
         
         vars_ale_prim = [var for var in vars_ale if var.primary]
-        vars_epi_prim = [var for var in vars_epi if var.primary]
+        vars_epi_prim = list(self.vars_imp)
         
         all_vars_prim = vars_ale_prim + vars_epi_prim # needed to fix positions of variables for indexing/assigning/accessing corresponding sequences
+        
+        # determine, if primary variables are all the same type, or if mixed type inputs are present
+        loop_ale = np.any([var.primary for var in vars_ale])
+        loop_epi = np.any([var.primary for var in vars_epi])
         
         def traverse_children(var):
             # recursively add all child variables to the all_vars dictionary
@@ -564,44 +723,85 @@ class PolyUQ(object):
             traverse_children(var)
         
         all_vars = list(all_vars.values()) 
-             
+        n_vars = len(all_vars)
+        logger.info(f'Establishing support domain for all variables" {[var.name for var in all_vars]}')
         # get (truncated) support (define upper and lower bounds, e.g. 99.99 % quantiles, 0.01% quantiles)     
         # define equivalent uniform distributions
         vars_unif =[]
+        var_supp = pd.DataFrame(np.empty((2, n_vars)), columns=[var.name for var in all_vars])
         for var in all_vars:
             supp = var.support(percentiles)
-            
             assert np.all(np.abs(supp)!=np.infty)
-            
+            var_supp[var.name] = supp
+            # print(var.name, supp)
             if isinstance(var, RandomVariable):    
                 if isinstance(var.dist_fun, scipy.stats.rv_discrete):
-                    vars_unif.append(scipy.stats.randint(*supp))
+                    vars_unif.append(scipy.stats.randint(supp[0], supp[1] + 1))
                 else:
                     vars_unif.append(scipy.stats.uniform(supp[0], supp[1] - supp[0]))
             else:
                 vars_unif.append(scipy.stats.uniform(supp[0], supp[1] - supp[0]))
-                 
+                
+        if kwargs.get('supp_only', False):
+            self.var_supp = var_supp
+            return
         
         # sampling parameters
-        N_vars = len(all_vars)
-    
         N_mcs = max(N_mcs_ale,N_mcs_epi)
         
-        logger.info("Generating low-discrepancy sequences for all variables... ")
-        # sample N_mcs samples from a Halton Sequence and transform to uniform bounds
+        # check sample sizes
+        n_vars_imp = len(vars_epi_prim)
+        if N_mcs_epi < 2.5**n_vars_imp:
+            logger.warning(f'Epistemic sample size {N_mcs_epi} may not suffice '
+                           f'interval optimization (imprecision) over {n_vars_imp}'
+                           f' variables. As a rule of thumb to conceptually cover '
+                           f'all hypercube corners and midpoints 3^n = {3**n_vars_imp} samples are required.')
+        if N_mcs_ale < 10000:
+            logger.warning(f'Aleatory sample size {N_mcs_ale} may not suffice '
+                           'depending on the statistic to be applied. Large confidence intervals may occur.')
+        
         if seed is None:
             seed = np.random.randint(np.iinfo(np.int32).max)
-        else:
-            logger.warning("The usage of seeds is currently untested.")
-            
+        
+        logger.info(f"Generating low-discrepancy sequences for all variables (scramble seed: {seed})... ")
+        # sample N_mcs samples from a Halton Sequence and transform to uniform bounds    
         seed_seq = np.random.SeedSequence(seed).spawn(1)[0]
         seed_seq = np.random.default_rng(seed_seq)
-        engine = scipy.stats.qmc.Halton(N_vars, seed=seed_seq)
+        engine = scipy.stats.qmc.Halton(n_vars, seed=seed_seq)
         samples = engine.random(N_mcs)
+        
+        
+        # check discrepancy for each pair of inputs by leave-one-out validation
+        # print(scipy.stats.qmc.discrepancy(samples))
+        discrepancies = np.zeros((n_vars,n_vars))
+        for i in range(n_vars):
+            for j in range(i+1,n_vars):
+                discrepancies[i,j] = scipy.stats.qmc.discrepancy(samples[:,[i,j]])
+        
+        triuinds=np.triu_indices(n_vars, 1, n_vars)
+        for i in range(n_vars):
+            for j in range(i+1,n_vars):
+                thisd = discrepancies[i,j]
+                discrepancies[i,j] = 0
+                mu = np.mean(discrepancies[triuinds])
+                sig  = np.sqrt(np.var(discrepancies[triuinds]))
+                if np.abs(mu-thisd)>3*sig:
+                    logger.warning(f"The sequence's discrepancy for variables {all_vars[i].name} and {all_vars[j].name} is {(thisd - mu)/sig:1.2g} std above average.")
+                discrepancies[i,j] = thisd
+        
         samples = pd.DataFrame(samples, columns=[var.name for var in all_vars])
         
+        # transform to uniform (could also be done by qmc.scale(low,high)
         for i,var in enumerate(all_vars):
-            samples[var.name] = vars_unif[i].ppf(samples[var.name])
+            # print(var, vars_unif[i].ppf([0,1]))
+            this_samples = samples[var.name]
+            if isinstance(var, MassFunction):
+                # scale (0,1) to [0,1]
+                this_samples -= this_samples.min()
+                this_samples /= this_samples.max()
+            # scale to physical boundaries
+            samples[var.name] = vars_unif[i].ppf(this_samples)
+                
         
         inp_samp_prim = samples[[var.name for var in all_vars_prim]]
         inp_suppl_ale = samples.iloc[:N_mcs_ale][[var.name for var in vars_ale if not var.primary]]
@@ -617,12 +817,38 @@ class PolyUQ(object):
         self.percentiles = percentiles
         self.seed = seed
         
+        self.loop_ale = loop_ale
+        self.loop_epi = loop_epi
+        
+        self.var_supp = var_supp
         self.inp_samp_prim = inp_samp_prim
         self.inp_suppl_ale = inp_suppl_ale
         self.inp_suppl_epi = inp_suppl_epi
         
-        return
+        return 
     
+    def sample_stochastic(self, N_mcs):
+        '''
+        all_vars_prim
+        loop_ale = True
+        loop_epi = False
+        
+        initialize samples pd.DataFrame? (n_vars_prim, N_mcs)
+        
+        compute all_vars (without duplicates)
+        initialze rng
+        
+        for n_ale in range(N_mcs):
+            sample and freeze var_inc (uniform) pass 'random_state'=rng
+            sample and freeze var_ale (pass percentiles) pass 'random_state'=rng
+            sample var_imp (uniform) pass 'random_state'=rng
+        
+        split prim, suppl_ale, suppl_epi
+        
+        save variables and store class
+            
+        '''
+        
     def to_data_manager(self, title, **kwargs):
         '''
         combining PolyUQ and DataManager
@@ -663,10 +889,10 @@ class PolyUQ(object):
         inp_samp_prim = self.inp_samp_prim
         
         # determine, if primary variables are all the same type, or if mixed type inputs are present
-        loop_ale = np.any([var.primary for var in vars_ale])
+        loop_ale = self.loop_ale
         if not loop_ale:
             N_mcs_ale = 1
-        loop_epi = np.any([var.primary for var in vars_epi])
+        loop_epi = self.loop_epi
         if not loop_epi:
             N_mcs_epi = 1
         
@@ -692,7 +918,7 @@ class PolyUQ(object):
         arrays_grid.append(ids_grid)
         for names in (names_ale, names_epi, names_grid):
             names.append('ids')
-        
+        # return
         manager_ale = DataManager(title + '_ale', entropy=self.seed, **kwargs)
         manager_ale.provide_sample_inputs(arrays_ale, names_ale)
         
@@ -703,61 +929,81 @@ class PolyUQ(object):
         manager_grid.provide_sample_inputs(arrays_grid, names_grid)
         
         self.fcount = N_mcs_ale * N_mcs_epi
-        self.loop_ale = loop_ale
-        self.loop_epi = loop_epi
         
         return manager_grid, manager_ale, manager_epi
     
-    def from_data_manager(self, manager, ret_name, ret_ind=None):
+    def from_data_manager(self, manager=None, ret_name=None, ret_ind=None,out_ds=None):
         '''
+        May be called repeatedly when new samples have been propagated to update
+        out_samp and subsequently update imp, inc and so on
+        
+        instead of manager, out_ds may be passed, to avoid reopening and closing
+        db if multiple ret_names/ ret_inds are to be extracted in a loop
+        
         ret_ind: dict 
             {'dim':ndindex, ...}
         '''
         
         logger.info(f"Importing propagated samples from DataManager using the output variable {ret_name}")
-        
+        loop_ale = self.loop_ale
+        loop_epi = self.loop_epi
+            
         assert isinstance(ret_ind, dict)
         N_mcs_ale = self.N_mcs_ale
         N_mcs_epi = self.N_mcs_epi
-        loop_ale = self.loop_ale
-        loop_epi = self.loop_epi
         if not loop_ale:
             N_mcs_ale = 1
         if not loop_epi:
             N_mcs_epi = 1
         
-        with manager.get_database(database='out', rw=False) as out_ds:
-            '''
-            need to re-construct grid array from out_ds[ret_name]
-            how to handle intermediate processing? to be done in manager.process_samples()
+        if manager is not None:
+            with manager.get_database(database='out', rw=False) as out_ds:
+                '''
+                need to re-construct grid array from out_ds[ret_name]
+                how to handle intermediate processing? to be done in manager.process_samples()
+                
+                how to handle multi-valued outputs for polymorphic uncertainty quantification processing? 
+                e.g. modeshapes: either do the IvO individually or introduce some processed meassure e.g. MAC, strain energy, to work on
+                
+                do we need to keep indices around, just in case? don't think so:
+                interval optimization has to be performed for each output quantity individually
+                
+                get ret_name from out_ds
+                construct the grid from inds_ale (row indices) and inds_epi (column indices)
+                return out_samp
+                '''
+                assert out_ds.entropy == self.seed
+                out_flat_all = out_ds[ret_name]
+        elif out_ds is not None:
+            out_flat_all = out_ds[ret_name]
+        else:
+            raise RuntimeError("Either manager or out_ds must be provided.")
             
-            how to handle multi-valued outputs for polymorphic uncertainty quantification processing? 
-            e.g. modeshapes: either do the IvO individually or introduce some processed meassure e.g. MAC, strain energy, to work on
-            
-            do we need to keep indices around, just in case? don't think so:
-            interval optimization has to be performed for each output quantity individually
-            
-            get ret_name from out_ds
-            construct the grid from inds_ale (row indices) and inds_epi (column indices)
-            return out_samp
-            '''
-            assert out_ds.entropy == self.seed
-            out_flat = out_ds[ret_name]
-            if ret_ind is not None:
-                out_flat = out_flat[ret_ind]
-            assert out_flat.ndim == 1
-            if np.any(np.isnan(out_flat)):
-                logger.warning('Output contains NaNs, expect subsequent routines to behave unexpectedly.')
-            if np.any(np.isinf(out_flat)):
-                logger.warning('Output contains +/- infty, expect subsequent routines to behave unexpectedly.')
-            if not out_flat.dtype.kind in set('buif'):
-                logger.warning(f'Output dtype ({out_flat.dtype}) may cause trouble.')
-            
-            out_grid = np.empty((N_mcs_ale, N_mcs_epi))
-            # .flat returns a  C-style order flat iterator over the array
-            out_grid.flat = out_flat
+        if ret_ind is not None:
+            out_flat = out_flat_all[ret_ind]
+        else:
+            out_flat = out_flat_all
+        assert out_flat.ndim == 1
         
+        out_grid = np.empty((N_mcs_ale, N_mcs_epi))
+        # .flat returns a  C-style order flat iterator over the array
+        out_grid.flat = out_flat
+        
+        if np.any(np.isnan(out_flat)):
+            indices=np.where(np.any(np.isnan(out_grid),axis=1))
+            logger.warning(f'Output contains NaNs beginning at the {indices[0][0]}th aleatory sample, expect subsequent routines to behave unexpectedly.')
+            # print(indices, len(indices),np.any(np.isnan(out_grid),axis=1).shape, out_grid.shape)
+        if np.any(np.isinf(out_flat)):
+            indices=np.where(np.any(np.isinf(out_grid),axis=1))
+            logger.warning(f'Output contains +/- infty beginning at the {indices[0][0]}th aleatory sample, expect subsequent routines to behave unexpectedly.')
+        if not out_flat.dtype.kind in set('buif'):
+            logger.warning(f'Output dtype ({out_flat.dtype}) may cause trouble.')
+        
+        if self.out_name is not None:
+            assert self.out_name == f'{ret_name}-{".".join(str(e) for e in ret_ind.values())}'
+        self.out_name = f'{ret_name}-{".".join(str(e) for e in ret_ind.values())}'
         self.out_samp = out_grid
+        self.out_valid = [out_flat_all.min(skipna=True).item(), out_flat_all.max(skipna=True).item()]
             
             
     def propagate(self, mapping, arg_vars):
@@ -789,8 +1035,8 @@ class PolyUQ(object):
         inp_samp_prim = self.inp_samp_prim
         
         # determine, if primary variables are all the same type, or if mixed type inputs are present
-        loop_ale = np.any([var.primary for var in vars_ale])
-        loop_epi = np.any([var.primary for var in vars_epi])
+        loop_ale = self.loop_ale
+        loop_epi = self.loop_epi
     
         # propagation
         logger.info("Propagating mapping function...")
@@ -843,11 +1089,11 @@ class PolyUQ(object):
         elif loop_epi:
             logger.info(f'Mapping function was called {fcount} times in a pure epistemic loop.')
             
-        
-        self.loop_ale = loop_ale
-        self.loop_epi = loop_epi
+        self.out_name = 'out'
         self.out_samp = out_samp
         self.fcount = fcount
+        self.out_valid = [np.nanmin(out_samp), np.nanmax(out_samp)]
+        
         return out_samp#, p_weights
     
     def probabilities_imp(self, i_imp=None):
@@ -910,7 +1156,10 @@ class PolyUQ(object):
                 # p_weights[:, i_imp_hyc] *= hyp_var.prob_dens(inp_suppl_ale[hyp_var.name])
                 if not hyp_var.name in hyp_dens: 
                     # caching probability densities if a variable is hypervariable of multiple variables
-                    hyp_dens[hyp_var.name] = hyp_var.prob_dens(inp_suppl_ale[hyp_var.name])
+                    if hyp_var.primary:
+                        hyp_dens[hyp_var.name] = hyp_var.prob_dens(inp_samp_prim[hyp_var.name])
+                    else:
+                        hyp_dens[hyp_var.name] = hyp_var.prob_dens(inp_suppl_ale[hyp_var.name])
                 p_weights[:, i_weight] *= hyp_dens[hyp_var.name]
             # normalize
             p_weights[:, i_weight] /= np.sum(p_weights[:, i_weight])
@@ -919,52 +1168,241 @@ class PolyUQ(object):
             return p_weights
         else:
             return p_weights[:,0]
+        '''
+        ice_occ is a primary variable
+        ice_occ is a hypervariable of ice_mass
+        ice_mass is a primary variable
         
-    
-    def estimate_imp(self, interpolate=True, fig=None, xvar='', yvar='', opt_meth='Nelder-Mead'):
+        assume ice_mass has two focal sets one precise set and one imprecise set
+        for the precise focal set p_weights only result from primary aleatory variables
+        for the imprecise focal set p_weights result from the aleatory hypervariables
+        actually ice_occ is not a primary variable, that was just a hack
+            epistemic samples are generated on the support (of ice_mass)
+            for each aleatory sample, the epistemic samples are propagated
+            if ice_occ==0 the model is run with all those ice_masses, even though, they are not present
+            that is why ice_occ had to be passed to the mapping function and thus needed to be primary
+            
+        '''
+        
+# RBF: r will be the maximum distance between any two samples
+# gaussian: e^(-epsilon*r^2)
+# epsilon ist the shape parameter -> how fast gaussian kernel drops to zero, i.e. how much will each sample influence its neighbors
+#     if too big interpolant will be oscillating (?)
+#     if too small interpolant will not accurately follow the true behavior (?)
+# epsilon is "inversely proportional to the average distance between the data points"
+#
+# A consequence of this choice, is that the interpolation matrix approaches the identity 
+# matrix as ε → ∞ {\displaystyle \varepsilon \to \infty } leading to stability when solving 
+# the matrix system. The resulting interpolant will in general be a poor approximation to 
+# the function since it will be near zero everywhere, except near the interpolation points 
+# where it will sharply peak – the so-called "bed-of-nails interpolant" (as seen in the 
+# plot to the right).
+#
+# On the opposite side of the spectrum, the condition number of the interpolation matrix 
+# will diverge to infinity as ε → 0 leading to ill-conditioning of the 
+# system. In practice, one chooses a shape parameter so that the interpolation matrix is 
+# "on the edge of ill-conditioning" (eg. with a condition number of roughly 10^{{12}} 
+# for double-precision floating point).
+
+    def estimate_imp(self, interp_fun='rbf', opt_meth='genetic', 
+                     plot_res=False, plot_intp=False, print_res_ranges=False, 
+                     intp_err_warn=10, # threshold in percent of interpolation domain
+                     extrp_warn=5, # threshold in percent of interpolation domain
+                     **kwargs):
         
         '''    
-        Estimate imprecise (quasi) Monte Carlo Samples from pre-computed mapping
-        outputs
+        Estimate imprecision for all aleatory samples and imprecision hypercubes
+        using surrogate models / interpolators fit to pre-computed mapping
+        outputs on a quasi Monte Carlo sequence / grid. 
         
-        
-        OLD OLD OLD
-        Algorithm:  
-        Input: epistemic and aleatory variables
-               pre-computed output sample lattice
-               
-        Output:
-            (discrete) belief functions for each statistic
-            
-        
-        1.) pre-assemble samples for incomplete interval optimization
-        for each incompleteness sample
-            freeze incomplete variables
-            assemble primary p_weights
-            for each aleatory sample:
-                freeze aleatory hypervariables (secondary)
-                assemble imprecise hypercube_sample_indices
-                approximate out intervals for each imprecise hypercube
-                assemble p_weights for each hypercube from hypervariables
+        For each sample k in N_mcs_ale
+            Retrieve imprecision input and output samples
+            Setup surrogate model interp_fun on the unit hypercube
+                 cross-validate by leave-one-out or leave-k-out depending on sample size 
+            Compute imprecision interval boundaries / focal sets 
+                which may depend on aleatory variables
+            Generate imprecision hypercubes
+                according to chosen dimension extension procedure (self.dim_ex)
+            For each hypercube
+                determine optimization variables (hypercube side length in the
+                respective dimention > 0)
+                compute output interval (by bounded optimization on interval_range)
+                compute hypercube mass
                 
-            compute the statistic for each imprecise hypercube (if no imprecision there is only a single hypercube with equal upper and lower boundaries)
+        For reference the axis order of arrays and related variables are:
+        0           1           2              3
+        N_mcs_ale,  N_mcs_imp,  n_vars_imp,    intv_bound
+                    n_imp_hyc,  n_vars_opt
+                    S,
+        Not always all levels are present and actual dimensions change 
+        accordingly, but not the order.
         
-        2.) approximate incomplete interval optimization    
-        for each incompleteness hypercube and each statistic and each imprecision hypercube
-            approximate intervals
         
-        3.) consolidate hypercubes
-        for each statistic
-            compute bel, pl and q
+        Parameters:
+        -----------
+            interp_fun: str ['nearest', 'linear', 'rbf'] or callable
+                The interpolation method to use as a surrogate. Needs to take arguments 
+                unit_x (N_mcs, n_vars),  this_out (N_mcs,), **kwargs 
+                
+                NearestND interpolator exceeds hypercube bounds frequently during
+                optimization and should only be used for rough estimates of 
+                imprecision. RBF interpolator generally works very fast and reliable
+                but requires parameter tuning, e.g. kernel function and its shape parameter
+                to avoid extrapolation / overshoot / bed-of-nails / ill-conditioning problems.
+                LinearND interpolator becomes very slow / stops working with 
+                higher dimensions.
+            opt_meth: str
+                One of the available methods in scipy.optimize.minimize for 
+                local optimization or 'genetic' (recommended) for global 
+                optimization (vectorized differential evolution).
+            plot_res: bool
+                Show a scatterplot matrix of input and output variables. Best 
+                used in an interactive jupyter environment
+            plot_interp: bool
+                For each hypercube, extend the scatterplot matrix with samples
+                generated with the interpolator to verify good interpolation.
+            print_res_ranges: bool
+                Print the ranges, interval boundaries and corresponding input 
+                points for each hypercube.
+            intp_err_warn: float (0...100)
+                Issue a warning if interpolator cross-validation error exceeds
+                the given threshold in percent of the output variable range
+            extrp_warn: float (0...100)
+                 Issue a warning if interpolator is extrapolating by the given 
+                 percentage outside of the output variable range in the obtained
+                 optimum interval. However, extrapolations will always be replaced
+                 by the minimum / maximum output value.
+            **kwargs: dict
+                Extra keywords passed to interp_fun, optimizer or used at various
+                places in the code for evaluation purposes.
+                
+        
+        Returns:
+        --------
+            imp_foc: np.ndarray (N_mcs_ale, n_imp_hyc, 2)
+                sequence of output intervals
+            val_samp_prim: np.ndarray (N_mcs_ale, n_imp_hyc, len(all_vars_prim), 2)
+                input variables for each optimum found, for subsequent validation
+                with the propagation mapping or adaptive resampling
+            intp_errors: np.ndarray (N_mcs_ale,)
+                cross-validation errors for each aleatory sample
+            intp_exceed: np.ndarray (2,) # [count, exceed]
+                when the interpolator has intp_exceed the maximum output value
+                increment count and sum up exceedance differences over
+                all aleatory samples and imprecision hypercubes
+            intp_undershot: np.ndarray (2,) # [count, intp_undershot]
+                when the interpolator has intp_undershot the mimimum output value
+                increment count and sum up intp_undershot differences over
+                all aleatory samples and imprecision hypercubes
         '''
-        if not interpolate:
-            logger.info("Estimating imprecision intervals from sampled output sequences...")
-        else:
-            logger.info(f"Estimating imprecision intervals by surrogate optimization ({opt_meth})...")
             
+        def interval_range(x, interp, temp_x, unit_bounds, temp_dists,
+                    vars_opt, n_vars_opt, **kwargs):
+            '''
+            interpolator: 
+                input is in unit space, 
+                output is in physical space 
+                    
+            objective is to maximize interval
+            i.e. minimize lower - upper -> in [-infty, 0]
+            
+            LinearND solutions may return nan, when outside the convex hull
+                return 0
+            
+            NearestND solutions violate boundaries (intentionally in some cases)
+            
+                as there might be singular boundaries in some dimensions, it may happen
+                that there are no points inside the boundaries of that dimension
+                we would want to find a nearest point, that is inside the domain in as many dimensions as possible
+        
+                we can get the nearest point itself and compute the distance to the boundaries
+                all computations must be performed in the unit cube
+                get the nearest point
+                for each dimension:
+                    if outside bounds -> compute distance
+                compute power(sum(distances**2), 1/20) -> distance in [0,1]
+                distance may become > 1, when optimizer leaves boundaries
+        
+                multiply objective by (1-distance) -> 
+                    for low/no distances keeps the objective
+                    for high distances drives it towards 0
+                    
+            SHAPES:
+            # interpolator needs input of shape (S, n_vars_imp)
+            # init is shape (n_vars_imp, ) 
+            # focals is shape (n_vars_imp, 2) and so is bounds and so is unit_bounds
+            # optimizer needs input of shape (2 * n_vars_opt,) (minimize) or (S, 2 * n_vars_opt) (global)
+            #
+            # depending on the optimizer that calls interval_range
+            # global: x is (2 * n_vars_opt, S), temp_x is (S, 2 * n_vars) is temp_dists
+            # local: x is (2 * n_vars_opt,), temp_x is (1,n_vars_imp) is temp_dists
+                
+            '''
+            
+            dist = 0
+            if x.ndim == 1: # scalar optimizer
+                temp_x[:,vars_opt] = x[:n_vars_opt]
+            else: # vectorized optimizer
+                temp_x[:,vars_opt] = x[:n_vars_opt,:].T
+            if isinstance(interp, scipy.interpolate.NearestNDInterpolator):
+                nx,yl = interp.point_val(temp_x)
+                
+                temp_dists[:,:] = unit_bounds[:,0] - nx
+                dist += np.sum(temp_dists[temp_dists>0]**2)
+                temp_dists[:,:] = nx - unit_bounds[:,1]
+                dist += np.sum(temp_dists[temp_dists>0]**2)
+            else:
+                yl = interp(temp_x)
+                #if np.isnan(yl): return 0
+        
+            if x.ndim == 1: #scalar optimizer
+                temp_x[:,vars_opt] = x[n_vars_opt:]
+            else:# vectorized optimizer
+                temp_x[:,vars_opt] = x[n_vars_opt:,:].T
+        
+            if isinstance(interp, scipy.interpolate.NearestNDInterpolator):
+                nx,yh = interp.point_val(temp_x)
+    
+                temp_dists[:,:] = unit_bounds[:,0] - nx
+                dist += np.sum(temp_dists[temp_dists>0]**2)
+                temp_dists[:,:] = nx - unit_bounds[:,1]
+                dist += np.sum(temp_dists[temp_dists>0]**2)
+            else:
+                yh = interp(temp_x)
+                #if np.isnan(yh): return 0
+            dist = np.power(dist, 1/20)
+            # for testing purposes
+        #     if dist > 1 and not kwargs.get('pr',False):
+        #         print('wrapper failed, rerun with printouts enabled')
+        #         interval_range(x,interp,temp_x,unit_bounds,temp_dists,vars_opt, n_vars_opt,pr=True,**kwargs)
+
+            y = yl - yh
+            y *= (1 - dist)
+            y[np.isnan(y)]=0
+            return y
+        
+        def scale(x):
+            # subtraction always along the last axis (?)
+            # x.shape = (n_obs, n_vars)
+            return (x - x_supp[:,0]) / (x_supp[:,1] - x_supp[:,0])
+        
+        def unscale(x):
+            return x * (x_supp[:,1] - x_supp[:,0]) + x_supp[:,0]
+        
+        logger.info(f"Estimating imprecision intervals by surrogate optimization ({opt_meth})...")
+        
+        if interp_fun in ['nearest', 'linear', 'rbf']:
+            interp_fun = {'nearest': scipy.interpolate.NearestNDInterpolator,
+                          'linear': scipy.interpolate.LinearNDInterpolator,
+                          'rbf': scipy.interpolate.RBFInterpolator}[interp_fun]
+        elif not callable(interp_fun):
+            raise ValueError('interp_fun is neither in [nearest","linear","rbf"] nor a callable')
+        
         # Variables
         vars_ale = self.vars_ale
         vars_imp = self.vars_imp
+        all_vars_prim = [var for var in vars_ale if var.primary] + list(vars_imp)
+        n_vars_imp = len(vars_imp)
         loop_ale = self.loop_ale
         
         # Epistemic Hypercubes
@@ -979,163 +1417,387 @@ class PolyUQ(object):
         else:
             N_mcs_imp = 1
             # should be zero, but that would make hypercube_sample_indices empty
-            # and subsequently break approximate_out_intervals
         
         inp_samp_prim = self.inp_samp_prim
+        # inp_suppl_epi = self.inp_suppl_epi
         inp_suppl_ale = self.inp_suppl_ale
         
         out_samp = self.out_samp # Here we may choose from multiple output quantities, cluster output, etc.
         
-        if fig is not None:
-            from matplotlib.patches import Rectangle
-            nrows = np.ceil(np.sqrt(n_imp_hyc)).astype(int)
-            ncols = np.ceil(n_imp_hyc/nrows).astype(int)
-            axes = fig.subplots(nrows, ncols, sharex=True, sharey=True, squeeze=False).ravel()
-            
-            for var in vars_ale + vars_imp:
-                if var.name == xvar:
-                    xl, xu = var.support(self.percentiles)
-                elif var.name == yvar:
-                    yl, yu = var.support(self.percentiles)
-                    
-            for ax in axes:
-                ax.add_patch(Rectangle((xl, yl), xu - xl, yu - yl, color='red', alpha=0.25))
-                ax.plot(inp_samp_prim[xvar], inp_samp_prim[yvar],ls='none',marker=',')
-                if ax.is_last_row(): ax.set_xlabel(xvar)
-                if ax.is_first_col(): ax.set_ylabel(yvar)
-
-        '1. Quantify Imprecision for each aleatory sample'
-        # quantifiying imprecise QMC samples for all stochastic samples             
-        # allocate arrays for interval optimization and subsequent statistical analyses
-        imp_foc = np.full((N_mcs_ale, n_imp_hyc, 2), np.nan)
-        # if check_sample_sizes:
-        #     sample_sizes = np.empty((N_mcs_ale, n_imp_hyc))
+        # extract underlying numpy array in the order of vars_epi for faster indexing 
+        x_samp = inp_samp_prim[[var.name for var in vars_imp]].values[:N_mcs_imp, :] # shape (S,n_vars_imp)
+        # TODO: eventually store it in in sample_qmc and use it here 
+        x_supp = self.var_supp[[var.name for var in vars_imp]].values.T
         
-        if interpolate:
-            pbar = simplePbar(n_imp_hyc * N_mcs_ale)
+        # x_supp_ = np.empty((n_vars_imp, 2))
+        # x_supp_[:,0] = x_samp.min(axis=0) #shape (n_vars_imp,)
+        # x_supp_[:,1] = x_samp.max(axis=0) #shape (n_vars_imp,)
+        # print(x_supp, x_supp_)
+        
+        # quantify imprecise QMC samples for all stochastic samples
+        # allocate arrays for interval optimization and subsequent statistical analyzes
+        if self.imp_foc is None:
+            imp_foc = np.full((N_mcs_ale, n_imp_hyc, 2), np.nan)
         else:
-            pbar = simplePbar(N_mcs_ale)
+            imp_foc = self.imp_foc
             
-        for n_ale in range(N_mcs_ale):
+        # next-to-last axis corresponds to the order in all_vars_imp
+        if self.val_samp_prim is None:
+            val_samp_prim = np.full((N_mcs_ale, n_imp_hyc, len(all_vars_prim), 2), np.nan)
+        else:
+            val_samp_prim = self.val_samp_prim
+            assert np.all(val_samp_prim.shape == (N_mcs_ale, n_imp_hyc, len(all_vars_prim), 2))
+            
+        # count the number of times the interpolator has extrapolated values
+        if self.intp_exceed is None:
+            intp_exceed = [0, 0] # count, exceed
+        else:
+            intp_exceed = self.intp_exceed
+            
+        if self.intp_undershot is None:
+            intp_undershot = [0, 0] # count, exceed
+        else:
+            intp_undershot = self.intp_undershot
+            
+        if self.intp_errors is None:
+            intp_errors = np.full(N_mcs_ale, np.nan)
+        else:
+            intp_errors = self.intp_errors
+            assert np.all(intp_errors.shape==(N_mcs_ale,))
+        
+        iter_ale = range(kwargs.pop('start_ale',0), kwargs.pop('end_ale',N_mcs_ale))
+        pbar = simplePbar(n_imp_hyc * len(iter_ale))
+        for n_ale in iter_ale:
             # each supplementary aleatory sample defines boundaries on imprecise variables
             #    do interval optimization using the pre-computed samples within these boundaries
             #    (pre-computed epistemic samples may be the same for each aleatory sample while only imprecise input boundaries differ)
-            # print(n_ale)
-            this_inp_suppl = inp_suppl_ale.iloc[n_ale]
+            logger.debug(f'At sample {n_ale} out of {N_mcs_ale}')
             
             if loop_ale:
-                this_out = out_samp[n_ale, :]
+                this_out = out_samp[n_ale, :N_mcs_imp]
             else:
-                this_out = out_samp[0, :]
-            
-            # freeze the aleatory variables
+                this_out = out_samp[0, :N_mcs_imp]
+                
+            this_inp_suppl = inp_suppl_ale.iloc[n_ale]
+            this_inp_prim = inp_samp_prim.iloc[n_ale]
+            #
+            # # freeze the aleatory variables
+            # # to fix numeric focals of imprecise variables
             for var in vars_ale:
                 if not var.primary:
                     var.freeze(this_inp_suppl[var.name])
-                    # if n_ale==5: print(var, var.value)
-            if interpolate:
-                
-                # extract underlying numpy array in order of vars_epi for faster indexing 
-                xobs = inp_samp_prim[[var.name for var in vars_imp]].values[:N_mcs_epi, :]
-                nvars = len(vars_imp) 
-                # max_interp = scipy.interpolate.RBFInterpolator(xobs, -this_out)
-                if interpolate == 'rbf':
-                    interp = scipy.interpolate.RBFInterpolator(xobs,  this_out)
-                elif interpolate == 'linear':
-                    interp = scipy.interpolate.LinearNDInterpolator(xobs,  this_out)
+                    logger.debug(f'{var}, {this_inp_suppl[var.name]}')
                 else:
-                    interp = scipy.interpolate.NearestNDInterpolator(xobs,  this_out)
+                    var.freeze(this_inp_prim[var.name])
+                    logger.debug(f'{var}, {this_inp_prim[var.name]}')
                     
-                numeric_focals = [var.numeric_focals for var in vars_imp] # no-imp []
-                for i_hyc, hypercube in enumerate(imp_hyc_foc_inds):
-                    # get focal sets / intervals
-                    focals = [focals[ind] for focals, ind in zip(numeric_focals, hypercube)]
+            # # assemble arg_vars for verification
+            # arg_vars = kwargs.get('arg_vars', {})
+            # arg_vals_l = {key:None for key,_ in arg_vars.items()}
+            # arg_vals_h = {key:None for key,_ in arg_vars.items()}
+            # for var in vars_ale:
+            #     if var.primary:
+            #         var.freeze(this_inp_prim[var.name])
+            #         logger.debug(f'{var}, {this_inp_prim[var.name]}')
+            #         for arg,var_ in arg_vars.items():
+            #             if var_ == var:
+            #                 arg_vals_l[arg] = this_inp_prim[var.name]
+            #                 arg_vals_h[arg] = this_inp_prim[var.name]
+            #                 break
+            #         else:
+            #             pass
+            
+            out_max = np.max(this_out)
+            out_min = np.min(this_out)
+            out_range = out_max - out_min
+            
+            x_out_max = x_samp[np.argmax(this_out),:]
+            x_out_min = x_samp[np.argmin(this_out),:]
+            
+            if plot_res:
+                df = inp_samp_prim[[var.name for var in vars_imp]].iloc[:N_mcs_imp,:]
+                df[self.out_name] = this_out
+                grid = plot_grid(df, self.out_name)
+            
+            now= time.time()
+            
+            interp =  interp_fun(scale(x_samp),  this_out, **kwargs)
+            
+            logger.debug(f'Took {time.time()-now:1.2f} s to build interpolator of type {type(interp)}.')
+            
+            now=time.time()
+            # fit interpolator and estimate interpolator error 
+            # by k-runs of leave-one-out cross validation
+            # or k-fold cross validation, depending on the sample size 
+            # finally use all samples for the interpolator
+            # k = np.arange(N_mcs) #loo 
+            # k = np.random.randint(0, N_mcs, int(N_mcs//10)) # 10 % num sample runs of loo 
+            k = np.random.randint(0, N_mcs_imp, min(N_mcs_imp,100)) # 100 sample runs of loo 
+            val_errs = []
+            ind = np.ones(N_mcs_imp, dtype=bool)
+            if N_mcs_imp<10*len(k): # do loo
+                for k_i in k:
+                    ind[k_i] = False
+                    interp_loo =  interp_fun(scale(x_samp[ind,:]),  this_out[ind], **kwargs)
+                    err = interp_loo(scale(x_samp[~ind,:])) - this_out[~ind]
+                    val_errs.append(err)
+                    ind[k_i] = True
+                
+                intp_err = np.sqrt(np.nanmean(np.power(val_errs, 2))) / out_range
+                if intp_err*100 > intp_err_warn:
+                    logger.warn(f'RMSE of interpolator using {len(k)} runs of leave-one-out cross-validation: {intp_err*100:1.3f} percent')
+            else: # do lko
+                ind[k]=False
+                interp_lko =  interp_fun(scale(x_samp[ind,:]),  this_out[ind], **kwargs)
+                val_errs = interp_lko(scale(x_samp[~ind,:])) - this_out[~ind]
+                
+                intp_err = np.sqrt(np.nanmean(np.power(val_errs, 2))) / out_range
+                if intp_err*100 > intp_err_warn:
+                    logger.warn(f'RMSE of interpolator using leave-{len(k)}-out cross-validation: {intp_err*100:1.3f} percent')
+            intp_errors[n_ale] = intp_err
+            
+            logger.debug(f'Took {time.time()-now:1.2f} s to cross-validate interpolator.')
+            
+            now=time.time()
+            numeric_focals = [var.numeric_focals for var in vars_imp] # no-imp => []
+            # palette = sns.color_palette(n_colors=n_imp_hyc)
+            for i_hyc, hypercube in enumerate(imp_hyc_foc_inds):
+                # get focal sets / intervals
+                focals = np.vstack([focals[ind,:] for focals, ind in zip(numeric_focals, hypercube)])
+                vars_opt = focals[:,0]!=focals[:,1]# focals are not a singleton
+                n_vars_opt = np.sum(vars_opt)
+                
+                if plot_intp:
+                    engine = scipy.stats.qmc.Halton(n_vars_imp)
+                    inputs_hyc = engine.random(3**n_vars_imp)
+                    for i_var in range(n_vars_imp):
+                        minvar, maxvar = focals[i_var,:]
+                        inputs_hyc[:, i_var] *= maxvar - minvar
+                        inputs_hyc[:, i_var] += minvar
+                        
+                    outputs_hyc = interp(scale(inputs_hyc))
+                    # maxout_hyc = np.max(outputs_hyc)
+                    # minout_hyc = np.min(outputs_hyc)
+                    df_hyc = pd.DataFrame(inputs_hyc, columns = [var.name for var in vars_imp])
+                    df_hyc[self.out_name] = outputs_hyc
+                    plot_hyc_grid(df_hyc, grid, self.out_name, 
+                                  #maxx, minx, 
+                                  #maxout_hyc, minout_hyc
+                                  )
+                
+                # transform boundaries to unit cube for penalization
+                # will slightly exceed the unit cube due to samples being strictly inside the hypercube which was derived from all boundaries
+                # but the transformation is done to the minimum and maximum sample
+                unit_bounds = np.empty_like(focals)
+                for lu in range(2):
+                    unit_bounds[:,lu] = scale(focals[:,lu])
                     
-                    if True:
-                        bounds = focals
-                        init = np.array([np.mean(bound) for bound in bounds])[:, np.newaxis]
-                        
-                        if opt_meth=='Nelder-Mead':
-                            initial_simplex = np.random.random((nvars+1,nvars))
-                            for i, (start, stop) in enumerate(bounds):
-                                initial_simplex[:, i] *= stop - start
-                                initial_simplex[:, i] += start
-                            options = {'initial_simplex':initial_simplex, 'adaptive':True}
-                        else:
-                            options={}
-                        if isinstance(interp, scipy.interpolate.interpnd.LinearNDInterpolator):
-                            interp.fill_value = np.max(this_out)
-                        resl = scipy.optimize.minimize(lambda x: interp(x[np.newaxis,:]), init,  method=opt_meth, bounds=bounds, options=options)
-                        if not resl.success:
-                            logger.warning(f'Lower interval optimization did not succeed on hypercube {i_hyc} with message: {resl.message}')
-                            
-                        if isinstance(interp, scipy.interpolate.interpnd.LinearNDInterpolator):
-                            interp.fill_value = np.min(this_out)
-                        resu = scipy.optimize.minimize(lambda x: -interp(x[np.newaxis,:]), init,  method=opt_meth,  bounds=bounds, options=options)
-                        if not resu.success:
-                            logger.warning(f'Upper interval optimization did not succeed on hypercube {i_hyc} with message: {resu.message}')
-                        
-                        imp_foc[n_ale, i_hyc, :] = resl.fun, -resu.fun
-                    else:
-                        slices = []
-                        for start,stop in focals:
-                            if start==stop:
-                                step=1
-                            else:
-                                step= (stop - start) / 40
-                            slices.append(slice(start, stop + step, step))
-                        gridflat = np.mgrid[slices].reshape(nvars, -1).T
-                        
-                        out_interp = interp(gridflat)
-                        imp_foc[n_ale, i_hyc, :] = np.min(out_interp), np.max(out_interp)
-                    next(pbar)
-            else:
-                # find the indices of all epistemic samples that are within the boundaries defined by the stochastic sample
-                hyc_dat_inds = self.hypercube_sample_indices(inp_samp_prim, vars_imp, imp_hyc_foc_inds, N_mcs_imp)  # no-imp: np.ones(1, N_mcs_imp)
+                hyc_vol_frac = np.product(unit_bounds[:,1] - unit_bounds[:,0])
+
+                # initialize memory for optimizing x in wrapper interval_range
+                temp_x = np.copy(np.mean(unit_bounds, axis=1))[np.newaxis,:]
+                temp_dists = np.empty((1,n_vars_imp))
+                # interpolator needs input of shape (S, n_vars_imp)
+                # optimizer needs input of shape (n_vars_opt,) (minimize) or (S,2 * n_vars_opt) (global)
+                # init is shape (n_vars_imp,1) and so is temp_x 
+                # focals is shape (n_vars_imp, 2) and so is focals and so is unit_bounds
                 
-                # if check_sample_sizes:
-                #     hyc_num_elems = np.sum(hyc_dat_inds, axis=1)
-                #     sample_sizes[n_ale,:] = hyc_num_elems
+                if opt_meth=='Nelder-Mead':
+                    options = kwargs.get('options',{})
+                    options['adaptive'] = True
+                else:
+                    options = kwargs.get('options',{})
                 
-                # compute output intervals / focal sets for each imprecise hypercube
-                imp_foc[n_ale, :, :] = approximate_out_intervals(this_out, hyc_dat_inds)  # no-imp: [np.min(output), np.max(output)] where min==max
+                if isinstance(opt_meth, str) and opt_meth!='genetic':
+                    
+                    resl = scipy.optimize.minimize(interval_range, 
+                                np.concatenate([x_out_min[vars_opt], x_out_max[vars_opt]]),  
+                                method=opt_meth, 
+                                args=(interp,temp_x,unit_bounds,temp_dists, vars_opt, n_vars_opt),
+                                bounds=np.vstack([unit_bounds[vars_opt], unit_bounds[vars_opt]]), # (2 * n_opt_vars, 2)
+                                options=options)
+                    unit_x_low = resl.x[:n_vars_opt]
+                    unit_x_up = resl.x[n_vars_opt:]
+
+                    if not resl.success:
+                        logger.warning(f'interval optimization failed on hypercube {i_hyc} of sample {n_ale} with message: {resl.message}')
+                    
+                elif opt_meth=='genetic':
+                    popsize = 15
+                    S = popsize * 2 * n_vars_opt
+                    temp_x_vec = np.repeat(temp_x, S, axis=0) # (S, 2 * n_vars)
+                    temp_dists_vec = np.repeat(temp_dists, S, axis=0) # (S, 2 * n_vars)
+                    init = scipy.stats.qmc.Halton(2 * n_vars_opt).random(S) # (S, 2 * n_vars_opt)
+
+                    resl = scipy.optimize.differential_evolution(interval_range, 
+                                np.vstack([unit_bounds[vars_opt,:], unit_bounds[vars_opt,:]]), # (2 * n_vars_opt, 2)
+                                args=(interp,temp_x_vec,unit_bounds,temp_dists_vec, vars_opt, n_vars_opt),
+                                polish=False,
+                                init=init,
+                                vectorized=True, 
+                                updating='deferred')
+                    
+                    unit_x_low = resl.x[:n_vars_opt]
+                    unit_x_up = resl.x[n_vars_opt:]
+                else:
+                    logger.warning('Attempting Brute Force Interval optimization.')
+                    unit_x_intv = scipy.optimize.brute(interval_range, 
+                                np.vstack([unit_bounds[vars_opt,:], unit_bounds[vars_opt,:]]),
+                                args=(interp,temp_x,unit_bounds,temp_dists, vars_opt, n_vars_opt),Ns=10)
+                    unit_x_low = unit_x_intv[:n_vars_opt]
+                    unit_x_up = unit_x_intv[n_vars_opt:]
+                
+                temp_x[:,vars_opt] = unit_x_low
+                out_of_bounds = np.logical_or((temp_x - unit_bounds[:,0]) <-1e-8,
+                                              (temp_x - unit_bounds[:,1]) > 1e-8)
+                if np.any(out_of_bounds):
+                    logger.warning(f'Minimum out of bounds at sample {n_ale} hypercube {i_hyc} for variable nr {np.where(out_of_bounds)[1]}')
+                    # print(temp_x, unit_bounds, temp_x.T - unit_bounds,vars_opt)
+                
+                out_low = interp(temp_x)
+                if out_low < out_min:
+                    err = np.abs(out_min - out_low)[0]
+                    intp_undershot[0] += 1
+                    intp_undershot[1] += err
+                    out_low = out_min
+                    if err / out_range * 100 > extrp_warn:
+                        logger.warning(f'Extrapolation by {err/out_range*100:1.3f} percent (interpolation domain min) at sample {n_ale} hypercube {i_hyc}.')
+                    
+                if isinstance(interp, scipy.interpolate.NearestNDInterpolator):
+                    i, _ = interp.neighbor_dist(temp_x)
+                    x_low = x_samp[i,:]
+                else:
+                    x_low = unscale(temp_x)
+                
+                temp_x[:,vars_opt] = unit_x_up
+                out_of_bounds = np.logical_or((temp_x - unit_bounds[:,0]) <-1e-8,
+                                              (temp_x - unit_bounds[:,1]) > 1e-8)
+                if np.any(out_of_bounds):
+                    logger.warning(f'Maximum out of bounds at sample {n_ale} hypercube {i_hyc} for variable nr {np.where(out_of_bounds)[1]}')
+                    # print(temp_x, unit_bounds)
+                    
+                out_up = interp(temp_x)
+                if out_up > out_max:
+                    err = np.abs((out_up - out_max))[0]
+                    intp_exceed[0] += 1
+                    intp_exceed[1] += err
+                    out_up = out_max
+                    if err / out_range * 100 > extrp_warn:
+                        logger.warning(f'Extrapolation by {err/out_range*100:1.3f} percent (interpolation domain max) at sample {n_ale} hypercube {i_hyc}.')
+                    
+                if isinstance(interp, scipy.interpolate.NearestNDInterpolator):
+                    i, _ = interp.neighbor_dist(temp_x)
+                    x_up = x_samp[i,:]
+                else:
+                    x_up = unscale(temp_x)
+                    
+                if plot_res:
+                    plot_opt_res_grid(grid, vars_opt, 
+                                      x_low, x_up, 
+                                      focals, 
+                                      self.out_valid[1], self.out_valid[0], 
+                                      out_low, out_up)
+                    
+                imp_foc[n_ale, i_hyc, :] = out_low, out_up
+                
+                # assemble validation sample points (for linear or rbf interpolators)
+                if not isinstance(interp, scipy.interpolate.NearestNDInterpolator):
+                    # val_samp_prim axis 3 is ordered in as all_vars_prim 
+                    # [var for var in vars_ale if var.primary] + list(vars_imp)
+                    for i,var in enumerate([var for var in vars_ale if var.primary]):
+                        assert var.value is not None 
+                        val_samp_prim[n_ale, i_hyc, i, :] = var.value
+                    i += 1
+                    for j, b in enumerate(vars_opt):
+                        # if b:
+                        val_samp_prim[n_ale, i_hyc, j + i, :] = x_low[0,j], x_up[0,j]
+                        # else:
+                        #     val_samp_prim[n_ale, i_hyc, j + i, 0] = focals[j,0]
+                
+                if print_res_ranges:
+                    bl=focals[vars_opt,0]
+                    bh=focals[vars_opt,1]
+                    opt_var=0
+                    for focal, var, b in zip(focals, vars_imp, vars_opt):
+                        if not b:
+                            continue
+                        pl=int((unit_x_low[opt_var]-bl[opt_var])/(bh[opt_var]-bl[opt_var])*100)
+                        ph=int((unit_x_up[opt_var]-bl[opt_var])/(bh[opt_var]-bl[opt_var])*100)
+                        s=f'{var.name[:6]}\t{bl[opt_var]:1.2g}\t'
+                        for i in range(100):
+                            if i==pl and i==ph: s+='+'
+                            elif i==pl: s+='<'
+                            elif i==ph: s+='>'
+                            elif i==0: s+='|'
+                            elif i==99: s+='|'
+                            else: s+='.'
+                        s+=f'{bh[opt_var]:1.2g}'
+                        logger.info(s)
+                        opt_var+=1
+                        
+                    pl=int((out_low-out_min)/(out_max-out_min)*100)
+                    ph=int((out_up-out_min)/(out_max-out_min)*100)
+                    s=f'out \t{out_min:1.2g}\t'
+                    for i in range(100):
+                        if i==pl and i==ph: s+='+'
+                        elif i==pl: s+='<'
+                        elif i==ph: s+='>'
+                        elif i==0: s+='|'
+                        elif i==99: s+='|'
+                        else: s+='.'
+                    s+=f'{out_max:1.2g}'
+                    logger.info(s)
+                
+                # arg_vars = kwargs.get('arg_vars', None)
+                # mapping_function = kwargs.get('mapping_function', None)
+                # if arg_vars is not None and mapping_function is not None:
+                #
+                #     opt_var=0
+                #     for focal, var, b in zip(focals, vars_imp, vars_opt):
+                #         for arg,var_ in arg_vars.items():
+                #             if var_ == var:
+                #                 if b:
+                #                     arg_vals_l[arg] = unit_x_low[opt_var]
+                #                     arg_vals_h[arg] = unit_x_up[opt_var]
+                #                     opt_var+=1
+                #                 else:
+                #                     arg_vals_l[arg] = focal[0]
+                #                     arg_vals_h[arg] = focal[1]
+                #                 break
+                #         else:
+                #             print(f'could not find {var} in {arg_vars}')
+                #
+                #     fmin_true = mapping_function(**arg_vals_l, working_dir='/dev/shm/womo1998',result_dir='/dev/shm/womo1998', skip_existing=False)
+                #     fmax_true = mapping_function(**arg_vals_h, working_dir='/dev/shm/womo1998',result_dir='/dev/shm/womo1998', skip_existing=False)
+                #     logger.debug(f'Approximated: /t {out_low:1.3f}...{out_up:1.3f}')
+                #     logger.debug(f'True: /t {fmin_true:1.3f}...{fmax_true:1.3f}')
+                #
+                #     imp_foc[n_ale, i_hyc, :] = fmin_true, fmax_true
+                
                 next(pbar)
-                
-            if fig is not None:
-                # plot the hypercube part of xvar,yvar as a rectangle over the sampled output points
-                numeric_focals = [var.numeric_focals for var in vars_imp]
-                names_imp = [var.name for var in vars_imp]
-                if names_imp:
-                    xind = names_imp.index(xvar)
-                    yind = names_imp.index(yvar)
-                    for ax, foc_inds in zip(list(axes), imp_hyc_foc_inds):
-                        xl, xu = numeric_focals[xind][foc_inds[xind]]
-                        yl, yu = numeric_focals[yind][foc_inds[yind]]
-                        ax.add_patch(Rectangle((xl, yl), xu - xl, yu - yl, color='grey', alpha=0.5))
-                        # ax.annotate(f'{n_ale}',((xl+xu)/2,(yl+yu)/2))
-            
-            
-        # if check_sample_sizes:
-        #     for i_imp_hyc in range(n_imp_hyc):
-        #
-        #         max_samples = np.max(sample_sizes[:,i_imp_hyc])
-        #         if max_samples:
-        #             bins = [10 ** i for i in range(-1, int(np.ceil(np.log10(max_samples))) + 1)]
-        #             bins[0]=0
-        #             bins[-1] = max_samples
-        #             hist, bins = np.histogram(sample_sizes[:,i_imp_hyc],bins=bins)
-        #         else:
-        #             hist, bins = [1,], [0, sample_sizes[0, i_imp_hyc]]
-        #
-        #         logger.info(f'Imprecise hypercube {i_imp_hyc} epistemic sample size distribution:')
-        #         for lbin, ubin, count in zip(bins[:-1], bins[1:], hist):
-        #             if count == 0: continue
-        #             logger.info(f'{lbin} < n < {ubin}: {count} aleatory samples')
-        
-        # for no-imp: imp_foc[n_ale, 0, :] = [ np.min(output[n_ale]), np.max(output[n_ale])] where min==max
+                if plot_res:
+                    from IPython import display
+                    display.display(plt.gcf())
+                    display.clear_output(wait=True)
+                    time.sleep(1)
+                    input("Hit any key to continue...")
+                    
+            logger.debug(f'Took {time.time()-now:1.2f} s for interval optimization of all {n_imp_hyc} hypercubes.')
+            logger.debug(imp_foc[n_ale, :, :])
         
         self.imp_foc = imp_foc
-        return imp_foc
+        self.val_samp_prim = val_samp_prim
+        
+        self.intp_errors = intp_errors
+        self.intp_exceed = intp_exceed
+        self.intp_undershot = intp_undershot
+        
+        if intp_exceed[0]:
+            logger.warning(f'The interpolator has exceed the maximum interpolation domain a total of {intp_exceed[0]} out of {n_imp_hyc * N_mcs_ale} times: Average error {intp_exceed[1]/intp_exceed[0]/(self.out_valid[1]-self.out_valid[0])*100:1.3f} percent (of valid domain)')
+        if intp_undershot[0]:
+            logger.warning(f'The interpolator has intp_exceed the minimum interpolation domain a total of {intp_undershot[0]} out of {n_imp_hyc * N_mcs_ale} times: Average error {intp_undershot[1]/intp_undershot[0]/(self.out_valid[1]-self.out_valid[0])*100:1.3f} percent (of valid domain)')
+        
+        return imp_foc, val_samp_prim, intp_errors, intp_exceed, intp_undershot
     
     def estimate_inc(self, stat_fun, n_stat, stat_fun_kwargs={}, check_sample_sizes=True):
         '''
@@ -1340,6 +2002,7 @@ class PolyUQ(object):
                     
                     bounds = [focs[ind] for focs, ind in zip(numeric_focals, inc_hyc_foc_inds[i_inc_hyc])]
                     init = [np.mean(bound) for bound in bounds]
+                    now = time.time()
                     for i_stat in range(n_stat):
                         # lower boundary
                         logging.disable(logging.FATAL)
@@ -1357,8 +2020,9 @@ class PolyUQ(object):
                             logging.disable(logging.NOTSET)
                             focals_stats[i_stat, i_hyc, 0] = min( resll.fun,  reslu.fun)
                             focals_stats[i_stat, i_hyc, 1] = max(-resul.fun, -resuu.fun)
-                
+                        
                         next(pbar)
+                    logger.debug(f'Took {time.time()-now:1.2f} s for interval optimization of {n_stat} statistics on hypercube {i_hyc}.')
                         
                 hyc_mass[i_imp_hyc * n_inc_hyc: (i_imp_hyc + 1 ) * n_inc_hyc ] = inc_hyc_mass * imp_hyc_mass[i_imp_hyc] 
         else: #no incompleteness
@@ -1543,6 +2207,7 @@ class PolyUQ(object):
                 
         return hyc_dat_inds
     
+
     def naive_uq(self, N_mcs, mapping, arg_vars):
         
         def imp_stat(x):
@@ -1685,10 +2350,15 @@ class PolyUQ(object):
         out_dict['self.N_mcs_epi'] = self.N_mcs_epi
         out_dict['self.percentiles'] = self.percentiles
         out_dict['self.seed'] = self.seed
+        out_dict['self.var_supp'] = self.var_supp
         out_dict['self.inp_samp_prim'] = self.inp_samp_prim
         out_dict['self.inp_suppl_ale'] = self.inp_suppl_ale
         out_dict['self.inp_suppl_epi'] = self.inp_suppl_epi
         
+        if self.var_supp is not None:
+            out_dict['self.var_supp.columns'] = self.var_supp.columns
+        else:
+            out_dict['self.var_supp.columns'] = None
         if self.inp_samp_prim is not None:
             out_dict['self.inp_samp_prim.columns'] = self.inp_samp_prim.columns
         else:
@@ -1696,7 +2366,7 @@ class PolyUQ(object):
         if self.inp_suppl_ale is not None:
             out_dict['self.inp_suppl_ale.columns'] = self.inp_suppl_ale.columns
         else:
-            out_dict['self.inp_suppl_ale.columns'] = none
+            out_dict['self.inp_suppl_ale.columns'] = None
         if self.inp_suppl_epi is not None:
             out_dict['self.inp_suppl_epi.columns'] = self.inp_suppl_epi.columns
         else:
@@ -1705,14 +2375,24 @@ class PolyUQ(object):
         out_dict['self.fcount'] = self.fcount
         out_dict['self.loop_ale'] = self.loop_ale
         out_dict['self.loop_epi'] = self.loop_epi
+        out_dict['self.out_name'] = self.out_name
         out_dict['self.out_samp'] = self.out_samp
+        out_dict['self.out_valid'] = self.out_valid
         
         out_dict['self.imp_foc'] = self.imp_foc
+        out_dict['self.val_samp_prim'] = self.val_samp_prim
+        out_dict['self.intp_errors'] = self.intp_errors
+        out_dict['self.intp_exceed'] = self.intp_exceed
+        out_dict['self.intp_undershot'] = self.intp_undershot
         
         out_dict['self.focals_stats'] = self.focals_stats
         out_dict['self.focals_mass'] = self.focals_mass
-
-        np.savez_compressed(fname, **out_dict)
+        
+        with open(fname + '.tmp', 'wb') as f:
+            np.savez_compressed(f, **out_dict)
+        if os.path.exists(fname):
+            os.remove(fname)
+        os.rename(fname + '.tmp', fname)
         
     def load_state(self, fname):
         
@@ -1731,6 +2411,8 @@ class PolyUQ(object):
             
             '''
             _NUMERIC_KINDS = set('buifc')
+            if arr is None:
+                return arr
             if not arr.shape:
                 return arr.item()
             elif arr.dtype.kind in _NUMERIC_KINDS:
@@ -1755,6 +2437,8 @@ class PolyUQ(object):
         self.percentiles = validate_array(in_dict['self.percentiles'])
         self.seed = validate_array(in_dict['self.seed'])
         
+        self.var_supp = to_dataframe(validate_array(in_dict.get('self.var_supp')),
+                                          validate_array(in_dict.get('self.var_supp.columns')))
         self.inp_samp_prim = to_dataframe(validate_array(in_dict['self.inp_samp_prim']),
                                           validate_array(in_dict['self.inp_samp_prim.columns']))
         self.inp_suppl_ale = to_dataframe(validate_array(in_dict['self.inp_suppl_ale']),
@@ -1765,13 +2449,22 @@ class PolyUQ(object):
         self.fcount = validate_array(in_dict['self.fcount'])
         self.loop_ale = validate_array(in_dict['self.loop_ale'])
         self.loop_epi = validate_array(in_dict['self.loop_epi'])
+        self.out_name = validate_array(in_dict.get('self.out_name'))
         self.out_samp = validate_array(in_dict['self.out_samp'])
+        self.out_valid = validate_array(in_dict.get('self.out_valid'))
         
         self.imp_foc = validate_array(in_dict['self.imp_foc'])
+        self.val_samp_prim = validate_array(in_dict.get('self.val_samp_prim'))
+        self.intp_errors = validate_array(in_dict.get('self.intp_errors'))
+        self.intp_exceed = validate_array(in_dict.get('self.intp_exceed'))
+        self.intp_undershot = validate_array(in_dict.get('self.intp_undershot'))
         
         self.focals_stats = validate_array(in_dict['self.focals_stats'])
         self.focals_mass = validate_array(in_dict['self.focals_mass'])
         
+        if self.var_supp is None:
+            self.sample_qmc(percentiles= self.percentiles, supp_only=True)
+            self.save_state(fname)
     
 def generate_histogram_bins(data, axis=1, nbin_fact=1):
     # generate the bins
@@ -1984,18 +2677,4 @@ def test_to_dm():
     
 
 if __name__ == '__main__':
-    test_to_dm()
-
-    # mu1 = MassFunction(name='mu1', focals=[(14.78,14.80),(13.96,15.61)], masses=[0.5,0.5], primary=False)
-    # sig1 = MassFunction(name='sig1', focals=[(4.16,4.18),(3.66,4.85)], masses = [0.5, 0.5], primary=False)
-    # q1 = RandomVariable(name='q1', dist='norm', params=[mu1, sig1])
-    # print(q1.support())
-    #
-    # inc_q1a1 = (RandomVariable(name='q1a1l', dist='norm', params=[15,4], primary=False),
-    #           RandomVariable(name='q1a1l', dist='norm', params=[0.1,0.01], primary=False),)
-    # inc_q1a0 = (RandomVariable(name='q1a1l', dist='norm', params=[15,4], primary=False),
-    #             RandomVariable(name='q1a0l', dist='norm', params=[-0.4,0.1], primary=False), 
-    #           RandomVariable(name='dq1a0r', dist='norm', params=[0.5,0.06], primary=False))
-    # q1 = MassFunction(name='q1', focals=[inc_q1a1, inc_q1a0], masses=[0.5,0.5], primary=True, incremental=True)
-    # print(q1.support())
-    
+    pass
