@@ -1133,13 +1133,16 @@ class PolyUQ(object):
         N_mcs_ale = self.N_mcs_ale
         
         inp_samp_prim = self.inp_samp_prim.iloc[:N_mcs_ale]
-        inp_suppl_ale = self.inp_suppl_ale
+        inp_suppl_ale = self.inp_suppl_ale.iloc[:N_mcs_ale]
         
         # compute probabilities for imprecise samples
         p_weights = np.ones((N_mcs_ale, n_imp_hyc))
-            
+        all_hyp_vars = set(chain(*hyc_hyp_vars))
         # assemble probability weights from primary aleatory variables 
         for var in vars_ale:
+            if var in all_hyp_vars:
+                logger.warning(f'Variable {var.name} is primary and a hyper variable. Ignoring primary state for probability weights.')
+                continue
             if var.primary:
                 # assign weight to to all hypercubes
                 p_weights *= np.repeat(var.prob_dens(inp_samp_prim[var.name])[:,np.newaxis], n_imp_hyc, axis=1)
@@ -1181,6 +1184,9 @@ class PolyUQ(object):
             for each aleatory sample, the epistemic samples are propagated
             if ice_occ==0 the model is run with all those ice_masses, even though, they are not present
             that is why ice_occ had to be passed to the mapping function and thus needed to be primary
+        what to do about those cases?
+            if we just use it twice, once as primary and once as hypervariable
+            it's probability weight is doubled
             
         '''
         
@@ -1438,12 +1444,25 @@ class PolyUQ(object):
         # allocate arrays for interval optimization and subsequent statistical analyzes
         if self.imp_foc is None:
             imp_foc = np.full((N_mcs_ale, n_imp_hyc, 2), np.nan)
+        elif self.imp_foc.shape[0]<N_mcs_ale:
+            N_mcs_ale_prev = self.imp_foc.shape[0]
+            assert self.imp_foc.shape[1] == n_imp_hyc
+            imp_foc = np.full((N_mcs_ale, n_imp_hyc, 2), np.nan)
+            imp_foc[:N_mcs_ale_prev,:,:] = self.imp_foc
         else:
             imp_foc = self.imp_foc
+            
             
         # next-to-last axis corresponds to the order in all_vars_imp
         if self.val_samp_prim is None:
             val_samp_prim = np.full((N_mcs_ale, n_imp_hyc, len(all_vars_prim), 2), np.nan)
+        elif self.val_samp_prim.shape[0]<N_mcs_ale:
+            N_mcs_ale_prev = self.val_samp_prim.shape[0]
+            assert self.val_samp_prim.shape[1] == n_imp_hyc
+            assert self.val_samp_prim.shape[2] == len(all_vars_prim)
+            val_samp_prim = np.full((N_mcs_ale, n_imp_hyc, len(all_vars_prim), 2), np.nan)
+            val_samp_prim[:N_mcs_ale_prev,:,:,:] = self.val_samp_prim
+            
         else:
             val_samp_prim = self.val_samp_prim
             assert np.all(val_samp_prim.shape == (N_mcs_ale, n_imp_hyc, len(all_vars_prim), 2))
@@ -1461,6 +1480,10 @@ class PolyUQ(object):
             
         if self.intp_errors is None:
             intp_errors = np.full(N_mcs_ale, np.nan)
+        elif self.intp_errors.shape[0]<N_mcs_ale:
+            N_mcs_ale_prev = self.intp_errors.shape[0]
+            intp_errors = np.full(N_mcs_ale, np.nan)
+            intp_errors[:N_mcs_ale_prev] = self.intp_errors
         else:
             intp_errors = self.intp_errors
             assert np.all(intp_errors.shape==(N_mcs_ale,))
@@ -1793,9 +1816,9 @@ class PolyUQ(object):
         self.intp_undershot = intp_undershot
         
         if intp_exceed[0]:
-            logger.warning(f'The interpolator has exceed the maximum interpolation domain a total of {intp_exceed[0]} out of {n_imp_hyc * N_mcs_ale} times: Average error {intp_exceed[1]/intp_exceed[0]/(self.out_valid[1]-self.out_valid[0])*100:1.3f} percent (of valid domain)')
+            logger.warning(f'The interpolator has exceeded the maximum interpolation domain a total of {intp_exceed[0]} out of {n_imp_hyc * N_mcs_ale} times: Average error {intp_exceed[1]/intp_exceed[0]/(self.out_valid[1]-self.out_valid[0])*100:1.3f} percent (of valid domain)')
         if intp_undershot[0]:
-            logger.warning(f'The interpolator has intp_exceed the minimum interpolation domain a total of {intp_undershot[0]} out of {n_imp_hyc * N_mcs_ale} times: Average error {intp_undershot[1]/intp_undershot[0]/(self.out_valid[1]-self.out_valid[0])*100:1.3f} percent (of valid domain)')
+            logger.warning(f'The interpolator has exceeded the minimum interpolation domain a total of {intp_undershot[0]} out of {n_imp_hyc * N_mcs_ale} times: Average error {intp_undershot[1]/intp_undershot[0]/(self.out_valid[1]-self.out_valid[0])*100:1.3f} percent (of valid domain)')
         
         return imp_foc, val_samp_prim, intp_errors, intp_exceed, intp_undershot
     

@@ -73,6 +73,7 @@ def simplePbar(total):
     For the last call, additionally a carriage return must be printed
     
     '''
+    prev_time = time.time()
     stepsize = 100 / total
     last = 0
     ncalls = 0
@@ -80,7 +81,10 @@ def simplePbar(total):
         ncalls += 1
         while ncalls * stepsize // 1 > last:
             if 'RAY_JOB_ID' in os.environ:
-                print(f'Progress: {ncalls / total * 100:1.3f} %')
+                now = time.time()
+                if now - prev_time > 240: # every four minutes should be enough
+                    print(f'Progress: {ncalls / total * 100:1.3f} %')
+                    prev_time = now
             else:
                 print('.', end='', flush=True)
             last += 1
