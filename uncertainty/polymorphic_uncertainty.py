@@ -1451,6 +1451,7 @@ class PolyUQ(object):
             imp_foc[:N_mcs_ale_prev,:,:] = self.imp_foc
         else:
             imp_foc = self.imp_foc
+            assert np.all(imp_foc.shape[1:] == (n_imp_hyc, 2))
             
             
         # next-to-last axis corresponds to the order in all_vars_imp
@@ -1465,7 +1466,7 @@ class PolyUQ(object):
             
         else:
             val_samp_prim = self.val_samp_prim
-            assert np.all(val_samp_prim.shape == (N_mcs_ale, n_imp_hyc, len(all_vars_prim), 2))
+            assert np.all(val_samp_prim.shape[1:] == (n_imp_hyc, len(all_vars_prim), 2))
             
         # count the number of times the interpolator has extrapolated values
         if self.intp_exceed is None:
@@ -1486,7 +1487,7 @@ class PolyUQ(object):
             intp_errors[:N_mcs_ale_prev] = self.intp_errors
         else:
             intp_errors = self.intp_errors
-            assert np.all(intp_errors.shape==(N_mcs_ale,))
+            assert len(intp_errors) >= N_mcs_ale
         
         iter_ale = range(kwargs.pop('start_ale',0), kwargs.pop('end_ale',N_mcs_ale))
         pbar = simplePbar(n_imp_hyc * len(iter_ale))
@@ -1816,9 +1817,9 @@ class PolyUQ(object):
         self.intp_undershot = intp_undershot
         
         if intp_exceed[0]:
-            logger.warning(f'The interpolator has exceeded the maximum interpolation domain a total of {intp_exceed[0]} out of {n_imp_hyc * N_mcs_ale} times: Average error {intp_exceed[1]/intp_exceed[0]/(self.out_valid[1]-self.out_valid[0])*100:1.3f} percent (of valid domain)')
+            logger.warning(f'The interpolator has exceeded the maximum interpolation domain a total of {intp_exceed[0]} out of {n_imp_hyc * len(iter_ale)} times: Average error {intp_exceed[1]/intp_exceed[0]/(self.out_valid[1]-self.out_valid[0])*100:1.3f} percent (of valid domain)')
         if intp_undershot[0]:
-            logger.warning(f'The interpolator has exceeded the minimum interpolation domain a total of {intp_undershot[0]} out of {n_imp_hyc * N_mcs_ale} times: Average error {intp_undershot[1]/intp_undershot[0]/(self.out_valid[1]-self.out_valid[0])*100:1.3f} percent (of valid domain)')
+            logger.warning(f'The interpolator has exceeded the minimum interpolation domain a total of {intp_undershot[0]} out of {n_imp_hyc * len(iter_ale)} times: Average error {intp_undershot[1]/intp_undershot[0]/(self.out_valid[1]-self.out_valid[0])*100:1.3f} percent (of valid domain)')
         
         return imp_foc, val_samp_prim, intp_errors, intp_exceed, intp_undershot
     
