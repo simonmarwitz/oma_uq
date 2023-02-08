@@ -330,7 +330,7 @@ def vars_definition():
     N_wire = RandomVariable('norm','N_wire', [muNwire, 2655], primary=True) # Newton
     A_wire = MassFunction('A_wire', [(0.0007,0.0008)],[1,], primary=True) # meter^2
     zeta = MassFunction('zeta', [(0.0075,0.0092), (0.0075,0.0134), (0.0016,0.015)], [0.5,0.3,0.2], primary=True) # -
-    stddD = MassFunction('vardD',[(0,25),(10,15)],[0.2,0.8], primary=False) # Newton second per meter
+    stddD = MassFunction('vardD',[(5,20),(10,15)],[0.2,0.8], primary=False) # Newton second per meter
     dD = RandomVariable('norm', 'dD',[197.61, stddD], primary=True)  # Newton second per meter
     ice_days = MassFunction('ice_days', [(28.2/365,), (1/365,77/365)],[0.3,0.7], primary=False) # days, incompleteness
     ice_occ = RandomVariable('bernoulli', 'ice_occ',  [ice_days], primary=True) # boolean, variability
@@ -412,8 +412,48 @@ def export_datamanager():
                     break
 
 def main():
-    return
+    vars_ale, vars_epi, arg_vars = vars_definition()
+    dim_ex = 'cartesian'
+    N_mcs_ale = 13717 # N_mcs = 1e6 = N_mcs_ale * N_mcs_epi
+    N_mcs_epi = 729 # = 3^6 = 2.56^n_imp ~ 3^n_imp -> cover every corner and midpoints in a full-factorial design (but distributed)
+    use_dm = True
+    result_dir = '/usr/scratch4/sima9999/work/modal_uq/uq_modal_beam/'
+    logger= logging.getLogger('uncertainty.polymorphic_uncertainty')
+    logger.setLevel(level=logging.INFO)
+    
+    ret_name = ['damp_freqs','zetas','frf'][0]
+    if ret_name == 'frf':
+        ret_ind = {'frequencies':105, 'space':5}
+    else:
+        ret_ind = {'modes':1}
+    ret_dir = f'{ret_name}-{".".join(str(e) for e in ret_ind.values())}'
+    poly_uq = PolyUQ(vars_ale, vars_epi, dim_ex=dim_ex)
+    samp_path = os.path.join(result_dir,'polyuq_samp.npz')
+    prop_path = os.path.join(result_dir, 'estimations', f'{ret_dir}/polyuq_prop.npz')
+    imp_path = os.path.join(result_dir, 'estimations', f'{ret_dir}/polyuq_imp.npz')
+    
+    def stat_fun(a, weight,i_stat):
+        return np.average(a, weights=weight)
+    n_stat = 1
+    inc_path = os.path.join(result_dir, 'estimations', f'{ret_dir}/polyuq_avg_inc.npz')
+    if os.path.exists(inc_path):
+        poly_uq.load_state(inc_path)
+    else:
+        poly_uq.load_state(imp_path)
+    
+    samp_fin = np.nonzero(
+            np.any(
+                np.isnan(poly_uq.imp_foc[:,:,0]),
+                axis=1)
+        )[0]
+    if len(samp_fin)>0:
+        end_ale = np.min(samp_fin)
+        poly_uq.N_mcs_ale = end_ale
+    focals_stats, hyc_mass = poly_uq.optimize_inc(stat_fun, n_stat)
+    poly_uq.save_state(inc_path)
+
 
 if __name__ == '__main__':
     # test_interpolation('frf', {'frequencies':127,'space':1}, 3062)
-    export_datamanager()
+    # export_datamanager()
+    main()

@@ -142,15 +142,21 @@ class RandomVariable(UncertainVariable):
                 eval_params.append(param.value)
             else:
                 eval_params.append(param)
+
         # rv = self.dist_fun(*eval_params)
         # pdf = rv.pdf(*eval_params,values)
         dist_fun = self.dist_fun
         if isinstance(dist_fun, scipy.stats.rv_continuous):
             pdf = self.dist_fun.pdf(values, *eval_params)
+            
         elif isinstance(dist_fun, scipy.stats.rv_discrete):
             pdf = self.dist_fun.pmf(values, *eval_params)
         else:
             raise RuntimeError('Distribution function is neither continuous nor discrete. Check your definitions.')
+        isnan = np.isnan(pdf)
+        if np.any(isnan):
+            logger.warning('Probability density contains NaN. Check your (hyper-)parameters.')
+            pdf[isnan] = 0
         return pdf
 #         return pdf / pdf.sum()
     
@@ -1988,8 +1994,8 @@ class PolyUQ(object):
             vars_inc = self.vars_inc
             for i, var in enumerate(vars_inc):
                 var.freeze(x[i])
-            with HiddenPrints():
-                p_weights = self.probabilities_imp(i_imp_hyc)
+            # with HiddenPrints():
+            p_weights = self.probabilities_imp(i_imp_hyc)
             stat = stat_fun(samples, p_weights, i_stat, **stat_fun_kwargs)
             return min_max * stat
         
