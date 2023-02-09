@@ -454,6 +454,20 @@ def aggregate_mass(focals_stats, hyc_mass, nbin_fact=1, cum_mass=False):
 
     return bel_stats, pl_stats, q_stats, bins_bel
 
+def plot_focals(focals, mass, ax, highlight=None):
+    cm=0
+    for i,((l,r),m) in enumerate(zip(focals,mass)): 
+        if i == highlight:
+            ax.bar(l,m*0.9,(r-l),bottom = cm+0.05*m, align='edge', color='lightcoral', edgecolor='black')
+        else:
+            ax.bar(l,m*0.9,(r-l),bottom = cm+0.05*m, align='edge', color='lightgrey', edgecolor='black')
+        cm += m
+#     ax.set_xticks([0,0.5,1,1.5,2])
+#     ax.set_xticklabels(['','','','','',])
+
+
+    return ax
+
 def plot_grid(df, output='y'):
     global hue_norm
     hue_norm = matplotlib.colors.Normalize(3/2*np.min(df[output])-1/2*np.max(df[output]),np.max(df[output]))
@@ -1146,8 +1160,8 @@ class PolyUQ(object):
         all_hyp_vars = set(chain(*hyc_hyp_vars))
         # assemble probability weights from primary aleatory variables 
         for var in vars_ale:
-            if var in all_hyp_vars:
-                logger.warning(f'Variable {var.name} is primary and a hyper variable. Ignoring primary state for probability weights.')
+            if var in all_hyp_vars and var.primary:
+                logger.info(f'Variable {var.name} is primary and a hyper variable. Ignoring primary state for probability weights.')
                 continue
             if var.primary:
                 # assign weight to to all hypercubes
@@ -1246,6 +1260,7 @@ class PolyUQ(object):
         N_mcs_ale,  N_mcs_imp,  n_vars_imp,    intv_bound
                     n_imp_hyc,  n_vars_opt
                     S,
+        n_stat (inc.), n_hyc,
         Not always all levels are present and actual dimensions change 
         accordingly, but not the order.
         
@@ -2035,7 +2050,7 @@ class PolyUQ(object):
                     now = time.time()
                     for i_stat in range(n_stat):
                         # lower boundary
-                        logging.disable(logging.FATAL)
+                        logging.disable(logging.INFO)
                         try:
                             resll = scipy.optimize.minimize(wrapper, init, ( 1, stat_fun, imp_foc[:,i_imp_hyc, 0], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
                             resul = scipy.optimize.minimize(wrapper, init, (-1, stat_fun, imp_foc[:,i_imp_hyc, 0], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)

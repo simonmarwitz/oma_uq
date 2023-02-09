@@ -20,9 +20,9 @@ def default_mapping(E=2.1e11, a=0.9, b=0.875, t=0.009, rho=7850, N_wire=1.1e+05,
                      A_wire=0.00075, add_mass=55, zeta=0.0428, dD=198, # structural
                      ice_occ=1, ice_mass=75, # environmental
                      num_nodes=200, num_modes=14, fs=10, N=2048, meas_locs=np.array([40,80,120,160,200]), # algorithmic
-                     jid='abcdef123', result_dir=None, working_dir='/dev/shm/womo1998/'):
+                     jid='abcdef123', result_dir=None, working_dir='/dev/shm/womo1998/', skip_existing=False):
     
-    return mapping_function(E, a, b, t, rho, N_wire, A_wire, add_mass, zeta, dD, ice_occ, ice_mass, num_nodes, num_modes, fs, N, meas_locs, jid, result_dir, working_dir)
+    return mapping_function(E, a, b, t, rho, N_wire, A_wire, add_mass, zeta, dD, ice_occ, ice_mass, num_nodes, num_modes, fs, N, meas_locs, jid, result_dir, working_dir, skip_existing)
 
 def mapping_pass(b,t,N_wire,A_wire,add_mass,zeta,dD,ice_occ,ice_mass, jid='abcdef123', result_dir=None, working_dir='/dev/shm/womo1998/'):
     time.sleep(0.001)
@@ -103,9 +103,29 @@ def mapping_function(E=2.1e11, a=0.9, b=None, t=None, rho=7850, N_wire=None,
                      num_nodes=200, num_modes=14, fs=10, N=2048, meas_locs=np.array([40,80,120,160,200]), # algorithmic
                      jid='abcdef123', result_dir=None, working_dir=None, skip_existing=True):
     
+    logger.warning('MEAS_NODES definition has changed to include TMD node (total 6).')
+    '''
+    The TMD FRF might be more interesting than the 160 m FRF
+    160 m FRF was originally chosen to have some effect due to the mode shapes, 
+    which should mostly be affected by wire properties,
+    otherwise only frequencies and damping really play a role
+    
+    we would have to blow up the datamanager database and save it again
+    from_datamanager should then work with space_ind=2 for the TMD dof
+    which means, we could just operate on the smaller set of 8327 samples that
+    are yet to be computed, while using all 13717 samples for the other two frf nodes
+    without having to recompute everything again
+    
+    in estimate_imp we have to make sure to start at 5390 and ignore all previous
+    samples (which would be nan)
+    also in optimize_inc we have to make sure the first 5390 samples are ignored
+    a general procedure to ignore all-nan samples would be useful anyway
+    
+    
+    '''
     # print(E,a,b,t,rho,N_wire,A_wire,add_mass,zeta,dD,ice_occ,ice_mass)
     logger_mech=logging.getLogger('model.mechanical')
-    logger_mech.setLevel(level=logging.WARNING)
+    logger_mech.setLevel(level=logging.INFO)
     
     A = np.pi*(a*b-(a-t)*(b-t))
     
@@ -164,7 +184,8 @@ def mapping_function(E=2.1e11, a=0.9, b=None, t=None, rho=7850, N_wire=None,
                 # logger.warning(f'File {os.path.join(savefolder, f"{jid}_mechanical.npz")} corrupted. Deleting.')
                 os.remove(os.path.join(savefolder, f'{jid}_mechanical.npz'))
             
-    if mech is None:
+    if mech is None or len(mech.meas_nodes)<6:
+        'python docs: The expression x or y first evaluates x; if x is true, its value is returned; otherwise, y is evaluated and the resulting value is returned.'
         
         global ansys
         if 'ansys' not in globals():
@@ -193,12 +214,15 @@ def mapping_function(E=2.1e11, a=0.9, b=None, t=None, rho=7850, N_wire=None,
                 os.close(open_file.fd)
         # else:
         #     print(f'leaving {open_file}')
+        
     
     fd = mech.damped_frequencies
     zetas = mech.modal_damping
-    frf = mech.frf[:,-2:]
+    frf = mech.frf[:,-3:]
+    # print(mech.meas_nodes[-3:])
     # print(E,a,b,t,rho,N_wire,A_wire, add_mass, zeta, dD, ice_occ, ice_mass, fd[0])
     # print(fd.astype('float32'))
+    
     return fd.astype('float32'), zetas.astype('float32'), np.abs(frf).astype('float32')
     
 def test_interpolation(ret_name, ret_ind, N_mcs_ale):
@@ -262,6 +286,7 @@ def test_domain():
     ice_occ     0          1
     ice_mass    50         100        75
     '''
+    titles = ['160 m', '200 m', 'TMD']
     frf_ind = 0
     import matplotlib.pyplot as plt
     import time
@@ -269,53 +294,59 @@ def test_domain():
     ymin=0
     ymax=0.01
     freqs = np.linspace(0, 5, 2048 // 2 + 1, False)
-    for frf_ind in range(2):
-        now=time.time()
-        f,zeta,frf = mapping_function(b=0.9, t=0.006, N_wire=110000, 
-                         A_wire=0.00075, add_mass=60, zeta=0.0083, dD=197.61, # structural
-                        ice_occ=1, ice_mass=0.5, # environmental
-                       jid='nominal12', working_dir='/dev/shm/womo1998/', skip_existing=False)
+    now=time.time()
+    f,zeta,frf = mapping_function(b=0.9, t=0.006, N_wire=110000, 
+                     A_wire=0.00075, add_mass=60, zeta=0.0083, dD=197.61, # structural
+                    ice_occ=1, ice_mass=0.5, # environmental
+                   jid='nominal12', working_dir='/dev/shm/womo1998/', skip_existing=True)
+    print(time.time()-now)
 
-
-        frf = frf[:,frf_ind]
+    
+    for frf_ind in range(3):
+        frf_ = frf[:,frf_ind]
         plt.figure()
-        plt.plot(freqs,frf, color='dimgrey')
-        plt.vlines(x=f, ymin=ymin, ymax=ymax, colors='lightgrey')
+        plt.plot(freqs,frf_, color='dimgrey')
+        plt.vlines(x=f, ymin=ymin, ymax=ymax, colors='lightgrey', zorder=-10)
         plt.ylim((ymin,ymax))
         plt.twinx()
         plt.plot(f,zeta, ls='none', marker='x', color='black')
+        plt.title(titles[frf_ind])
         plt.ylim((0,0.14))
         plt.xlim((0,5))
-        # max f,d
-        now=time.time()
-        f,zeta,frf = mapping_function(b=0.95, t=0.00637190164854557,N_wire=189873.988768885, 
-                         A_wire=0.0008, add_mass=20, zeta=0.0016, dD=104.634587863608, # structural
-                        ice_occ=0, ice_mass=0, # environmental
-                         jid='max12', working_dir='/dev/shm/womo1998/', skip_existing=False)
-        print(time.time()-now)
-        frf = frf[:,frf_ind]
+    # max f,d
+    now=time.time()
+    f,zeta,frf = mapping_function(b=0.95, t=0.00637190164854557,N_wire=189873.988768885, 
+                     A_wire=0.0008, add_mass=20, zeta=0.0016, dD=104.634587863608, # structural
+                    ice_occ=0, ice_mass=0, # environmental
+                     jid='max12', working_dir='/dev/shm/womo1998/', skip_existing=True)
+    print(time.time()-now)
+    for frf_ind in range(3):
+        frf_ = frf[:,frf_ind]
         plt.figure()
-        plt.plot(freqs,frf, color='dimgrey')
-        plt.vlines(x=f, ymin=ymin, ymax=ymax, colors='lightgrey')
+        plt.plot(freqs,frf_, color='dimgrey')
+        plt.vlines(x=f, ymin=ymin, ymax=ymax, colors='lightgrey', zorder=-10)
         plt.ylim((ymin,ymax))
         plt.twinx()
         plt.plot(f,zeta, ls='none', marker='x', color='black')
+        plt.title(titles[frf_ind])
         plt.ylim((0,0.14))
         plt.xlim((0,5))
-        # min f,d
-        now=time.time()
-        f,zeta,frf = mapping_function(b=0.85, t=0.00562809835145443, N_wire=30126.0112311152, 
-                         A_wire=0.0007, add_mass=100, zeta=0.015, dD=290.585412136393, # structural
-                        ice_occ=1, ice_mass=1, # environmental
-                         jid='min12', working_dir='/dev/shm/womo1998/', skip_existing=False)
-        print(time.time()-now)
-        frf = frf[:,frf_ind]
+    # min f,d
+    now=time.time()
+    f,zeta,frf = mapping_function(b=0.85, t=0.00562809835145443, N_wire=30126.0112311152, 
+                     A_wire=0.0007, add_mass=100, zeta=0.015, dD=290.585412136393, # structural
+                    ice_occ=1, ice_mass=1, # environmental
+                     jid='min12', working_dir='/dev/shm/womo1998/', skip_existing=True)
+    print(time.time()-now)
+    for frf_ind in range(3):
+        frf_ = frf[:,frf_ind]
         plt.figure()
-        plt.plot(freqs,frf, color='dimgrey')
-        plt.vlines(x=f, ymin=ymin, ymax=ymax, colors='lightgrey')
+        plt.plot(freqs,frf_, color='dimgrey')
+        plt.vlines(x=f, ymin=ymin, ymax=ymax, colors='lightgrey', zorder=-10)
         plt.ylim((ymin,ymax))
         plt.twinx()
         plt.plot(f,zeta, ls='none', marker='x', color='black')
+        plt.title(titles[frf_ind])
         plt.ylim((0,0.14))
         plt.xlim((0,5))
     
@@ -412,45 +443,8 @@ def export_datamanager():
                     break
 
 def main():
-    vars_ale, vars_epi, arg_vars = vars_definition()
-    dim_ex = 'cartesian'
-    N_mcs_ale = 13717 # N_mcs = 1e6 = N_mcs_ale * N_mcs_epi
-    N_mcs_epi = 729 # = 3^6 = 2.56^n_imp ~ 3^n_imp -> cover every corner and midpoints in a full-factorial design (but distributed)
-    use_dm = True
-    result_dir = '/usr/scratch4/sima9999/work/modal_uq/uq_modal_beam/'
-    logger= logging.getLogger('uncertainty.polymorphic_uncertainty')
-    logger.setLevel(level=logging.INFO)
-    
-    ret_name = ['damp_freqs','zetas','frf'][0]
-    if ret_name == 'frf':
-        ret_ind = {'frequencies':105, 'space':5}
-    else:
-        ret_ind = {'modes':1}
-    ret_dir = f'{ret_name}-{".".join(str(e) for e in ret_ind.values())}'
-    poly_uq = PolyUQ(vars_ale, vars_epi, dim_ex=dim_ex)
-    samp_path = os.path.join(result_dir,'polyuq_samp.npz')
-    prop_path = os.path.join(result_dir, 'estimations', f'{ret_dir}/polyuq_prop.npz')
-    imp_path = os.path.join(result_dir, 'estimations', f'{ret_dir}/polyuq_imp.npz')
-    
-    def stat_fun(a, weight,i_stat):
-        return np.average(a, weights=weight)
-    n_stat = 1
-    inc_path = os.path.join(result_dir, 'estimations', f'{ret_dir}/polyuq_avg_inc.npz')
-    if os.path.exists(inc_path):
-        poly_uq.load_state(inc_path)
-    else:
-        poly_uq.load_state(imp_path)
-    
-    samp_fin = np.nonzero(
-            np.any(
-                np.isnan(poly_uq.imp_foc[:,:,0]),
-                axis=1)
-        )[0]
-    if len(samp_fin)>0:
-        end_ale = np.min(samp_fin)
-        poly_uq.N_mcs_ale = end_ale
-    focals_stats, hyc_mass = poly_uq.optimize_inc(stat_fun, n_stat)
-    poly_uq.save_state(inc_path)
+    # default_mapping()
+    test_domain()
 
 
 if __name__ == '__main__':

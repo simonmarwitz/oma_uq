@@ -894,6 +894,8 @@ class Mechanical(MechanicalDummy):
                 # print(i,meas_locs[i],nodes_coordinates[idx,:])
                 n_node=nodes_coordinates[idx,0]
                 ansys.nsel('A', item='NODE', comp='', vmin=n_node, vmax=n_node)
+            
+            ansys.nsel('A', item='NODE',vmin='NKTMD2', vmax='NKTMD2')
             ansys.cm(cname='meas_nodes', entity='NODE') # and group into component assembly
         else:
             ansys.nsel(type='ALL')
