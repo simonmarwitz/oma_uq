@@ -390,7 +390,7 @@ class DataManager(object):
                          dry_run=False, default_len=30, 
                          chunks_submit=None, chunks_save=1000,
                          check_diskspace=False, scramble_evaluation=True,
-                         **kwargs):
+                         remote_kwargs={'num_cpus':1}, **kwargs):
         '''
 
         func is a function that
@@ -425,8 +425,10 @@ class DataManager(object):
             else:
                 address = 'auto'
             ray.init(address=address, _redis_password='5241590000000000')
-
-        @ray.remote
+            
+        remote_kwargs['name'] = self.title
+        
+        @ray.remote(**remote_kwargs)
         def setup_eval(func, jid, fun_kwargs,
                        result_dir=self.result_dir, working_dir=None, 
                        check_diskspace=False, **kwargs):
@@ -529,8 +531,11 @@ class DataManager(object):
             else: rw=True
             # rw=True
             # now=time.time()
-            with self.get_database(database='out', rw=rw) as out_ds, self.get_database('in', False) as in_ds:
+            with self.get_database(database='out', rw=rw) as out_ds:
                 # print(f'Cum runtime get_database {time.time() - now :1.3f}')
+                
+                
+                
                 if not ret_sets:
                     return
                 
@@ -570,6 +575,9 @@ class DataManager(object):
                     # e.g. assign single values to index: [{}] otherwise it is a copy
                     this_ds = out_ds.loc[dict(ids=jid)]
                     
+                    if logger.isEnabledFor(logging.DEBUG): 
+                        logger.debug(this_ds)
+                        
                     if isinstance(ret_vals, str):  # exception repr
                         this_ds['_exceptions'][{}] = ret_vals
                         continue
@@ -594,7 +602,6 @@ class DataManager(object):
                     
                     if logger.isEnabledFor(logging.DEBUG): 
                         logger.debug(out_ds.loc[dict(ids=jid)])
-                        logger.debug(in_ds.loc[dict(ids=jid)])
                 
                 # print(f'Cum runtime: loop over samples {time.time() - now :1.3f}')
             
@@ -609,7 +616,8 @@ class DataManager(object):
                      
         # open database read-only, without locking
         with self.get_database(database='in') as in_ds, self.get_database(database='out', rw=False) as out_ds:
-            
+            in_ds.load()
+            in_ds.close()
             if not chwdir:
                 os.chdir(self.working_dir)
                 logger.debug(f'current working directory {self.working_dir}')
@@ -670,22 +678,28 @@ class DataManager(object):
                     logger.info(f"Finished another sample out of {in_ds.ids.size}.")
                 else:
                     #print(fun_kwargs)
+                    # that would be nice, but produces huge overhead, due to the remote
+                    # function being defined multiple times and having to be pickled-transfered-unpickled
+                    # remote_kwargs['name'] = str(jid)
+                    # worker_ref = ray.remote(**remote_kwargs)(_setup_eval).remote(
+                    #     func, jid, fun_kwargs, working_dir=working_dir, 
+                    #     check_diskspace=check_diskspace, **kwargs)
+                    
                     worker_ref = setup_eval.remote(
                         func, jid, fun_kwargs, working_dir=working_dir, 
                         check_diskspace=check_diskspace, **kwargs)
                     
                     futures.append(worker_ref)
                     
-                    if len(futures)>= chunks_submit:
-                        break
+                if len(futures)>= chunks_submit:
+                    break
+        
+        if dry_run:
+            save_samples(futures, ret_names, total_num_samples, default_len)
+            return
         
         futures = set(futures)
         logger.info(f'{len(futures)} jobs have been submitted for evaluation.')
-
-        if dry_run:
-            
-            save_samples(futures, ret_names, total_num_samples, default_len)
-            return
         
         sav_time = 480
         while True:
@@ -1253,8 +1267,8 @@ class DataManager(object):
                 # open database
                 ds = xr.open_dataset(dbpath, engine='h5netcdf')
                 #ds = xr.open_dataset(dbpath)
-                ds.load()
-                ds.close()
+                # ds.load()
+                # ds.close()
                 # yield database
                 yield ds
             except BaseException:

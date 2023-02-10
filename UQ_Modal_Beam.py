@@ -14,6 +14,9 @@ import time
 logger = logging.getLogger(__name__)
 logger.setLevel(level=logging.WARNING)
 
+logger_mech=logging.getLogger('model.mechanical')
+logger_mech.setLevel(level=logging.WARNING)
+
 global ansys
 
 def default_mapping(E=2.1e11, a=0.9, b=0.875, t=0.009, rho=7850, N_wire=1.1e+05, 
@@ -103,7 +106,7 @@ def mapping_function(E=2.1e11, a=0.9, b=None, t=None, rho=7850, N_wire=None,
                      num_nodes=200, num_modes=14, fs=10, N=2048, meas_locs=np.array([40,80,120,160,200]), # algorithmic
                      jid='abcdef123', result_dir=None, working_dir=None, skip_existing=True):
     
-    logger.warning('MEAS_NODES definition has changed to include TMD node (total 6).')
+    # logger.warning('MEAS_NODES definition has changed to include TMD node (total 6).')
     '''
     The TMD FRF might be more interesting than the 160 m FRF
     160 m FRF was originally chosen to have some effect due to the mode shapes, 
@@ -124,8 +127,6 @@ def mapping_function(E=2.1e11, a=0.9, b=None, t=None, rho=7850, N_wire=None,
     
     '''
     # print(E,a,b,t,rho,N_wire,A_wire,add_mass,zeta,dD,ice_occ,ice_mass)
-    logger_mech=logging.getLogger('model.mechanical')
-    logger_mech.setLevel(level=logging.INFO)
     
     A = np.pi*(a*b-(a-t)*(b-t))
     
