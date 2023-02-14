@@ -426,9 +426,9 @@ class DataManager(object):
                 address = 'auto'
             ray.init(address=address, _redis_password='5241590000000000')
             
-        remote_kwargs['name'] = self.title
+        #remote_kwargs['name'] = self.title
         
-        @ray.remote(**remote_kwargs)
+        @ray.remote#(**remote_kwargs)
         def setup_eval(func, jid, fun_kwargs,
                        result_dir=self.result_dir, working_dir=None, 
                        check_diskspace=False, **kwargs):
