@@ -181,8 +181,9 @@ def mapping_function(E=2.1e11, a=0.9, b=None, t=None, rho=7850, N_wire=None,
                         # print(f'{jid} \t Parameter {parm} values differ {val} != {mech.struct_parms[parm]}')
                         mech = None
                         break
-            except (EOFError, KeyError, zlib.error, zipfile.BadZipFile, OSError):
+            except Exception as e:
                 # logger.warning(f'File {os.path.join(savefolder, f"{jid}_mechanical.npz")} corrupted. Deleting.')
+                print(e)
                 os.remove(os.path.join(savefolder, f'{jid}_mechanical.npz'))
             
     if mech is None or len(mech.meas_nodes)<6:
