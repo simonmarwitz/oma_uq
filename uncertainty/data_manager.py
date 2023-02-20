@@ -9,7 +9,7 @@ import simpleflock
 import psutil
 #import ray
 import logging
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import uuid
 import numpy as np
 import xarray as xr
@@ -385,11 +385,10 @@ class DataManager(object):
         dbpath = os.path.join(self.result_dir, self.dbfile_out)
         ds_new.to_netcdf(dbpath, engine='h5netcdf')
 
-    def evaluate_samples(self, func, arg_vars, ret_names,
-                         chwdir=True, re_eval_sample=None,
-                         dry_run=False, default_len=30, 
-                         chunks_submit=None, chunks_save=1000,
-                         check_diskspace=False, scramble_evaluation=True,
+    def evaluate_samples(self, func, arg_vars, ret_names, default_len=30, 
+                         dry_run=False, re_eval_sample=None,
+                         chwdir=True, use_lock=True, check_diskspace=False,
+                         chunks_submit=None, chunks_save=1000, scramble_evaluation=True, 
                          remote_kwargs={'num_cpus':1}, **kwargs):
         '''
 
@@ -426,27 +425,28 @@ class DataManager(object):
                 address = 'auto'
             ray.init(address=address, _redis_password='5241590000000000')
             
-        #remote_kwargs['name'] = self.title
+        remote_kwargs['name'] = self.title
         
-        @ray.remote#(**remote_kwargs)
+        @ray.remote(**remote_kwargs)
         def setup_eval(func, jid, fun_kwargs,
-                       result_dir=self.result_dir, working_dir=None, 
-                       check_diskspace=False, **kwargs):
+                       result_dir, working_dir, 
+                       check_diskspace, use_lock, **kwargs):
             return _setup_eval(func, jid, fun_kwargs, result_dir, working_dir, 
-                               check_diskspace, **kwargs)
+                               check_diskspace, use_lock)
             
         def _setup_eval(func, jid, fun_kwargs,
-                       result_dir=self.result_dir, working_dir=None, 
-                       check_diskspace=False,**kwargs):
+                       result_dir, working_dir, 
+                       check_diskspace, use_lock):
             # lock files will stay there, make sure to delete them afterwards
             now = time.time()
-            with simpleflock.SimpleFlock(os.path.join(result_dir, f'{jid}.lock'), timeout=1):
+            
+            with simpleflock.SimpleFlock(os.path.join(result_dir, f'{jid}.lock'), timeout=1) if use_lock else nullcontext():
                 logger.debug(f'start computing sample {jid}')
                 
                 # create the working directory
 
-                if not os.path.exists(result_dir):
-                    os.makedirs(result_dir, exist_ok=True)
+                # if not os.path.exists(result_dir):
+                #     os.makedirs(result_dir, exist_ok=True)
                 
                 if working_dir is True:
                     try: #  to get LSF temporary working directory
@@ -467,7 +467,7 @@ class DataManager(object):
                 error = False
                 try:
                     ret_vals = func(jid=jid, result_dir=result_dir,
-                                    working_dir=working_dir, **fun_kwargs, **kwargs)
+                                    working_dir=working_dir, **fun_kwargs)
                     if not isinstance(ret_vals, tuple):
                         raise RuntimeError('The evaluation function must return a tuple.')
                 except Exception as e:
@@ -672,8 +672,8 @@ class DataManager(object):
                         continue
                     # evaluates samples in the regular way, i.e. one at a time
                     
-                    futures.append(_setup_eval(func, jid, fun_kwargs, working_dir=working_dir,
-                                            check_diskspace=check_diskspace, **kwargs))
+                    futures.append(_setup_eval(func, jid, fun_kwargs, self.result_dir, working_dir=working_dir,
+                                            check_diskspace=check_diskspace, use_lock=use_lock, **kwargs))
                     
                     logger.info(f"Finished another sample out of {in_ds.ids.size}.")
                 else:
@@ -686,8 +686,8 @@ class DataManager(object):
                     #     check_diskspace=check_diskspace, **kwargs)
                     
                     worker_ref = setup_eval.remote(
-                        func, jid, fun_kwargs, working_dir=working_dir, 
-                        check_diskspace=check_diskspace, **kwargs)
+                        func, jid, fun_kwargs, self.result_dir, working_dir=working_dir, 
+                        check_diskspace=check_diskspace, use_lock=use_lock, **kwargs)
                     
                     futures.append(worker_ref)
                     
@@ -1743,7 +1743,19 @@ def test():
         #data_manager.post_process_samples(db='merged', func=process_model_perf)
         # data_manager.clear_locks()
         
-if __name__ == '__main__':
+        
+def test2():
+    np.array(None)
+    def dummy(**kwargs):
+        print(kwargs.get('jid'))
+        return (np.array(None),)
+    result_dir = '/usr/scratch4/sima9999/work/modal_uq/poly-dm-test'
+    dm = DataManager.from_existing('example.nc', result_dir, '/dev/shm/womo1998/')
+    logger.setLevel(logging.DEBUG)
+    dm.evaluate_samples(dummy, {}, {'dummy':()}, use_lock=False, remote_kwargs={})
+    
+
+def main():
     logger.setLevel(level=logging.INFO)
     result_dir = '/usr/scratch4/sima9999/work/modal_uq/uq_modal_beam/samples/'
     
@@ -1792,6 +1804,9 @@ if __name__ == '__main__':
     #         print(res)
     #         break
 
+if __name__ == '__main__':
+    
+    test2()
         
     # test_imports()
     
