@@ -699,7 +699,7 @@ class DataManager(object):
             return
         
         futures = set(futures)
-        logger.info(f'{len(futures)} jobs have been submitted for evaluation.')
+        logger.info(f'{len(futures)} jobs have been submitted for evaluation in {time.time() - now:1.2f} s.')
         
         sav_time = 480
         while True:
@@ -707,14 +707,24 @@ class DataManager(object):
                 list(futures), num_returns=min(len(futures), chunks_save), timeout=int(sav_time * 2))
             
             comp_time = time.time() - now
-            
-            try:
-                ret_sets = ray.get(ready)
-            except ray.exceptions.RayTaskError as e:
-                traceback.print_exc()
-                logger.warning(repr(e))
-                ret_sets = []
-            logger.info(f'Finished {len(ready)} samples in {time.time() - now:1.2f} s')    
+                
+            finished = 0
+            failed = 0
+            ret_sets = []
+            for obj_ref in ready:
+                try:
+                    ret_sets.append(ray.get(obj_ref))
+                    finished += 1
+                except ray.exceptions.RayTaskError as e:
+                    logger.warning(repr(e))
+                    failed +=1
+            # try:
+            #     ret_sets = ray.get(ready)
+            # except ray.exceptions.RayTaskError as e:
+            #     traceback.print_exc()
+            #     logger.warning(repr(e))
+            #     ret_sets = []
+            logger.info(f'Finished {finished}, failed {failed} samples in {comp_time:1.2f} s')    
             
             now=time.time()
             save_samples(ret_sets, ret_names, total_num_samples, default_len)
@@ -722,13 +732,13 @@ class DataManager(object):
             
             if len(wait) == 0:
                 logger.info(                
-                    f"Finished all remaining {len(ready)} samples in {comp_time:1.2f} s (async. save time: {sav_time:1.2f} s).")
+                    f"Finished all remaining {finished} samples in {comp_time:1.2f} s (async. save time: {sav_time:1.2f} s).")
 
                 break
             
             futures.difference_update(ready)
             logger.info(
-                f"Finished {len(ready)} samples in {comp_time:1.2f} s (async. save time: {sav_time:1.2f} s). Remaining {len(futures)} samples.")
+                f"Finished {finished} samples in {comp_time:1.2f} s (async. save time: {sav_time:1.2f} s). Remaining {len(futures)} samples.")
         # ray.shutdown()
         return len(ids) - chunks_submit
 

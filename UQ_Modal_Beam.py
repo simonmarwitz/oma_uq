@@ -295,12 +295,13 @@ def test_domain():
     # nominal
     ymin=0
     ymax=0.01
+    skip_existing = False
     freqs = np.linspace(0, 5, 2048 // 2 + 1, False)
     now=time.time()
     f,zeta,frf = mapping_function(b=0.9, t=0.006, N_wire=110000, 
                      A_wire=0.00075, add_mass=60, zeta=0.0083, dD=197.61, # structural
                     ice_occ=1, ice_mass=0.5, # environmental
-                   jid='nominal12', working_dir='/dev/shm/womo1998/', skip_existing=True)
+                   jid='nominal12', working_dir='/dev/shm/womo1998/', skip_existing=skip_existing)
     print(time.time()-now)
 
     
@@ -320,7 +321,7 @@ def test_domain():
     f,zeta,frf = mapping_function(b=0.95, t=0.00637190164854557,N_wire=189873.988768885, 
                      A_wire=0.0008, add_mass=20, zeta=0.0016, dD=104.634587863608, # structural
                     ice_occ=0, ice_mass=0, # environmental
-                     jid='max12', working_dir='/dev/shm/womo1998/', skip_existing=True)
+                     jid='max12', working_dir='/dev/shm/womo1998/', skip_existing=skip_existing)
     print(time.time()-now)
     for frf_ind in range(3):
         frf_ = frf[:,frf_ind]
@@ -338,7 +339,7 @@ def test_domain():
     f,zeta,frf = mapping_function(b=0.85, t=0.00562809835145443, N_wire=30126.0112311152, 
                      A_wire=0.0007, add_mass=100, zeta=0.015, dD=290.585412136393, # structural
                     ice_occ=1, ice_mass=1, # environmental
-                     jid='min12', working_dir='/dev/shm/womo1998/', skip_existing=True)
+                     jid='min12', working_dir='/dev/shm/womo1998/', skip_existing=skip_existing)
     print(time.time()-now)
     for frf_ind in range(3):
         frf_ = frf[:,frf_ind]
