@@ -640,6 +640,8 @@ class DataManager(object):
             # to the beginning to see any errors quickly
             if chunks_submit is None:
                 chunks_submit = ids.size
+            if chunks_submit > ids.size:
+                chunks_submit = ids.size
             
             logger.info(f'{len(ids)} samples out of {total_num_samples} to be done . Submitting at most {chunks_submit}.')
             

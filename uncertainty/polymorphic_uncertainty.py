@@ -633,6 +633,7 @@ class PolyUQ(object):
         self.vars_epi = tuple(vars_epi)
         self.vars_imp = tuple([var for var in vars_epi if var.primary])
         self.vars_inc = tuple([var for var in vars_epi if not var.primary])
+        self._hyc_hyp_vars = None
         
         self.dim_ex = dim_ex
                   
@@ -1172,7 +1173,7 @@ class PolyUQ(object):
         # assemble probability weights from hypervariables (secondary)       
                
         hyp_dens = {}    
-        for i_weight, i_imp_hyc in enumerate(it_imp):             
+        for i_weight, i_imp_hyc in enumerate(it_imp):
             hyp_vars = hyc_hyp_vars[i_imp_hyc]
             for hyp_var in hyp_vars:
                 if not isinstance(hyp_var, UncertainVariable): continue
@@ -1991,8 +1992,13 @@ class PolyUQ(object):
         
         '''
         
-        def wrapper(x, min_max, stat_fun, samples, i_imp_hyc, i_stat, stat_fun_kwargs):
+        def interval_range(x, stat_fun, imp_foc, i_imp_hyc, i_stat, stat_fun_kwargs, vars_opt, n_vars_opt, ):
+                    #        x, interp, temp_x, unit_bounds, temp_dists,
+                    # **kwargs):
             '''
+            optimizer might need scaling to unit boundaries... let's see 
+            distribution parameters are usually somewhat im similar ranges 
+            
             optimization has to be done for each statistic, boundary, imprecise and incomplete hypercube separately
             i.e. a scalar value must be returned from wrapper
             
@@ -2002,17 +2008,36 @@ class PolyUQ(object):
                 all but one entry of these are discarded -> resolved
             
             nevertheless it might be needed for verification purposes
-            
-            
-            
             '''
-            vars_inc = self.vars_inc
-            for i, var in enumerate(vars_inc):
-                var.freeze(x[i])
-            # with HiddenPrints():
-            p_weights = self.probabilities_imp(i_imp_hyc)
-            stat = stat_fun(samples, p_weights, i_stat, **stat_fun_kwargs)
-            return min_max * stat
+            
+            
+            x_low = x[:n_vars_opt]
+            for i, var in enumerate(vars_opt):
+                var.freeze(x_low[i])
+            p_weights_low = self.probabilities_imp(i_imp_hyc)
+            
+            stat_min = np.empty(2)
+            # lower boundary
+            stat_min[0] = stat_fun(imp_foc[:, i_imp_hyc, 0], p_weights_low, i_stat,  1, **stat_fun_kwargs) # min
+            # high boundary
+            stat_min[1] = stat_fun(imp_foc[:, i_imp_hyc, 1], p_weights_low, i_stat,  1, **stat_fun_kwargs) # min
+            if np.all(np.isnan(stat_min)): return 0
+            stat_min = np.nanmin(stat_min)
+            
+            x_high = x[n_vars_opt:]
+            for i, var in enumerate(vars_opt):
+                var.freeze(x_high[i])
+            p_weights_high = self.probabilities_imp(i_imp_hyc)
+            
+            stat_max = np.empty(2)
+            # lower boundary
+            stat_max[0] = stat_fun(imp_foc[:, i_imp_hyc, 0], p_weights_high, i_stat, -1, **stat_fun_kwargs) # max
+            # high boundary
+            stat_max[1] = stat_fun(imp_foc[:, i_imp_hyc, 1], p_weights_high, i_stat, -1, **stat_fun_kwargs) # max
+            if np.all(np.isnan(stat_max)): return 0
+            stat_max = np.nanmax(stat_max)
+            
+            return stat_min - stat_max
         
         logger.info('Estimating incompleteness intervals by direct L-BFGS optimization of statistics over input hypercubes...')
         # Samples
@@ -2049,7 +2074,6 @@ class PolyUQ(object):
                     init = [np.mean(bound) for bound in bounds]
                     now = time.time()
                     for i_stat in range(n_stat):
-                        # lower boundary
                         logging.disable(logging.INFO)
                         try:
                             resll = scipy.optimize.minimize(wrapper, init, ( 1, stat_fun, imp_foc[:,i_imp_hyc, 0], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
@@ -2135,6 +2159,8 @@ class PolyUQ(object):
         # aleatory hypervariables (RVs) -> has a different product probability
         
         # hyc_hyp_var indices refer to imprecise hypercubes
+        if self._hyc_hyp_vars is not None: # cache
+            return self._hyc_hyp_vars
         
         vars_imp = self.vars_imp
         hyc_foc_inds = self.imp_hyc_foc_inds
@@ -2150,7 +2176,8 @@ class PolyUQ(object):
                 
                 hyp_vars = var_epi._focals[hyc_foc_inds[i_hyc][i_epi]]
                 hyc_hyp_vars[i_hyc].update(hyp_vars)      
-        
+                
+        self._hyc_hyp_vars = hyc_hyp_vars
         return hyc_hyp_vars
 
     def hyc_foc_inds(self, vars_):
@@ -2381,57 +2408,61 @@ class PolyUQ(object):
         
         return focals_stats, hyc_mass
             
-    def save_state(self, fname):
+    def save_state(self, fname, differential=None):
+        # differential: samp, prop, imp, inc
 
         dirname, _ = os.path.split(fname)
         if not os.path.isdir(dirname):
             os.makedirs(dirname)
         logger.info(f'Saving state of PolyUQ to {fname}. Make sure to store your variable definitions script externally...')
         out_dict = {}
-        
-        out_dict['self.dim_ex'] = self.dim_ex
-        
-        out_dict['self.N_mcs_ale'] = self.N_mcs_ale
-        out_dict['self.N_mcs_epi'] = self.N_mcs_epi
-        out_dict['self.percentiles'] = self.percentiles
-        out_dict['self.seed'] = self.seed
-        out_dict['self.var_supp'] = self.var_supp
-        out_dict['self.inp_samp_prim'] = self.inp_samp_prim
-        out_dict['self.inp_suppl_ale'] = self.inp_suppl_ale
-        out_dict['self.inp_suppl_epi'] = self.inp_suppl_epi
-        
-        if self.var_supp is not None:
-            out_dict['self.var_supp.columns'] = self.var_supp.columns
-        else:
-            out_dict['self.var_supp.columns'] = None
-        if self.inp_samp_prim is not None:
-            out_dict['self.inp_samp_prim.columns'] = self.inp_samp_prim.columns
-        else:
-            out_dict['self.inp_samp_prim.columns'] = None
-        if self.inp_suppl_ale is not None:
-            out_dict['self.inp_suppl_ale.columns'] = self.inp_suppl_ale.columns
-        else:
-            out_dict['self.inp_suppl_ale.columns'] = None
-        if self.inp_suppl_epi is not None:
-            out_dict['self.inp_suppl_epi.columns'] = self.inp_suppl_epi.columns
-        else:
-            out_dict['self.inp_suppl_epi.columns'] = None
+        if differential is None or differential=='samp':
+            out_dict['self.dim_ex'] = self.dim_ex
             
-        out_dict['self.fcount'] = self.fcount
-        out_dict['self.loop_ale'] = self.loop_ale
-        out_dict['self.loop_epi'] = self.loop_epi
-        out_dict['self.out_name'] = self.out_name
-        out_dict['self.out_samp'] = self.out_samp
-        out_dict['self.out_valid'] = self.out_valid
+            out_dict['self.N_mcs_ale'] = self.N_mcs_ale
+            out_dict['self.N_mcs_epi'] = self.N_mcs_epi
+            out_dict['self.percentiles'] = self.percentiles
+            out_dict['self.seed'] = self.seed
+            out_dict['self.var_supp'] = self.var_supp
+            out_dict['self.inp_samp_prim'] = self.inp_samp_prim
+            out_dict['self.inp_suppl_ale'] = self.inp_suppl_ale
+            out_dict['self.inp_suppl_epi'] = self.inp_suppl_epi
+            
+            if self.var_supp is not None:
+                out_dict['self.var_supp.columns'] = self.var_supp.columns
+            else:
+                out_dict['self.var_supp.columns'] = None
+            if self.inp_samp_prim is not None:
+                out_dict['self.inp_samp_prim.columns'] = self.inp_samp_prim.columns
+            else:
+                out_dict['self.inp_samp_prim.columns'] = None
+            if self.inp_suppl_ale is not None:
+                out_dict['self.inp_suppl_ale.columns'] = self.inp_suppl_ale.columns
+            else:
+                out_dict['self.inp_suppl_ale.columns'] = None
+            if self.inp_suppl_epi is not None:
+                out_dict['self.inp_suppl_epi.columns'] = self.inp_suppl_epi.columns
+            else:
+                out_dict['self.inp_suppl_epi.columns'] = None
         
-        out_dict['self.imp_foc'] = self.imp_foc
-        out_dict['self.val_samp_prim'] = self.val_samp_prim
-        out_dict['self.intp_errors'] = self.intp_errors
-        out_dict['self.intp_exceed'] = self.intp_exceed
-        out_dict['self.intp_undershot'] = self.intp_undershot
+        if differential is None or differential=='prop':
+            out_dict['self.fcount'] = self.fcount
+            out_dict['self.loop_ale'] = self.loop_ale
+            out_dict['self.loop_epi'] = self.loop_epi
+            out_dict['self.out_name'] = self.out_name
+            out_dict['self.out_samp'] = self.out_samp
+            out_dict['self.out_valid'] = self.out_valid
+            
+        if differential is None or differential=='imp':
+            out_dict['self.imp_foc'] = self.imp_foc
+            out_dict['self.val_samp_prim'] = self.val_samp_prim
+            out_dict['self.intp_errors'] = self.intp_errors
+            out_dict['self.intp_exceed'] = self.intp_exceed
+            out_dict['self.intp_undershot'] = self.intp_undershot
         
-        out_dict['self.focals_stats'] = self.focals_stats
-        out_dict['self.focals_mass'] = self.focals_mass
+        if differential is None or differential=='inc':
+            out_dict['self.focals_stats'] = self.focals_stats
+            out_dict['self.focals_mass'] = self.focals_mass
         
         with open(fname + '.tmp', 'wb') as f:
             np.savez_compressed(f, **out_dict)
@@ -2439,7 +2470,7 @@ class PolyUQ(object):
             os.remove(fname)
         os.rename(fname + '.tmp', fname)
         
-    def load_state(self, fname):
+    def load_state(self, fname, differential=None):
         
         def validate_array(arr):
             '''
