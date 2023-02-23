@@ -1845,144 +1845,6 @@ class PolyUQ(object):
         
         return imp_foc, val_samp_prim, intp_errors, intp_exceed, intp_undershot
     
-    def estimate_inc(self, stat_fun, n_stat, stat_fun_kwargs={}, check_sample_sizes=True):
-        '''
-        Quantify incompleteness and reduce variability by applying a statistic.
-        
-        
-        Parameters:
-        ----------
-            stat_fun: function
-                A callable that takes a data of shape (N_mcs_ale,) and another array of weights (same shape)
-                to estimate the i_stat'th of n_stat statistics (e.g. failure probability, mean and confidence bounds, maximum likelihood distribution parameters, etc.)
-            n_stat: int
-                the number of output arguments of stat_fun (technically it could be deduced)
-            stat_fun_kwargs: dict
-                any additionally arguments, needed by stat_fun
-            check_sample_size: bool
-                Whether to check the sample sizes for approximation of each epistemic
-                hypercube (might be time consuming for a high number of stochastic samples)
-            
-                
-        Returns:
-        --------
-            focals_stats: ndarray (n_hyc, n_stat)
-                an array holding the focal sets / intervals for each statistic and combined epistemic hypercube
-        
-        '''
-        logger.info('Estimating incompleteness by sampling statistics...')
-        
-        # Samples
-        imp_foc = self.imp_foc
-        
-        # Variables
-        vars_inc = self.vars_inc
-        
-        # Epistemic Hypercubes
-        imp_hyc_foc_inds = self.imp_hyc_foc_inds # no-imp: is a list containing a single empty tuple
-        n_imp_hyc = len(imp_hyc_foc_inds) # no-imp: would be 1
-        imp_hyc_mass = self.imp_hyc_mass # no-imp: is a list containing a single 1.0
-        
-        inc_hyc_foc_inds = self.inc_hyc_foc_inds
-        n_inc_hyc = len(inc_hyc_foc_inds)
-        inc_hyc_mass = self.inc_hyc_mass 
-        # no-inc: sizes are analogously to the no-imp case
-        
-        n_hyc = n_imp_hyc * n_inc_hyc
-        
-        # Samples
-        N_mcs_ale = self.N_mcs_ale
-
-        if vars_inc:
-            N_mcs_inc = self.N_mcs_epi
-        else:
-            N_mcs_inc = 1
-            
-        inp_suppl_epi = self.inp_suppl_epi   
-        # check the number of samples per focal set
-        if check_sample_sizes:
-            self.check_sample_sizes(vars_inc, inp_suppl_epi, N_mcs_ale, N_mcs_inc)
-
-        '3.a) sample incompleteness while quantifying variability'
-        # walk over supplementary incompleteness samples
-        # alternatively the below could be done using bounded optimization over incomplete hypercubes
-        # imp_inc_prob = np.empty((N_mcs_inc, N_mcs_ale, n_imp_hyc))
-        imp_stat_samp =  np.empty((N_mcs_inc, n_stat, n_imp_hyc, 2))
-        pbar = simplePbar(N_mcs_inc)
-        logging.disable(logging.FATAL)
-        for n_inc in range(N_mcs_inc):
-            # incompleteness changes only the probability weights for already existing aleatory samples or aleatory imprecise intervals
-
-            # freeze the epistemic variables describing incompleteness
-            for var in vars_inc:
-                var.freeze(inp_suppl_epi[var.name].iloc[n_inc])
-            with HiddenPrints():
-                p_weights = self.probabilities_imp() 
-            # for no-imp: p_weights[n_ale, 0] = <product of pdfs> 
-
-            # compute PDF/CDF for each interval boundary in each hypercube        
-            # compute statistic(s) for each boundary and hypercube
-            
-            for i_imp_hyc in range(n_imp_hyc):
-                for high_low in range(2):
-                    
-                        
-                    stat = stat_fun(imp_foc[:, i_imp_hyc, high_low], p_weights[:, i_imp_hyc], None, **stat_fun_kwargs)                    
-                    imp_stat_samp[n_inc, :, i_imp_hyc, high_low] = stat
-            next(pbar)
-        
-        logging.disable(logging.NOTSET)            
-        '''
-        histogram gives sample counts per bin
-        consider a single bin and computing histograms of the upper and lower boundaries of random intervals
-        the upper boundaries will always have higher values than their lower counterparts
-        there may be more/less lower/higher boundaries in a single bin than their counterparts
-        that may also switch for non-cumulative sample counts at the point where pdfs overlap
-        
-        a range of sample counts per histogram bin is desired -> it's possibly safe to        
-        sort the sample count intervals
-        
-        TODO: think about sorting other statistics
-        '''
-        imp_stat_samp.sort(axis=3)
-            
-        '3.b) quantify incompleteness '
-        
-        
-        hyc_dat_inds = self.hypercube_sample_indices(inp_suppl_epi, vars_inc, inc_hyc_foc_inds, N_mcs_inc)
-        
-        hyc_num_elems = np.sum(hyc_dat_inds, axis=1)
-        logger.debug(f"Incompleteness hypercube sample sizes: {hyc_num_elems}")   
-        
-        hyc_mass = np.empty((n_hyc,))
-        
-        # compute belief functions for each statistic
-        focals_stats = np.empty((n_stat, n_hyc, 2))
-        pbar = simplePbar(n_imp_hyc * n_stat)
-        for i_imp_hyc in range(n_imp_hyc):
-            for i_bin in range(n_stat):
-                
-                # compute mass-belief functions over sample counts / probability densities
-                # print(i_imp_hyc, imp_stat_samp[:, i_bin, i_imp_hyc, :])
-                hyc_out_focals_l = approximate_out_intervals(imp_stat_samp[:, i_bin, i_imp_hyc, 0], hyc_dat_inds) # shape (n_inc_hyc, 2)
-                hyc_out_focals_u = approximate_out_intervals(imp_stat_samp[:, i_bin, i_imp_hyc, 1], hyc_dat_inds)
-                
-                hyc_out_focals = np.hstack((hyc_out_focals_l, hyc_out_focals_u))
-                # print(hyc_out_focals.shape, hyc_out_focals, )
-                
-                focals_stats[i_bin, i_imp_hyc * n_inc_hyc: (i_imp_hyc + 1 ) * n_inc_hyc , 0] = np.min(hyc_out_focals, axis=1)
-                focals_stats[i_bin, i_imp_hyc * n_inc_hyc: (i_imp_hyc + 1 ) * n_inc_hyc , 1] = np.max(hyc_out_focals, axis=1)
-                # print(focals_stats[i_bin, i_imp_hyc * n_inc_hyc: (i_imp_hyc + 1 ) * n_inc_hyc , :])
-                next(pbar)
-                
-            hyc_mass[i_imp_hyc * n_inc_hyc: (i_imp_hyc + 1 ) * n_inc_hyc ] = imp_hyc_mass[i_imp_hyc] * inc_hyc_mass
-            # print(hyc_mass[i_imp_hyc * n_inc_hyc: (i_imp_hyc + 1 ) * n_inc_hyc ])
-        
-        self.focals_stats = focals_stats
-        self.focals_mass = hyc_mass
-        
-        return focals_stats, hyc_mass
-    
     def optimize_inc(self, stat_fun, n_stat, stat_fun_kwargs={}):
         
         '''
@@ -1992,12 +1854,26 @@ class PolyUQ(object):
         
         '''
         
-        def interval_range(x, stat_fun, imp_foc, i_imp_hyc, i_stat, stat_fun_kwargs, vars_opt, n_vars_opt, ):
+        def stat_eval(x, stat_fun, imp_foc, i_imp_hyc, i_stat, vars_opt, min_max, stat_fun_kwargs):
+            
+            for i, var in enumerate(vars_opt):
+                var.freeze(x[i])
+            p_weights_low = self.probabilities_imp(i_imp_hyc)
+            
+            stat_vals = np.empty(2)
+            # lower boundary
+            stat_vals[0] = stat_fun(imp_foc[:, i_imp_hyc, 0], p_weights_low, i_stat,  min_max, **stat_fun_kwargs) # min
+            # high boundary
+            stat_vals[1] = stat_fun(imp_foc[:, i_imp_hyc, 1], p_weights_low, i_stat,  min_max, **stat_fun_kwargs) # min
+            
+            return stat_vals
+        
+        def interval_range(x, stat_fun, imp_foc, i_imp_hyc, i_stat, vars_opt, n_vars_opt, stat_fun_kwargs, ):
                     #        x, interp, temp_x, unit_bounds, temp_dists,
                     # **kwargs):
             '''
             optimizer might need scaling to unit boundaries... let's see 
-            distribution parameters are usually somewhat im similar ranges 
+            distribution parameters are usually in somewhat similar ranges 
             
             optimization has to be done for each statistic, boundary, imprecise and incomplete hypercube separately
             i.e. a scalar value must be returned from wrapper
@@ -2011,31 +1887,15 @@ class PolyUQ(object):
             '''
             
             
-            x_low = x[:n_vars_opt]
-            for i, var in enumerate(vars_opt):
-                var.freeze(x_low[i])
-            p_weights_low = self.probabilities_imp(i_imp_hyc)
+            stat_vals = stat_eval(x[:n_vars_opt], stat_fun, imp_foc, i_imp_hyc, i_stat, vars_opt, 1, stat_fun_kwargs)
+            if np.all(np.isnan(stat_vals)): 
+                return 0
+            stat_min = np.nanmin(stat_vals)
             
-            stat_min = np.empty(2)
-            # lower boundary
-            stat_min[0] = stat_fun(imp_foc[:, i_imp_hyc, 0], p_weights_low, i_stat,  1, **stat_fun_kwargs) # min
-            # high boundary
-            stat_min[1] = stat_fun(imp_foc[:, i_imp_hyc, 1], p_weights_low, i_stat,  1, **stat_fun_kwargs) # min
-            if np.all(np.isnan(stat_min)): return 0
-            stat_min = np.nanmin(stat_min)
-            
-            x_high = x[n_vars_opt:]
-            for i, var in enumerate(vars_opt):
-                var.freeze(x_high[i])
-            p_weights_high = self.probabilities_imp(i_imp_hyc)
-            
-            stat_max = np.empty(2)
-            # lower boundary
-            stat_max[0] = stat_fun(imp_foc[:, i_imp_hyc, 0], p_weights_high, i_stat, -1, **stat_fun_kwargs) # max
-            # high boundary
-            stat_max[1] = stat_fun(imp_foc[:, i_imp_hyc, 1], p_weights_high, i_stat, -1, **stat_fun_kwargs) # max
-            if np.all(np.isnan(stat_max)): return 0
-            stat_max = np.nanmax(stat_max)
+            stat_vals = stat_eval(x[n_vars_opt:], stat_fun, imp_foc, i_imp_hyc, i_stat, vars_opt, -1, stat_fun_kwargs)
+            if np.all(np.isnan(stat_vals)): 
+                return 0
+            stat_max = np.nanmax(stat_vals)
             
             return stat_min - stat_max
         
@@ -2045,6 +1905,7 @@ class PolyUQ(object):
         
         # Variables
         vars_inc = self.vars_inc
+        n_vars_inc = len(vars_inc)
         
         # Epistemic Hypercubes
         imp_hyc_foc_inds = self.imp_hyc_foc_inds # no-imp: is a list containing a single empty tuple
@@ -2061,47 +1922,69 @@ class PolyUQ(object):
         numeric_focals = [var.numeric_focals for var in vars_inc]
         
         # compute belief functions for each statistic
-        focals_stats = np.empty((n_stat, n_hyc, 2))
+        focals_stats = np.full((n_stat, n_hyc, 2), np.nan)
         hyc_mass = np.empty((n_hyc,))
         
         if vars_inc:
             pbar = simplePbar(n_imp_hyc * n_inc_hyc*n_stat)
             for i_imp_hyc in range(n_imp_hyc):
-                for i_inc_hyc in range(n_inc_hyc):
+                for i_inc_hyc, hypercube in enumerate(inc_hyc_foc_inds):
                     i_hyc = i_imp_hyc * n_inc_hyc + i_inc_hyc
                     
-                    bounds = [focs[ind] for focs, ind in zip(numeric_focals, inc_hyc_foc_inds[i_inc_hyc])]
-                    init = [np.mean(bound) for bound in bounds]
+                    focals = np.vstack([focals[ind,:] for focals, ind in zip(numeric_focals, hypercube)])
+                    # vars_opt = focals[:,0]!=focals[:,1]# focals are not a singleton
+                    # n_vars_opt = np.sum(vars_opt)
+                    
+                    bounds = focals
+                    # bounds = [focs[ind] for focs, ind in zip(numeric_focals, inc_hyc_foc_inds[i_inc_hyc])]
+                    init = np.mean(bounds, axis=1, keepdims=True)
+                    
                     now = time.time()
                     for i_stat in range(n_stat):
-                        logging.disable(logging.INFO)
-                        try:
-                            resll = scipy.optimize.minimize(wrapper, init, ( 1, stat_fun, imp_foc[:,i_imp_hyc, 0], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
-                            resul = scipy.optimize.minimize(wrapper, init, (-1, stat_fun, imp_foc[:,i_imp_hyc, 0], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
-                            # high boundary
-                            reslu = scipy.optimize.minimize(wrapper, init, ( 1, stat_fun, imp_foc[:,i_imp_hyc, 1], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
-                            resuu = scipy.optimize.minimize(wrapper, init, (-1, stat_fun, imp_foc[:,i_imp_hyc, 1], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
-                            
-                            for res in [resll, resul, reslu, resuu]:
-                                if not res.success:
-                                    logger.warning(f'Interval optimization did not succeed on hypercube {i_hyc} with message: {res.message}')
-                        finally:
-                            logging.disable(logging.NOTSET)
-                            focals_stats[i_stat, i_hyc, 0] = min( resll.fun,  reslu.fun)
-                            focals_stats[i_stat, i_hyc, 1] = max(-resul.fun, -resuu.fun)
+                        
+                        resl = scipy.optimize.minimize(fun=interval_range, x0=np.vstack((init,init)),
+                                                args=(stat_fun, imp_foc, i_imp_hyc, i_stat, vars_inc, n_vars_inc, stat_fun_kwargs),
+                                                bounds=np.vstack((bounds, bounds)))
+                        if not resl.success:
+                            logger.warning(f'Optimizer failed hypercube {i_inc_hyc} at i_stat {i_stat}')
+                        x_low = resl.x[:n_vars_inc]
+                        x_up = resl.x[n_vars_inc:]
+                        
+                        out_low = stat_eval(x_low, stat_fun, imp_foc, i_imp_hyc, i_stat, vars_inc, 1, stat_fun_kwargs)
+                        out_up  = stat_eval(x_up, stat_fun, imp_foc, i_imp_hyc, i_stat, vars_inc, -1, stat_fun_kwargs)
+                         
+                        focals_stats[i_stat, i_hyc, 0] = out_low
+                        focals_stats[i_stat, i_hyc, 1] = out_up
+                        
+                        # try:
+                        #     logging.disable(logging.INFO)
+                        #     resll = scipy.optimize.minimize(wrapper, init, ( 1, stat_fun, imp_foc[:,i_imp_hyc, 0], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
+                        #     resul = scipy.optimize.minimize(wrapper, init, (-1, stat_fun, imp_foc[:,i_imp_hyc, 0], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
+                        #     # high boundary
+                        #     reslu = scipy.optimize.minimize(wrapper, init, ( 1, stat_fun, imp_foc[:,i_imp_hyc, 1], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
+                        #     resuu = scipy.optimize.minimize(wrapper, init, (-1, stat_fun, imp_foc[:,i_imp_hyc, 1], i_imp_hyc, i_stat, stat_fun_kwargs), bounds=bounds)
+                        #
+                        #     for res in [resll, resul, reslu, resuu]:
+                        #         if not res.success:
+                        #             logger.warning(f'Interval optimization did not succeed on hypercube {i_hyc} with message: {res.message}')
+                        # finally:
+                        #     logging.disable(logging.NOTSET)
+                        #     focals_stats[i_stat, i_hyc, 0] = min( resll.fun,  reslu.fun)
+                        #     focals_stats[i_stat, i_hyc, 1] = max(-resul.fun, -resuu.fun)
                         
                         next(pbar)
                     logger.debug(f'Took {time.time()-now:1.2f} s for interval optimization of {n_stat} statistics on hypercube {i_hyc}.')
                         
                 hyc_mass[i_imp_hyc * n_inc_hyc: (i_imp_hyc + 1 ) * n_inc_hyc ] = inc_hyc_mass * imp_hyc_mass[i_imp_hyc] 
         else: #no incompleteness
-            with HiddenPrints():
-                p_weights = self.probabilities_imp() 
-            for i_imp_hyc in range(n_imp_hyc):
-                for high_low in range(2):
-                    stat = stat_fun(imp_foc[:, i_imp_hyc, high_low], p_weights[:, i_imp_hyc], None, **stat_fun_kwargs)                    
-                    focals_stats[:, i_imp_hyc, high_low] = stat
-            hyc_mass = imp_hyc_mass
+            raise NotImplementedError('Needs implementation, copy relevant code from above')
+            # with HiddenPrints():
+            #     p_weights = self.probabilities_imp() 
+            # for i_imp_hyc in range(n_imp_hyc):
+            #     for high_low in range(2):
+            #         stat = stat_fun(imp_foc[:, i_imp_hyc, high_low], p_weights[:, i_imp_hyc], None, **stat_fun_kwargs)
+            #         focals_stats[:, i_imp_hyc, high_low] = stat
+            # hyc_mass = imp_hyc_mass
         
         self.focals_stats = focals_stats
         self.focals_mass = hyc_mass
@@ -2506,37 +2389,41 @@ class PolyUQ(object):
         
         in_dict = np.load(fname, allow_pickle=True)
         
-        self.dim_ex = validate_array(in_dict['self.dim_ex'])
+        if differential is None or differential=='samp':
+            self.dim_ex = validate_array(in_dict['self.dim_ex'])
+            
+            self.N_mcs_ale = validate_array(in_dict['self.N_mcs_ale'])
+            self.N_mcs_epi = validate_array(in_dict['self.N_mcs_epi'])
+            self.percentiles = validate_array(in_dict['self.percentiles'])
+            self.seed = validate_array(in_dict['self.seed'])
+            
+            self.var_supp = to_dataframe(validate_array(in_dict.get('self.var_supp')),
+                                              validate_array(in_dict.get('self.var_supp.columns')))
+            self.inp_samp_prim = to_dataframe(validate_array(in_dict['self.inp_samp_prim']),
+                                              validate_array(in_dict['self.inp_samp_prim.columns']))
+            self.inp_suppl_ale = to_dataframe(validate_array(in_dict['self.inp_suppl_ale']),
+                                              validate_array(in_dict['self.inp_suppl_ale.columns']))
+            self.inp_suppl_epi = to_dataframe(validate_array(in_dict['self.inp_suppl_epi']),
+                                              validate_array(in_dict['self.inp_suppl_epi.columns']))
         
-        self.N_mcs_ale = validate_array(in_dict['self.N_mcs_ale'])
-        self.N_mcs_epi = validate_array(in_dict['self.N_mcs_epi'])
-        self.percentiles = validate_array(in_dict['self.percentiles'])
-        self.seed = validate_array(in_dict['self.seed'])
+        if differential is None or differential=='prop':
+            self.fcount = validate_array(in_dict['self.fcount'])
+            self.loop_ale = validate_array(in_dict['self.loop_ale'])
+            self.loop_epi = validate_array(in_dict['self.loop_epi'])
+            self.out_name = validate_array(in_dict.get('self.out_name'))
+            self.out_samp = validate_array(in_dict['self.out_samp'])
+            self.out_valid = validate_array(in_dict.get('self.out_valid'))
         
-        self.var_supp = to_dataframe(validate_array(in_dict.get('self.var_supp')),
-                                          validate_array(in_dict.get('self.var_supp.columns')))
-        self.inp_samp_prim = to_dataframe(validate_array(in_dict['self.inp_samp_prim']),
-                                          validate_array(in_dict['self.inp_samp_prim.columns']))
-        self.inp_suppl_ale = to_dataframe(validate_array(in_dict['self.inp_suppl_ale']),
-                                          validate_array(in_dict['self.inp_suppl_ale.columns']))
-        self.inp_suppl_epi = to_dataframe(validate_array(in_dict['self.inp_suppl_epi']),
-                                          validate_array(in_dict['self.inp_suppl_epi.columns']))
+        if differential is None or differential=='imp':
+            self.imp_foc = validate_array(in_dict['self.imp_foc'])
+            self.val_samp_prim = validate_array(in_dict.get('self.val_samp_prim'))
+            self.intp_errors = validate_array(in_dict.get('self.intp_errors'))
+            self.intp_exceed = validate_array(in_dict.get('self.intp_exceed'))
+            self.intp_undershot = validate_array(in_dict.get('self.intp_undershot'))
         
-        self.fcount = validate_array(in_dict['self.fcount'])
-        self.loop_ale = validate_array(in_dict['self.loop_ale'])
-        self.loop_epi = validate_array(in_dict['self.loop_epi'])
-        self.out_name = validate_array(in_dict.get('self.out_name'))
-        self.out_samp = validate_array(in_dict['self.out_samp'])
-        self.out_valid = validate_array(in_dict.get('self.out_valid'))
-        
-        self.imp_foc = validate_array(in_dict['self.imp_foc'])
-        self.val_samp_prim = validate_array(in_dict.get('self.val_samp_prim'))
-        self.intp_errors = validate_array(in_dict.get('self.intp_errors'))
-        self.intp_exceed = validate_array(in_dict.get('self.intp_exceed'))
-        self.intp_undershot = validate_array(in_dict.get('self.intp_undershot'))
-        
-        self.focals_stats = validate_array(in_dict['self.focals_stats'])
-        self.focals_mass = validate_array(in_dict['self.focals_mass'])
+        if differential is None or differential=='inc':
+            self.focals_stats = validate_array(in_dict['self.focals_stats'])
+            self.focals_mass = validate_array(in_dict['self.focals_mass'])
         
         if self.var_supp is None:
             self.sample_qmc(percentiles= self.percentiles, supp_only=True)
