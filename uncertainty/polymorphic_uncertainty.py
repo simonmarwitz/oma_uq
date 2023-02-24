@@ -1854,21 +1854,22 @@ class PolyUQ(object):
         
         '''
         
-        def stat_eval(x, stat_fun, imp_foc, i_imp_hyc, i_stat, vars_opt, min_max, stat_fun_kwargs):
+        def stat_eval(x, stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_opt, min_max, stat_fun_kwargs):
             
             for i, var in enumerate(vars_opt):
                 var.freeze(x[i])
-            p_weights_low = self.probabilities_imp(i_imp_hyc)
-            
+            p_weights = self.probabilities_imp(i_imp_hyc)
+            # samp = imp_foc[sort_ind]
+
             stat_vals = np.empty(2)
-            # lower boundary
-            stat_vals[0] = stat_fun(imp_foc[:, i_imp_hyc, 0], p_weights_low, i_stat,  min_max, **stat_fun_kwargs) # min
-            # high boundary
-            stat_vals[1] = stat_fun(imp_foc[:, i_imp_hyc, 1], p_weights_low, i_stat,  min_max, **stat_fun_kwargs) # min
+            for bound in range(2):
+                stat_vals[bound] = stat_fun(imp_foc[sort_ind[:,bound],i_imp_hyc, bound], p_weights[sort_ind[:,bound]], i_stat,  min_max, **stat_fun_kwargs) # min
+            # # high boundary
+            # stat_vals[1] = stat_fun(samp[:, 1], p_weights[sort_ind[:,1]], i_stat,  min_max, **stat_fun_kwargs) # min
             
             return stat_vals
         
-        def interval_range(x, stat_fun, imp_foc, i_imp_hyc, i_stat, vars_opt, n_vars_opt, stat_fun_kwargs, ):
+        def interval_range(x, stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_opt, n_vars_opt, stat_fun_kwargs, ):
                     #        x, interp, temp_x, unit_bounds, temp_dists,
                     # **kwargs):
             '''
@@ -1887,12 +1888,12 @@ class PolyUQ(object):
             '''
             
             
-            stat_vals = stat_eval(x[:n_vars_opt], stat_fun, imp_foc, i_imp_hyc, i_stat, vars_opt, 1, stat_fun_kwargs)
+            stat_vals = stat_eval(x[:n_vars_opt], stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_opt, 1, stat_fun_kwargs)
             if np.all(np.isnan(stat_vals)): 
                 return 0
             stat_min = np.nanmin(stat_vals)
             
-            stat_vals = stat_eval(x[n_vars_opt:], stat_fun, imp_foc, i_imp_hyc, i_stat, vars_opt, -1, stat_fun_kwargs)
+            stat_vals = stat_eval(x[n_vars_opt:], stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_opt, -1, stat_fun_kwargs)
             if np.all(np.isnan(stat_vals)): 
                 return 0
             stat_max = np.nanmax(stat_vals)
@@ -1939,22 +1940,46 @@ class PolyUQ(object):
                     # bounds = [focs[ind] for focs, ind in zip(numeric_focals, inc_hyc_foc_inds[i_inc_hyc])]
                     init = np.mean(bounds, axis=1, keepdims=True)
                     
+                    sort_ind = np.argsort(imp_foc[:,i_imp_hyc,:], axis=0)
+                    
+                    intervals = np.full((n_stat,2),np.nan)
+                    # plt.figure()            
+                    # for i, var in enumerate(vars_inc):
+                    #     var.freeze(init[i,0])
+                    # p_weights = self.probabilities_imp(i_imp_hyc)
+                    # print(np.sum(p_weights))
+                    # plt.hist(imp_foc[:,i_imp_hyc,0], weights=p_weights, alpha=0.5, bins=50, density=False)
+                    # plt.hist(imp_foc[:,i_imp_hyc,1], weights=p_weights, alpha=0.5, bins=50, density=False)
+                    # plt.show(block=True)
+                    
                     now = time.time()
                     for i_stat in range(n_stat):
                         
+                        out_low = stat_eval(init[:,0], stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_inc, 1, stat_fun_kwargs)
+                        out_up  = stat_eval(init[:,0],  stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_inc, -1, stat_fun_kwargs)
+                        
+                        intervals[i_stat,0] = np.nanmin(out_low)
+                        intervals[i_stat,1] = np.nanmax(out_up)
+                        if np.isnan(intervals[i_stat,:]).all():
+                            break
+                        continue
+                    
+                        logging.disable(logging.INFO)
                         resl = scipy.optimize.minimize(fun=interval_range, x0=np.vstack((init,init)),
-                                                args=(stat_fun, imp_foc, i_imp_hyc, i_stat, vars_inc, n_vars_inc, stat_fun_kwargs),
+                                                args=(stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_inc, n_vars_inc, stat_fun_kwargs),
                                                 bounds=np.vstack((bounds, bounds)))
                         if not resl.success:
-                            logger.warning(f'Optimizer failed hypercube {i_inc_hyc} at i_stat {i_stat}')
+                            logger.warning(f'Optimizer failed for hypercube {i_hyc} at i_stat {i_stat}. Breaking here.')
+                            break
                         x_low = resl.x[:n_vars_inc]
                         x_up = resl.x[n_vars_inc:]
                         
-                        out_low = stat_eval(x_low, stat_fun, imp_foc, i_imp_hyc, i_stat, vars_inc, 1, stat_fun_kwargs)
-                        out_up  = stat_eval(x_up, stat_fun, imp_foc, i_imp_hyc, i_stat, vars_inc, -1, stat_fun_kwargs)
-                         
-                        focals_stats[i_stat, i_hyc, 0] = out_low
-                        focals_stats[i_stat, i_hyc, 1] = out_up
+                        out_low = stat_eval(x_low, stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_inc, 1, stat_fun_kwargs)
+                        out_up  = stat_eval(x_up,  stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_inc, -1, stat_fun_kwargs)
+                        
+                        logging.disable(logging.NOTSET)
+                        focals_stats[i_stat, i_hyc, 0] = np.nanmin(out_low)
+                        focals_stats[i_stat, i_hyc, 1] = np.nanmax(out_up)
                         
                         # try:
                         #     logging.disable(logging.INFO)
@@ -1973,8 +1998,20 @@ class PolyUQ(object):
                         #     focals_stats[i_stat, i_hyc, 1] = max(-resul.fun, -resuu.fun)
                         
                         next(pbar)
+                    
+                    # plt.figure()
+                    # cm = 0
+                    # for j in range(n_stat):
+                    #     r,l = intervals[j,:]
+                    #     target_pdfs = stat_fun_kwargs['target_densities']
+                    #     m = target_pdfs[1]-target_pdfs[0]
+                    #     plt.bar(l, m, (r-l), bottom=cm + 0.05*m, align='edge', color='lightgrey', edgecolor='black', alpha=0.5)
+                    #     cm += m
+                    # plt.show(block=True)
+                    break
+                    
                     logger.debug(f'Took {time.time()-now:1.2f} s for interval optimization of {n_stat} statistics on hypercube {i_hyc}.')
-                        
+                break        
                 hyc_mass[i_imp_hyc * n_inc_hyc: (i_imp_hyc + 1 ) * n_inc_hyc ] = inc_hyc_mass * imp_hyc_mass[i_imp_hyc] 
         else: #no incompleteness
             raise NotImplementedError('Needs implementation, copy relevant code from above')
