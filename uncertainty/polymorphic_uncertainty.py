@@ -1942,7 +1942,7 @@ class PolyUQ(object):
                     
                     sort_ind = np.argsort(imp_foc[:,i_imp_hyc,:], axis=0)
                     
-                    intervals = np.full((n_stat,2),np.nan)
+                    # intervals = np.full((n_stat,2),np.nan)
                     # plt.figure()            
                     # for i, var in enumerate(vars_inc):
                     #     var.freeze(init[i,0])
@@ -1955,14 +1955,14 @@ class PolyUQ(object):
                     now = time.time()
                     for i_stat in range(n_stat):
                         
-                        out_low = stat_eval(init[:,0], stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_inc, 1, stat_fun_kwargs)
-                        out_up  = stat_eval(init[:,0],  stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_inc, -1, stat_fun_kwargs)
-                        
-                        intervals[i_stat,0] = np.nanmin(out_low)
-                        intervals[i_stat,1] = np.nanmax(out_up)
-                        if np.isnan(intervals[i_stat,:]).all():
-                            break
-                        continue
+                        # out_low = stat_eval(init[:,0], stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_inc, 1, stat_fun_kwargs)
+                        # out_up  = stat_eval(init[:,0],  stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_inc, -1, stat_fun_kwargs)
+                        #
+                        # intervals[i_stat,0] = np.nanmin(out_low)
+                        # intervals[i_stat,1] = np.nanmax(out_up)
+                        # if np.isnan(intervals[i_stat,:]).all():
+                        #     break
+                        # continue
                     
                         logging.disable(logging.INFO)
                         resl = scipy.optimize.minimize(fun=interval_range, x0=np.vstack((init,init)),
@@ -2008,10 +2008,10 @@ class PolyUQ(object):
                     #     plt.bar(l, m, (r-l), bottom=cm + 0.05*m, align='edge', color='lightgrey', edgecolor='black', alpha=0.5)
                     #     cm += m
                     # plt.show(block=True)
-                    break
+                    # break
                     
                     logger.debug(f'Took {time.time()-now:1.2f} s for interval optimization of {n_stat} statistics on hypercube {i_hyc}.')
-                break        
+                # break        
                 hyc_mass[i_imp_hyc * n_inc_hyc: (i_imp_hyc + 1 ) * n_inc_hyc ] = inc_hyc_mass * imp_hyc_mass[i_imp_hyc] 
         else: #no incompleteness
             raise NotImplementedError('Needs implementation, copy relevant code from above')
