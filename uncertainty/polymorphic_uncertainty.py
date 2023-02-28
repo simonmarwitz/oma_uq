@@ -1903,6 +1903,7 @@ class PolyUQ(object):
         logger.info('Estimating incompleteness intervals by direct L-BFGS optimization of statistics over input hypercubes...')
         # Samples
         imp_foc = self.imp_foc
+        N_mcs_ale = self.N_mcs_ale
         
         # Variables
         vars_inc = self.vars_inc
@@ -1940,7 +1941,7 @@ class PolyUQ(object):
                     # bounds = [focs[ind] for focs, ind in zip(numeric_focals, inc_hyc_foc_inds[i_inc_hyc])]
                     init = np.mean(bounds, axis=1, keepdims=True)
                     
-                    sort_ind = np.argsort(imp_foc[:,i_imp_hyc,:], axis=0)
+                    sort_ind = np.argsort(imp_foc[:N_mcs_ale,i_imp_hyc,:], axis=0)
                     
                     # intervals = np.full((n_stat,2),np.nan)
                     # plt.figure()            
