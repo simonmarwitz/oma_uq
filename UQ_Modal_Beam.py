@@ -5,10 +5,10 @@ import os
 import numpy as np
 import zlib, zipfile
 from model.mechanical import Mechanical, MechanicalDummy
-from uncertainty.polymorphic_uncertainty import MassFunction,RandomVariable,PolyUQ
+from uncertainty.polymorphic_uncertainty import MassFunction, RandomVariable, PolyUQ, \
+stat_fun_avg, stat_fun_cdf, stat_fun_ci, stat_fun_hist, stat_fun_lci, stat_fun_pdf, generate_histogram_bins
 import logging
 import psutil
-import struct
 import time
 
 logger = logging.getLogger(__name__)
@@ -444,7 +444,181 @@ def export_datamanager():
                         path = prop_path
                     poly_uq.save_state(path)
                     break
+                
+def est_imp(poly_uq, result_dir, ret_name, ret_ind):
+    ret_dir = f'{ret_name}-{".".join(str(e) for e in ret_ind.values())}'
+    
+    samp_path = os.path.join(result_dir,'polyuq_samp.npz')
+    prop_path = os.path.join(result_dir, 'estimations', f'{ret_dir}/polyuq_prop.npz')
+    imp_path = os.path.join(result_dir, 'estimations', f'{ret_dir}/polyuq_imp.npz')
+    
+    poly_uq.load_state(samp_path, differential='samp')
+    poly_uq.load_state(prop_path, differential='prop')
+    poly_uq.N_mcs_ale = 13717
+    
+    if ret_ind.get('space',0)==2:
+        start_ale = 5391
+    else:
+        start_ale = 0
+        
+    if os.path.exists(imp_path):
+        poly_uq.load_state(imp_path, differential='imp')
+        
+        samp_fin = np.nonzero(
+                np.any(
+                    np.isnan(poly_uq.imp_foc[:,:,0]),
+                    axis=1)
+            )[0]
+        
+        samp_fin = samp_fin[samp_fin>start_ale]
+        
+        if len(samp_fin)>0:
+            start_ale = np.min(samp_fin)
+        else:
+            start_ale = poly_uq.imp_foc.shape[0]
 
+    while start_ale < poly_uq.N_mcs_ale:
+        print(f'restarting {ret_dir} at sample {start_ale}')
+        end_ale = min(start_ale + 100, poly_uq.N_mcs_ale)
+        poly_uq.estimate_imp(
+            interp_fun='rbf',
+            opt_meth='genetic',
+            plot_res=False,
+            plot_intp=False,
+            intp_err_warn = 20,
+            extrp_warn = 10,
+            start_ale = start_ale,
+            end_ale = end_ale,
+            kernel='gaussian',
+            epsilon={'frf':4,'zetas':2,'damp_freqs':2}[ret_name]
+        )
+        poly_uq.save_state(imp_path, differential='imp')
+        start_ale = end_ale
+        
+def opt_inc(poly_uq, result_dir, ret_name, ret_ind):
+    
+    ret_dir = f'{ret_name}-{".".join(str(e) for e in ret_ind.values())}'
+    samp_path = os.path.join(result_dir,'polyuq_samp.npz')
+    prop_path = os.path.join(result_dir, 'estimations', f'{ret_dir}/polyuq_prop.npz')
+    imp_path = os.path.join(result_dir, 'estimations', f'{ret_dir}/polyuq_imp.npz')
+        
+    poly_uq.load_state(samp_path, differential='samp')
+    poly_uq.load_state(prop_path, differential='prop')
+    poly_uq.load_state(imp_path, differential='imp')
+
+    if False: # analyze unfinished samples
+        samp_fin = np.nonzero(
+                np.any(
+                    np.isnan(poly_uq.imp_foc[:,:,0]),
+                    axis=1)
+            )[0]
+        if len(samp_fin)>0:
+            end_ale = np.min(samp_fin)
+            poly_uq.N_mcs_ale = end_ale
+        else:
+            poly_uq.N_mcs_ale = poly_uq.imp_foc.shape[0]
+
+
+    def run_inc(poly_uq, inc_path, stat_fun, stat_fun_kwargs):
+        if os.path.exists(inc_path) and False:
+            print(f'{inc_path} already finished.')
+            return
+            poly_uq.load_state(inc_path)
+            
+        focals_stats, hyc_mass = poly_uq.optimize_inc(stat_fun, stat_fun.n_stat, stat_fun_kwargs)
+        poly_uq.save_state(inc_path, differential='inc')
+        
+
+    if False: # Average
+        inc_path_part = 'polyuq_avg_inc.npz'
+        inc_path = os.path.join(result_dir, 'estimations', ret_dir, inc_path_part)
+        
+        run_inc(poly_uq, inc_path, stat_fun_avg)
+        
+    if False: # Confidence Interval
+        inc_path_part = 'polyuq_ci_inc.npz'
+        inc_path = os.path.join(result_dir, 'estimations', ret_dir, inc_path_part)
+        
+        run_inc(poly_uq, inc_path, stat_fun_ci)
+        
+    if False: # Confidence Interval Length
+        inc_path_part = 'polyuq_lci_inc.npz'
+        inc_path = os.path.join(result_dir, 'estimations', ret_dir, inc_path_part)
+        
+        run_inc(poly_uq, inc_path, stat_fun_lci)
+    
+    if False: # Histogram
+        nbin_fact=20
+        n_imp_hyc = len(poly_uq.imp_hyc_foc_inds)
+        bins_densities = generate_histogram_bins(poly_uq.imp_foc.reshape(poly_uq.N_mcs_ale, n_imp_hyc * 2), 1, nbin_fact/2) # divide nbin_fact by 2 to account for reshaping intervals
+        stat_fun_hist.n_stat = len(bins_densities) - 1
+        cum_dens = True
+        stat_fun_kwargs = {'bins_densities':bins_densities, 'cum_dens':cum_dens}#, 'ax':ax1}
+        
+        inc_path_part = 'polyuq_hist_inc.npz'
+        inc_path = os.path.join(result_dir, 'estimations', ret_dir, inc_path_part)
+        
+        run_inc(poly_uq, inc_path, stat_fun_hist, stat_fun_kwargs)
+        
+    if False: # Cumulative Density Function
+        n_stat = 40
+        target_probabilities = np.linspace(0,1,n_stat)
+        stat_fun_cdf.n_stat = n_stat
+        stat_fun_kwargs = {'target_probabilities':target_probabilities}
+        inc_path_part = 'polyuq_cdf_inc.npz'
+        inc_path = os.path.join(result_dir, 'estimations', ret_dir, inc_path_part)
+        
+        run_inc(poly_uq, inc_path, stat_fun_cdf)
+        
+    if True: # Probability Density Function
+        
+        if True:
+            n_imp_hyc = len(poly_uq.imp_hyc_foc_inds)
+            '''
+            How to get useful bin width and target_densities?
+            depends on the samples and the weights (assumptio: mostly determined by samples)
+            samples are present in xx imprecision hypercubes
+            for weights take the mean value of distribution parameters
+            that should not have too much of an influence?
+            use a sufficient margin on target densities, e.g. factor 1.5
+            '''
+            for var in poly_uq.vars_inc:
+                supp = poly_uq.var_supp[var.name].values
+                var.freeze(np.mean(supp))
+            nbin_fact=5
+            n_imp_hyc = len(poly_uq.imp_hyc_foc_inds)
+            bins_densities = generate_histogram_bins(poly_uq.imp_foc.reshape(poly_uq.N_mcs_ale, n_imp_hyc * 2), 1, nbin_fact/2) # divide nbin_fact by 2 to account for reshaping intervals
+            bin_width = bins_densities[1] - bins_densities[0]
+            max_dens = 0
+            for i_hyc in range(n_imp_hyc):
+                weights = poly_uq.probabilities_imp(i_hyc)
+                for minmax in range(2):
+                    samp = poly_uq.imp_foc[:,i_hyc,minmax]
+                    sort_ind = np.argsort(samp)
+                    
+                    this_max_dens = stat_fun_pdf(samp[sort_ind],weights[sort_ind],None, minmax, None, bin_width, True)
+                    max_dens = max(max_dens, this_max_dens)
+                # yn = input('next hypercube? (y,n)')
+                # if yn=='n':
+                #     break
+            print(bin_width, max_dens)
+            return
+        else:
+            bin_width = 123
+            max_dens = 1
+            
+        n_stat = 40
+        target_pdfs = np.linspace(0, 1.2*max_dens, n_stat)
+        
+        
+        stat_fun_kwargs = {'target_densities':target_pdfs, 'bin_width':bin_width}#, 'ax':ax1}
+        stat_fun_pdf.n_stat = n_stat
+        
+        inc_path_part = 'polyuq_pdf_inc.npz'
+        inc_path = os.path.join(result_dir, 'estimations', ret_dir, inc_path_part)
+        
+        run_inc(poly_uq, inc_path, stat_fun_pdf)
+        
 def main():
     # default_mapping()
     test_domain()

@@ -333,278 +333,6 @@ class MassFunction(UncertainVariable):
         return f'<MF: {self.name}>'
 
 
-
-    
-def approximate_out_intervals(output, hyc_dat_inds):
-    n_hyc = hyc_dat_inds.shape[0]
-    # for each input hypercube get the output focal set of the output
-    intervals = np.full((n_hyc, 2), np.nan)
-    for i_hyc in range(n_hyc):
-        selector = hyc_dat_inds[i_hyc, :]
-        if selector.any():
-            this_output = output[selector]
-            intervals[i_hyc, :] = np.min(this_output), np.max(this_output)
-        else:
-            pass
-            #print('Encountered empty hypercube -> no focal set assigned.')
-    return intervals 
-
-# def optimize_out_intervals(mapping, arg_vars, hyc_foc_inds, vars_epi, vars_ale=None, fun_kwargs=None):
-#
-#     print('This function is not implemented correctly, currently a placeholder, a wrapper must be written to account for arg_vars')
-#     '''
-#     This function may either be used to quantify incompleteness or imprecision:
-#         incompleteness: 
-#             mapping is stat_fun, needs stochastic samples and weights, weights are obtained by freezing aleatory variables in each optimization step (need a wrapper around stat_fun)
-#             arg_vars is a dict mapping argument names to stochastic samples and weights
-#             hyc_foc_inds are inc_hyc_foc_inds
-#             vars_epi are vars_inc
-#             vars_ale are not needed?
-#             fun_kwargs are additional function keyword arguments, e.g. histogram bins, etc.
-#         imprecision:
-#             mapping is model function
-#             arg_vars is a dict mapping argument names to variable names
-#             hyc_foc_inds are imp_hyc_foc_inds
-#             vars_epi are vars_imp
-#             vars_ale are not needed?
-#             fun_kwargs are additional function keyword arguments, e.g. model parameters
-#     bounds and initial conditions for each hypercube are obtained from vars_epi for each variable in arg_vars
-#
-#
-#     '''
-#
-# #     this_out = mapping(**{arg:samples[var].iloc[ind_ale] for arg, var in arg_vars.items() if var in names_ale}, 
-# #                    **{arg:samples[var].iloc[ind_epi] for arg, var in arg_vars.items() if var in names_epi},)
-#     numeric_focals = [var.numeric_focals for var in vars_epi]
-#     n_hyc = len(hyc_foc_inds)
-#     intervals = np.full((n_hyc ,2), np.nan)
-#
-#     for i_hyc in range(n_hyc):
-#
-#         bounds = [...]
-#         init = [np.mean(bound) for bound in bounds]
-#
-#         resl = scipy.optimize.minimize(lambda x, args: mapping(*x, args), init, fun_args, bounds = bounds)
-#         resu = scipy.optimize.minimize(lambda x, args: -mapping(*x, args), init, fun_args, bounds = bounds)
-#
-#         intervals[i_hyc, :] = [resl.fun, -resu.fun]
-#
-#     return intervals
-
-def compute_belief(focals, masses, cumulative=False, bins=None):
-    if bins is None:
-        bins = np.sort(focals.ravel())
-    elif not isinstance(bins, (np.ndarray, list, tuple)):
-        # assuming bins = nbins -> int: number of bins
-        bins = np.linspace(focals.min(), focals.max(), int(bins))
-
-    bel = np.zeros(bins.size)
-    pl = np.zeros(bins.size)
-    q = np.zeros(bins.size)
-
-    # Bins are sets A
-    # Focals are sets B or C
-    for i in range(bins.size - 1):
-        # set A
-        lbin, ubin = bins[i:i+2]
-        if cumulative:
-            lbin = focals.min()
-
-        # get all sets B that are a subset of A
-        # that means the lower boundary of B must be greater or equal than the lower boundary of A
-        # and similarly for the upper boundary
-        belinds = np.logical_and(focals[:,0] >= lbin,
-                                 focals[:,1] <= ubin)
-        bel[i] = np.sum(masses[belinds])
-        # get all sets B that intersect with A
-        # that means the lower boundary of B must not be higher (= must be strictly lower) than the upper boundary of A (B entirely outside of A to the right)
-        # and the upper boundary of B must not be lower (= must be strictly higher) than the lower boundary of A (B  entirely outside of A to the left)
-        plinds = np.logical_and(focals[:,0] < ubin, 
-                                focals[:,1] > lbin, )
-        pl[i] = np.sum(masses[plinds])
-
-        # get all sets B that are a superset of A   (=A is a subset of B)
-        # that means the lower boundary of A must be greater or equal to the lower boundary of B
-        # and similarly for the upper boundary
-        qinds = np.logical_and(focals[:,0] <= lbin,
-                               focals[:,1] >= ubin)   
-        q[i] = np.sum(masses[qinds])
-
-    bel[-1]=bel[-2]
-    pl[-1]=pl[-2]
-    q[-1]=q[-2]
-    
-    return bins, bel, pl, q
-
-def aggregate_mass(focals_stats, hyc_mass, nbin_fact=1, cum_mass=False):
-     
-    n_stat, n_hyc, _ = focals_stats.shape 
-    n_bins_bel = np.ceil(np.sqrt(n_hyc) * nbin_fact).astype(int)
-    bins_bel = np.linspace(np.nanmin(focals_stats), np.nanmax(focals_stats), n_bins_bel)
-    bel_stats = np.empty((n_stat, n_bins_bel))
-    pl_stats = np.empty((n_stat, n_bins_bel))
-    q_stats = np.empty((n_stat, n_bins_bel))    
-    for i_bin in range(n_stat):
-    
-        # compute belief, plausibility & commonality -belief functions for each aleatory bin
-        _, bel,pl,q = compute_belief(focals_stats[i_bin, :, :], hyc_mass, cumulative=cum_mass, bins=bins_bel)
-        bel_stats[i_bin, :] = bel
-        pl_stats[i_bin, :] = pl
-        q_stats[i_bin, :] = q
-
-    return bel_stats, pl_stats, q_stats, bins_bel
-
-def plot_focals(focals, mass, ax, highlight=None):
-    cm=0
-    for i,((l,r),m) in enumerate(zip(focals,mass)): 
-        if i == highlight:
-            ax.bar(l,m*0.9,(r-l),bottom = cm+0.05*m, align='edge', color='lightcoral', edgecolor='black')
-        else:
-            ax.bar(l,m*0.9,(r-l),bottom = cm+0.05*m, align='edge', color='lightgrey', edgecolor='black')
-        cm += m
-#     ax.set_xticks([0,0.5,1,1.5,2])
-#     ax.set_xticklabels(['','','','','',])
-
-
-    return ax
-
-def plot_grid(df, output='y'):
-    global hue_norm
-    hue_norm = matplotlib.colors.Normalize(3/2*np.min(df[output])-1/2*np.max(df[output]),np.max(df[output]))
-    grid = sns.pairplot(df, hue=output, diag_kind='scatter', corner=True, markers='.', plot_kws={'s':25, 'hue_norm':hue_norm}, palette='cubehelix', )
-    grid.fig.set_size_inches(5.92,5.92)
-    grid.fig.set_dpi(150)
-    grid.fig.subplots_adjust(top=0.97,bottom=0.08, left=0.12, right=0.9)
-    grid.fig.align_labels()
-    for i, x_var in enumerate(grid.x_vars):
-        
-        grid.axes[i,i].set_axis_off()
-        ax = grid.axes[i,i].twinx()
-        sns.scatterplot(data=df, x=x_var,y=output, hue=output, markers='.',s=5, palette=grid._orig_palette, hue_norm=hue_norm, ax=ax, legend=False)
-        grid.axes[i,i] = ax
-    global rectangles
-    rectangles=[]
-    global scatters
-    scatters=[]
-    return grid
-
-def plot_hyc_grid(df_hyc, grid, output='y', maxx=None, minx=None, out_up=None, out_low=None):
-    # n_vars_imp = inputs_hyc.shape[1]
-    # df_hyc = pd.DataFrame(inputs_hyc, columns=[f'$x_{i}$' for i in range(n_vars_imp)])
-    # df_hyc['$y$']=outputs_hyc
-    
-    global scatters
-    global hue_norm
-    create_legend = not scatters
-    for obj in scatters:
-        obj.remove()
-    scatters=[]
-    for i, x_var in enumerate(grid.x_vars):
-        for j, y_var in enumerate(grid.y_vars):
-            if i==j: continue
-            ax = grid.axes[j,i]
-            if ax is None: continue
-            sns.scatterplot(data=df_hyc, x=x_var,y=y_var, hue=output, 
-                            markers='.',s=3, palette=grid._orig_palette, 
-                            hue_norm=hue_norm, ax=ax, legend=False)
-            scatters.append(ax.collections[-1])
-            if maxx is not None:
-                p=ax.scatter(maxx[i],maxx[j], marker='x',color='k')
-                scatters.append(p)
-            if minx is not None:
-                p=ax.scatter(minx[i],minx[j], marker='x',color='k')
-                scatters.append(p)
-
-        ax = grid.axes[i,i]
-
-        sns.scatterplot(data=df_hyc, x=x_var,y=output, hue=output, 
-                        markers='.',s=3, palette=grid._orig_palette, 
-                        hue_norm=hue_norm, ax=ax, legend=False)
-        scatters.append(ax.collections[-1])
-        if maxx is not None and out_up is not None:
-            p=ax.scatter(maxx[i],out_up, marker='x',color='k')
-            scatters.append(p)
-        if minx is not None and out_low is not None:
-            p=ax.scatter(minx[i],out_low, marker='x',color='k', label='sampled opt.')
-            scatters.append(p)
-        else:
-            p = None
-        
-    if create_legend:
-        if p is not None:
-            grid.fig.legends[0].legendHandles.append(p)
-        grid.fig.legend(handles=grid.fig.legends[0].legendHandles, title=output)
-        grid.fig.legends[0].remove()
-
-def plot_opt_res_grid(grid, vars_opt,
-                      x_low, x_up,
-                      focals,
-                      out_min, out_max,
-                      out_low, out_up):
-    
-    opt_var_inds=np.cumsum(vars_opt) - 1
-    global rectangles
-    
-    create_legend = not rectangles
-    
-    for obj in rectangles:
-        obj.remove()
-    rectangles = []
-    for i,var1 in enumerate(grid.x_vars):
-        # opt_var_ind1 = opt_var_inds[i]
-        foc_1=focals[i]
-        # (x_low[i], x_up[i]) should be foc1 
-        if not vars_opt[i]: 
-            xl1 = foc_1[0]
-            xu1 = foc_1[1]
-        else:
-            xl1 = x_low[0, i]
-            xu1 = x_up[0, i]
-        for j,var2 in enumerate(grid.y_vars):
-            
-            if var1==var2: continue
-            ax = grid.axes[j,i]
-            if ax is None: continue
-            
-            # opt_var_ind2 = opt_var_inds[j]
-            foc_2=focals[j]
-            
-            # (x_low[j], x_up[j]) should be foc2 
-            if not vars_opt[j]: 
-                xl2 = foc_2[0]
-                xu2 = foc_2[1]
-            else:
-                xl2 = x_low[0, j]
-                xu2 = x_up[0, j]
-                
-            # plot nearest neighbor of optimal point
-            p=ax.scatter(xl1,xl2, marker='o',edgecolors='k',color='none')
-            rectangles.append(p)
-            
-            p=ax.scatter(xu1,xu2, marker='o',edgecolors='k',color='none')
-            rectangles.append(p)
-
-            # plot design hypercube
-            p=ax.add_patch(matplotlib.patches.Rectangle((foc_1[0], foc_2[0]), foc_1[1] - foc_1[0], foc_2[1] - foc_2[0], fill=False, ls='dashed', color='k', alpha=0.5))
-            rectangles.append(p)
-
-        #plot optimal hypercube
-        ax = grid.axes[i, i]
-
-        # plot design hypercube
-        p=ax.add_patch(matplotlib.patches.Rectangle((foc_1[0], out_min), foc_1[1] - foc_1[0], out_max - out_min, fill=False, ls='dashed', color='k', alpha=0.5))
-        rectangles.append(p)
-
-        # plot nearest neighbor of optimal point
-        p=ax.scatter(xl1,out_low, marker='o',edgecolors='k',color='none')
-        rectangles.append(p)
-        p=ax.scatter(xu1,out_up, marker='o',edgecolors='k', label='appr. opt.',color='none')
-        rectangles.append(p)
-    if create_legend:
-        grid.fig.legends[0].legendHandles.append(p)
-        grid.fig.legend(handles=grid.fig.legends[0].legendHandles, title='y')
-        grid.fig.legends[0].remove()
- 
 class PolyUQ(object):
     
     def __init__(self, vars_ale, vars_epi, dim_ex='cartesian'):
@@ -2466,7 +2194,414 @@ class PolyUQ(object):
         if self.var_supp is None:
             self.sample_qmc(percentiles= self.percentiles, supp_only=True)
             self.save_state(fname)
+
+
+# def approximate_out_intervals(output, hyc_dat_inds):
+#     n_hyc = hyc_dat_inds.shape[0]
+#     # for each input hypercube get the output focal set of the output
+#     intervals = np.full((n_hyc, 2), np.nan)
+#     for i_hyc in range(n_hyc):
+#         selector = hyc_dat_inds[i_hyc, :]
+#         if selector.any():
+#             this_output = output[selector]
+#             intervals[i_hyc, :] = np.min(this_output), np.max(this_output)
+#         else:
+#             pass
+#             #print('Encountered empty hypercube -> no focal set assigned.')
+#     return intervals 
+#
+# def optimize_out_intervals(mapping, arg_vars, hyc_foc_inds, vars_epi, vars_ale=None, fun_kwargs=None):
+#
+#     print('This function is not implemented correctly, currently a placeholder, a wrapper must be written to account for arg_vars')
+#     '''
+#     This function may either be used to quantify incompleteness or imprecision:
+#         incompleteness: 
+#             mapping is stat_fun, needs stochastic samples and weights, weights are obtained by freezing aleatory variables in each optimization step (need a wrapper around stat_fun)
+#             arg_vars is a dict mapping argument names to stochastic samples and weights
+#             hyc_foc_inds are inc_hyc_foc_inds
+#             vars_epi are vars_inc
+#             vars_ale are not needed?
+#             fun_kwargs are additional function keyword arguments, e.g. histogram bins, etc.
+#         imprecision:
+#             mapping is model function
+#             arg_vars is a dict mapping argument names to variable names
+#             hyc_foc_inds are imp_hyc_foc_inds
+#             vars_epi are vars_imp
+#             vars_ale are not needed?
+#             fun_kwargs are additional function keyword arguments, e.g. model parameters
+#     bounds and initial conditions for each hypercube are obtained from vars_epi for each variable in arg_vars
+#
+#
+#     '''
+#
+# #     this_out = mapping(**{arg:samples[var].iloc[ind_ale] for arg, var in arg_vars.items() if var in names_ale}, 
+# #                    **{arg:samples[var].iloc[ind_epi] for arg, var in arg_vars.items() if var in names_epi},)
+#     numeric_focals = [var.numeric_focals for var in vars_epi]
+#     n_hyc = len(hyc_foc_inds)
+#     intervals = np.full((n_hyc ,2), np.nan)
+#
+#     for i_hyc in range(n_hyc):
+#
+#         bounds = [...]
+#         init = [np.mean(bound) for bound in bounds]
+#
+#         resl = scipy.optimize.minimize(lambda x, args: mapping(*x, args), init, fun_args, bounds = bounds)
+#         resu = scipy.optimize.minimize(lambda x, args: -mapping(*x, args), init, fun_args, bounds = bounds)
+#
+#         intervals[i_hyc, :] = [resl.fun, -resu.fun]
+#
+#     return intervals
+
+def compute_belief(focals, masses, cumulative=False, bins=None):
+    if bins is None:
+        bins = np.sort(focals.ravel())
+    elif not isinstance(bins, (np.ndarray, list, tuple)):
+        # assuming bins = nbins -> int: number of bins
+        bins = np.linspace(focals.min(), focals.max(), int(bins))
+
+    bel = np.zeros(bins.size)
+    pl = np.zeros(bins.size)
+    q = np.zeros(bins.size)
+
+    # Bins are sets A
+    # Focals are sets B or C
+    for i in range(bins.size - 1):
+        # set A
+        lbin, ubin = bins[i:i+2]
+        if cumulative:
+            lbin = focals.min()
+
+        # get all sets B that are a subset of A
+        # that means the lower boundary of B must be greater or equal than the lower boundary of A
+        # and similarly for the upper boundary
+        belinds = np.logical_and(focals[:,0] >= lbin,
+                                 focals[:,1] <= ubin)
+        bel[i] = np.sum(masses[belinds])
+        # get all sets B that intersect with A
+        # that means the lower boundary of B must not be higher (= must be strictly lower) than the upper boundary of A (B entirely outside of A to the right)
+        # and the upper boundary of B must not be lower (= must be strictly higher) than the lower boundary of A (B  entirely outside of A to the left)
+        plinds = np.logical_and(focals[:,0] < ubin, 
+                                focals[:,1] > lbin, )
+        pl[i] = np.sum(masses[plinds])
+
+        # get all sets B that are a superset of A   (=A is a subset of B)
+        # that means the lower boundary of A must be greater or equal to the lower boundary of B
+        # and similarly for the upper boundary
+        qinds = np.logical_and(focals[:,0] <= lbin,
+                               focals[:,1] >= ubin)   
+        q[i] = np.sum(masses[qinds])
+
+    bel[-1]=bel[-2]
+    pl[-1]=pl[-2]
+    q[-1]=q[-2]
     
+    return bins, bel, pl, q
+
+def aggregate_mass(focals_stats, hyc_mass, nbin_fact=1, cum_mass=False):
+     
+    n_stat, n_hyc, _ = focals_stats.shape 
+    n_bins_bel = np.ceil(np.sqrt(n_hyc) * nbin_fact).astype(int)
+    bins_bel = np.linspace(np.nanmin(focals_stats), np.nanmax(focals_stats), n_bins_bel)
+    bel_stats = np.empty((n_stat, n_bins_bel))
+    pl_stats = np.empty((n_stat, n_bins_bel))
+    q_stats = np.empty((n_stat, n_bins_bel))    
+    for i_bin in range(n_stat):
+    
+        # compute belief, plausibility & commonality -belief functions for each aleatory bin
+        _, bel,pl,q = compute_belief(focals_stats[i_bin, :, :], hyc_mass, cumulative=cum_mass, bins=bins_bel)
+        bel_stats[i_bin, :] = bel
+        pl_stats[i_bin, :] = pl
+        q_stats[i_bin, :] = q
+
+    return bel_stats, pl_stats, q_stats, bins_bel
+
+def plot_focals(focals, mass, ax, highlight=None):
+    cm=0
+    for i,((l,r),m) in enumerate(zip(focals,mass)): 
+        if i == highlight:
+            ax.bar(l,m*0.9,(r-l),bottom = cm+0.05*m, align='edge', color='lightcoral', edgecolor='black')
+        else:
+            ax.bar(l,m*0.9,(r-l),bottom = cm+0.05*m, align='edge', color='lightgrey', edgecolor='black')
+        cm += m
+#     ax.set_xticks([0,0.5,1,1.5,2])
+#     ax.set_xticklabels(['','','','','',])
+
+
+    return ax
+
+def plot_grid(df, output='y'):
+    global hue_norm
+    hue_norm = matplotlib.colors.Normalize(3/2*np.min(df[output])-1/2*np.max(df[output]),np.max(df[output]))
+    grid = sns.pairplot(df, hue=output, diag_kind='scatter', corner=True, markers='.', plot_kws={'s':25, 'hue_norm':hue_norm}, palette='cubehelix', )
+    grid.fig.set_size_inches(5.92,5.92)
+    grid.fig.set_dpi(150)
+    grid.fig.subplots_adjust(top=0.97,bottom=0.08, left=0.12, right=0.9)
+    grid.fig.align_labels()
+    for i, x_var in enumerate(grid.x_vars):
+        
+        grid.axes[i,i].set_axis_off()
+        ax = grid.axes[i,i].twinx()
+        sns.scatterplot(data=df, x=x_var,y=output, hue=output, markers='.',s=5, palette=grid._orig_palette, hue_norm=hue_norm, ax=ax, legend=False)
+        grid.axes[i,i] = ax
+    global rectangles
+    rectangles=[]
+    global scatters
+    scatters=[]
+    return grid
+
+def plot_hyc_grid(df_hyc, grid, output='y', maxx=None, minx=None, out_up=None, out_low=None):
+    # n_vars_imp = inputs_hyc.shape[1]
+    # df_hyc = pd.DataFrame(inputs_hyc, columns=[f'$x_{i}$' for i in range(n_vars_imp)])
+    # df_hyc['$y$']=outputs_hyc
+    
+    global scatters
+    global hue_norm
+    create_legend = not scatters
+    for obj in scatters:
+        obj.remove()
+    scatters=[]
+    for i, x_var in enumerate(grid.x_vars):
+        for j, y_var in enumerate(grid.y_vars):
+            if i==j: continue
+            ax = grid.axes[j,i]
+            if ax is None: continue
+            sns.scatterplot(data=df_hyc, x=x_var,y=y_var, hue=output, 
+                            markers='.',s=3, palette=grid._orig_palette, 
+                            hue_norm=hue_norm, ax=ax, legend=False)
+            scatters.append(ax.collections[-1])
+            if maxx is not None:
+                p=ax.scatter(maxx[i],maxx[j], marker='x',color='k')
+                scatters.append(p)
+            if minx is not None:
+                p=ax.scatter(minx[i],minx[j], marker='x',color='k')
+                scatters.append(p)
+
+        ax = grid.axes[i,i]
+
+        sns.scatterplot(data=df_hyc, x=x_var,y=output, hue=output, 
+                        markers='.',s=3, palette=grid._orig_palette, 
+                        hue_norm=hue_norm, ax=ax, legend=False)
+        scatters.append(ax.collections[-1])
+        if maxx is not None and out_up is not None:
+            p=ax.scatter(maxx[i],out_up, marker='x',color='k')
+            scatters.append(p)
+        if minx is not None and out_low is not None:
+            p=ax.scatter(minx[i],out_low, marker='x',color='k', label='sampled opt.')
+            scatters.append(p)
+        else:
+            p = None
+        
+    if create_legend:
+        if p is not None:
+            grid.fig.legends[0].legendHandles.append(p)
+        grid.fig.legend(handles=grid.fig.legends[0].legendHandles, title=output)
+        grid.fig.legends[0].remove()
+
+def plot_opt_res_grid(grid, vars_opt,
+                      x_low, x_up,
+                      focals,
+                      out_min, out_max,
+                      out_low, out_up):
+    
+    opt_var_inds=np.cumsum(vars_opt) - 1
+    global rectangles
+    
+    create_legend = not rectangles
+    
+    for obj in rectangles:
+        obj.remove()
+    rectangles = []
+    for i,var1 in enumerate(grid.x_vars):
+        # opt_var_ind1 = opt_var_inds[i]
+        foc_1=focals[i]
+        # (x_low[i], x_up[i]) should be foc1 
+        if not vars_opt[i]: 
+            xl1 = foc_1[0]
+            xu1 = foc_1[1]
+        else:
+            xl1 = x_low[0, i]
+            xu1 = x_up[0, i]
+        for j,var2 in enumerate(grid.y_vars):
+            
+            if var1==var2: continue
+            ax = grid.axes[j,i]
+            if ax is None: continue
+            
+            # opt_var_ind2 = opt_var_inds[j]
+            foc_2=focals[j]
+            
+            # (x_low[j], x_up[j]) should be foc2 
+            if not vars_opt[j]: 
+                xl2 = foc_2[0]
+                xu2 = foc_2[1]
+            else:
+                xl2 = x_low[0, j]
+                xu2 = x_up[0, j]
+                
+            # plot nearest neighbor of optimal point
+            p=ax.scatter(xl1,xl2, marker='o',edgecolors='k',color='none')
+            rectangles.append(p)
+            
+            p=ax.scatter(xu1,xu2, marker='o',edgecolors='k',color='none')
+            rectangles.append(p)
+
+            # plot design hypercube
+            p=ax.add_patch(matplotlib.patches.Rectangle((foc_1[0], foc_2[0]), foc_1[1] - foc_1[0], foc_2[1] - foc_2[0], fill=False, ls='dashed', color='k', alpha=0.5))
+            rectangles.append(p)
+
+        #plot optimal hypercube
+        ax = grid.axes[i, i]
+
+        # plot design hypercube
+        p=ax.add_patch(matplotlib.patches.Rectangle((foc_1[0], out_min), foc_1[1] - foc_1[0], out_max - out_min, fill=False, ls='dashed', color='k', alpha=0.5))
+        rectangles.append(p)
+
+        # plot nearest neighbor of optimal point
+        p=ax.scatter(xl1,out_low, marker='o',edgecolors='k',color='none')
+        rectangles.append(p)
+        p=ax.scatter(xu1,out_up, marker='o',edgecolors='k', label='appr. opt.',color='none')
+        rectangles.append(p)
+    if create_legend:
+        grid.fig.legends[0].legendHandles.append(p)
+        grid.fig.legend(handles=grid.fig.legends[0].legendHandles, title='y')
+        grid.fig.legends[0].remove()
+ 
+def stat_fun_avg(a, weight, *args, **kwargs):
+    return np.average(a, weights=weight)
+stat_fun_avg.nstat = 1
+
+def stat_fun_ci(a, weight, i_stat, *args, **kwargs):
+    n = len(a)
+    mean = np.average(a, weights=weight)
+    std = np.sqrt(np.cov(a, aweights=weight))
+    if std==0:
+        conf= [mean, mean]
+    else:
+        sem = std / np.sqrt(n)
+        conf = scipy.stats.t.interval(confidence=0.95, df=n-1, loc=mean, scale=sem) 
+    if i_stat is not None:
+        return conf[i_stat]
+    else: 
+        return conf
+stat_fun_ci.nstat = 2
+    
+def stat_fun_lci(a, weight, *args, **kwargs):
+    n = len(a)
+    mean = np.average(a, weights=weight)
+    std = np.sqrt(np.cov(a, aweights=weight))
+    if std==0:
+        conf= [mean, mean]
+    else:
+        sem = std / np.sqrt(n)
+        conf = scipy.stats.t.interval(confidence=0.95, df=n-1, loc=mean, scale=sem) 
+    return conf[1]-conf[0]
+stat_fun_lci.nstat = 1
+
+def stat_fun_hist(a, weight, i_stat, *args, bins_densities, cum_dens):
+    '2. Quantify Variability for each incomplete sample and imprecise hypercube'
+    if i_stat is None: # i_stat is never None in optimization loop
+        hist,_ = np.histogram(a, bins_densities, weights=weight, density=True)
+
+        if cum_dens:
+            hist= np.cumsum(hist)
+            hist /= hist[-1]   
+        return hist
+    else:
+        # factor 6 faster but more error prone for "dirty" data, uneven bins or ....
+        if cum_dens: first_edge = bins_densities[0]
+        else: first_edge = bins_densities[i_stat]
+        last_edge = bins_densities[i_stat + 1]
+        keep  = (a >= first_edge)
+        keep &= (a <=  last_edge)
+        return np.sum(weight[keep])
+stat_fun_hist.nstat = None
+    
+def stat_fun_pdf(samp, weights, i_stat, min_max, target_densities, bin_width, test_run=False):
+    # requires sorted samples
+    # first determine appropriate bin_width by trial-and-error -> 
+    #    fix distribution_parameters of vars_inc at interval midpoint (average)
+    #    run this function for each imprecision hypercube and set test_run=True 
+    #    determine reasonable maximum density (which may become very high for "concentrated" data
+    
+    if min_max == -1:
+        samp = np.flip(samp)
+        weights = np.flip(weights)
+        
+    N_mcs_ale = len(samp)
+    p_prev = 0
+    it = range(N_mcs_ale)
+    densities = np.empty(N_mcs_ale)
+    for n in it:
+        ind = np.logical_and(samp > (samp[n] - bin_width / 2), samp < (samp[n] + bin_width / 2))
+        p_curr = np.sum(weights[ind]) / bin_width #/ ntot
+        densities[n]=p_curr
+        if test_run:
+            continue
+        if p_curr > target_densities[i_stat]:
+            break
+        p_prev = p_curr
+    else: # did not find a bin with target density
+        if test_run:
+            plt.hist(samp, weights=weights, density=True, bins=np.arange(samp.min(), samp.max(), bin_width))
+            plt.plot(samp, densities)
+            # plt.show()
+            return np.max(densities)
+        return np.nan
+    
+    if n == 0:
+        return samp[n]
+
+    x0, x1 = p_prev, p_curr
+    y0, y1 = samp[n - 1], samp[n]
+    
+    return (y0 * (x1 - target_densities[i_stat]) + y1 * (target_densities[i_stat] - x0))/(x1 - x0)
+stat_fun_pdf.nstat = None
+
+def stat_fun_cdf(samp, weights, i_stat, *args, target_probabilities):
+    # requires sorted samples
+    ecdf = np.cumsum(weights)
+    
+    return np.interp(target_probabilities[i_stat], ecdf,samp)
+stat_fun_cdf.nstat = None
+
+def weighted_quantile(values, quantiles, sample_weight=None, 
+                      values_sorted=False, old_style=False):
+    """ Very close to numpy.percentile, but supports weights.
+    NOTE: quantiles should be in [0, 1]!
+    :param values: numpy.array with data
+    :param quantiles: array-like with many quantiles needed
+    :param sample_weight: array-like of the same length as `array`
+    :param values_sorted: bool, if True, then will avoid sorting of
+        initial array
+    :param old_style: if True, will correct output to be consistent
+        with numpy.percentile.
+    :return: numpy.array with computed quantiles.
+    
+    ATTENTION: may return errorneous values (lower quantiles are 
+    higher-valued than upper quantiles) -> needs investigation
+    """
+    values = np.array(values)
+    quantiles = np.array(quantiles)
+    if sample_weight is None:
+        sample_weight = np.ones(len(values))
+    sample_weight = np.array(sample_weight)
+    assert np.all(quantiles >= 0) and np.all(quantiles <= 1), \
+        'quantiles should be in [0, 1]'
+
+    if not values_sorted:
+        sorter = np.argsort(values)
+        values = values[sorter]
+        sample_weight = sample_weight[sorter]
+
+    weighted_quantiles = np.cumsum(sample_weight) - 0.5 * sample_weight
+    if old_style:
+        # To be convenient with numpy.percentile
+        weighted_quantiles -= weighted_quantiles[0]
+        weighted_quantiles /= weighted_quantiles[-1]
+    else:
+        weighted_quantiles /= np.sum(sample_weight)
+    return np.interp(quantiles, weighted_quantiles, values)
+
 def generate_histogram_bins(data, axis=1, nbin_fact=1):
     # generate the bins
     # modified Freedman-Diaconis rule 
