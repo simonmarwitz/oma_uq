@@ -519,17 +519,18 @@ def opt_inc(poly_uq, result_dir, ret_name, ret_ind):
             poly_uq.N_mcs_ale = poly_uq.imp_foc.shape[0]
 
 
-    def run_inc(poly_uq, inc_path, stat_fun, stat_fun_kwargs):
+    def run_inc(poly_uq, inc_path, stat_fun, stat_fun_kwargs={}):
+        print(stat_fun.__name__)
         if os.path.exists(inc_path) and False:
             print(f'{inc_path} already finished.')
             return
             poly_uq.load_state(inc_path)
-            
+        
         focals_stats, hyc_mass = poly_uq.optimize_inc(stat_fun, stat_fun.n_stat, stat_fun_kwargs)
         poly_uq.save_state(inc_path, differential='inc')
         
 
-    if False: # Average
+    if True: # Average
         inc_path_part = 'polyuq_avg_inc.npz'
         inc_path = os.path.join(result_dir, 'estimations', ret_dir, inc_path_part)
         
@@ -547,12 +548,12 @@ def opt_inc(poly_uq, result_dir, ret_name, ret_ind):
         
         run_inc(poly_uq, inc_path, stat_fun_lci)
     
-    if False: # Histogram
+    if True: # Histogram
         nbin_fact=20
         n_imp_hyc = len(poly_uq.imp_hyc_foc_inds)
         bins_densities = generate_histogram_bins(poly_uq.imp_foc.reshape(poly_uq.N_mcs_ale, n_imp_hyc * 2), 1, nbin_fact/2) # divide nbin_fact by 2 to account for reshaping intervals
         stat_fun_hist.n_stat = len(bins_densities) - 1
-        cum_dens = True
+        cum_dens = False
         stat_fun_kwargs = {'bins_densities':bins_densities, 'cum_dens':cum_dens}#, 'ax':ax1}
         
         inc_path_part = 'polyuq_hist_inc.npz'
@@ -560,7 +561,7 @@ def opt_inc(poly_uq, result_dir, ret_name, ret_ind):
         
         run_inc(poly_uq, inc_path, stat_fun_hist, stat_fun_kwargs)
         
-    if False: # Cumulative Density Function
+    if True: # Cumulative Density Function
         n_stat = 40
         target_probabilities = np.linspace(0,1,n_stat)
         stat_fun_cdf.n_stat = n_stat
@@ -568,10 +569,12 @@ def opt_inc(poly_uq, result_dir, ret_name, ret_ind):
         inc_path_part = 'polyuq_cdf_inc.npz'
         inc_path = os.path.join(result_dir, 'estimations', ret_dir, inc_path_part)
         
-        run_inc(poly_uq, inc_path, stat_fun_cdf)
+        run_inc(poly_uq, inc_path, stat_fun_cdf, stat_fun_kwargs)
         
-    if True: # Probability Density Function
-        
+    if False: # Probability Density Function
+        # too slow, returns nan often and optimizer just fails
+        # bin indices should be pre-computed
+        # generally -> variability is mixed with imprecision in the output -> misleading interpretations
         if True:
             n_imp_hyc = len(poly_uq.imp_hyc_foc_inds)
             '''
@@ -585,7 +588,12 @@ def opt_inc(poly_uq, result_dir, ret_name, ret_ind):
             for var in poly_uq.vars_inc:
                 supp = poly_uq.var_supp[var.name].values
                 var.freeze(np.mean(supp))
-            nbin_fact=5
+                
+            if 'zeta' in poly_uq.out_name:
+                nbin_fact=5
+            else:
+                nbin_fact=10
+                
             n_imp_hyc = len(poly_uq.imp_hyc_foc_inds)
             bins_densities = generate_histogram_bins(poly_uq.imp_foc.reshape(poly_uq.N_mcs_ale, n_imp_hyc * 2), 1, nbin_fact/2) # divide nbin_fact by 2 to account for reshaping intervals
             bin_width = bins_densities[1] - bins_densities[0]
@@ -602,12 +610,12 @@ def opt_inc(poly_uq, result_dir, ret_name, ret_ind):
                 # if yn=='n':
                 #     break
             print(bin_width, max_dens)
-            return
+            # return
         else:
             bin_width = 123
             max_dens = 1
             
-        n_stat = 40
+        n_stat = 20
         target_pdfs = np.linspace(0, 1.2*max_dens, n_stat)
         
         
@@ -617,7 +625,7 @@ def opt_inc(poly_uq, result_dir, ret_name, ret_ind):
         inc_path_part = 'polyuq_pdf_inc.npz'
         inc_path = os.path.join(result_dir, 'estimations', ret_dir, inc_path_part)
         
-        run_inc(poly_uq, inc_path, stat_fun_pdf)
+        run_inc(poly_uq, inc_path, stat_fun_pdf, stat_fun_kwargs)
         
 def main():
     # default_mapping()

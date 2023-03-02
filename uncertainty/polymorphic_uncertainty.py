@@ -2468,7 +2468,7 @@ def plot_opt_res_grid(grid, vars_opt,
  
 def stat_fun_avg(a, weight, *args, **kwargs):
     return np.average(a, weights=weight)
-stat_fun_avg.nstat = 1
+stat_fun_avg.n_stat = 1
 
 def stat_fun_ci(a, weight, i_stat, *args, **kwargs):
     n = len(a)
@@ -2483,7 +2483,7 @@ def stat_fun_ci(a, weight, i_stat, *args, **kwargs):
         return conf[i_stat]
     else: 
         return conf
-stat_fun_ci.nstat = 2
+stat_fun_ci.n_stat = 2
     
 def stat_fun_lci(a, weight, *args, **kwargs):
     n = len(a)
@@ -2495,7 +2495,7 @@ def stat_fun_lci(a, weight, *args, **kwargs):
         sem = std / np.sqrt(n)
         conf = scipy.stats.t.interval(confidence=0.95, df=n-1, loc=mean, scale=sem) 
     return conf[1]-conf[0]
-stat_fun_lci.nstat = 1
+stat_fun_lci.n_stat = 1
 
 def stat_fun_hist(a, weight, i_stat, *args, bins_densities, cum_dens):
     '2. Quantify Variability for each incomplete sample and imprecise hypercube'
@@ -2514,7 +2514,7 @@ def stat_fun_hist(a, weight, i_stat, *args, bins_densities, cum_dens):
         keep  = (a >= first_edge)
         keep &= (a <=  last_edge)
         return np.sum(weight[keep])
-stat_fun_hist.nstat = None
+stat_fun_hist.n_stat = None
     
 def stat_fun_pdf(samp, weights, i_stat, min_max, target_densities, bin_width, test_run=False):
     # requires sorted samples
@@ -2522,6 +2522,14 @@ def stat_fun_pdf(samp, weights, i_stat, min_max, target_densities, bin_width, te
     #    fix distribution_parameters of vars_inc at interval midpoint (average)
     #    run this function for each imprecision hypercube and set test_run=True 
     #    determine reasonable maximum density (which may become very high for "concentrated" data
+    
+    '''
+    TODO: for each boundary of each imprecision hypercube the bin indices can be precomputed
+    or determine pdf from the derivative of the percentiles, which is the same, just with variable bin_width
+    just sucks! 
+    '''
+    
+    
     
     if min_max == -1:
         samp = np.flip(samp)
@@ -2542,8 +2550,8 @@ def stat_fun_pdf(samp, weights, i_stat, min_max, target_densities, bin_width, te
         p_prev = p_curr
     else: # did not find a bin with target density
         if test_run:
-            plt.hist(samp, weights=weights, density=True, bins=np.arange(samp.min(), samp.max(), bin_width))
-            plt.plot(samp, densities)
+            # plt.hist(samp, weights=weights, density=True, bins=np.arange(samp.min(), samp.max(), bin_width/10))
+            # plt.plot(samp, densities)
             # plt.show()
             return np.max(densities)
         return np.nan
@@ -2555,14 +2563,14 @@ def stat_fun_pdf(samp, weights, i_stat, min_max, target_densities, bin_width, te
     y0, y1 = samp[n - 1], samp[n]
     
     return (y0 * (x1 - target_densities[i_stat]) + y1 * (target_densities[i_stat] - x0))/(x1 - x0)
-stat_fun_pdf.nstat = None
+stat_fun_pdf.n_stat = None
 
 def stat_fun_cdf(samp, weights, i_stat, *args, target_probabilities):
     # requires sorted samples
     ecdf = np.cumsum(weights)
     
-    return np.interp(target_probabilities[i_stat], ecdf,samp)
-stat_fun_cdf.nstat = None
+    return np.interp(target_probabilities[i_stat], ecdf, samp)
+stat_fun_cdf.n_stat = None
 
 def weighted_quantile(values, quantiles, sample_weight=None, 
                       values_sorted=False, old_style=False):
