@@ -548,7 +548,7 @@ def opt_inc(poly_uq, result_dir, ret_name, ret_ind):
         
         run_inc(poly_uq, inc_path, stat_fun_lci)
     
-    if True: # Histogram
+    if ret_name!='frf': # Histogram
         nbin_fact=20
         n_imp_hyc = len(poly_uq.imp_hyc_foc_inds)
         bins_densities = generate_histogram_bins(poly_uq.imp_foc.reshape(poly_uq.N_mcs_ale, n_imp_hyc * 2), 1, nbin_fact/2) # divide nbin_fact by 2 to account for reshaping intervals
@@ -561,7 +561,7 @@ def opt_inc(poly_uq, result_dir, ret_name, ret_ind):
         
         run_inc(poly_uq, inc_path, stat_fun_hist, stat_fun_kwargs)
         
-    if True: # Cumulative Density Function
+    if ret_name!='frf': # Cumulative Density Function
         n_stat = 40
         target_probabilities = np.linspace(0,1,n_stat)
         stat_fun_cdf.n_stat = n_stat

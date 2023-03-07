@@ -1671,6 +1671,8 @@ class PolyUQ(object):
                     
                     sort_ind = np.argsort(imp_foc[:N_mcs_ale,i_imp_hyc,:], axis=0)
                     
+                    
+                    TODO: Here remove all nans from imp_foc by removing respective indices, that way stat_eval, etc. wont even notice
                     # intervals = np.full((n_stat,2),np.nan)
                     # plt.figure()            
                     # for i, var in enumerate(vars_inc):
