@@ -845,6 +845,21 @@ class PolyUQ(object):
         
         return out_samp#, p_weights
     
+    def probabilities_stoch(self):
+        '''
+        imprecision variables will be treated as distributed according to the aggregated mass e.g. plausibility function
+        variablity variables will be treated the usual way
+        incompletenes variables will be treated as distributed according to the aggregated mass e.g. plausbibility function
+        
+        algorithm
+        sample N_mcs_ale samples of incompleteness variables according to their distribution in a MCS sense (no probability weighting to be considered later)
+        for each N_mcs_ale sample:
+            compute variability probability according to sampled incompleteness parameters
+            compute imprecision probability according to sampled variability parameters
+            assmble N_mcs_ale x N_mcs_epi grid of weights
+        flatten samples and weights and apply stat_fun
+        '''
+    
     def probabilities_imp(self, i_imp=None):
         
         # many secondary aleatory variables may be provided and sampled
@@ -1670,9 +1685,13 @@ class PolyUQ(object):
                     init = np.mean(bounds, axis=1, keepdims=True)
                     
                     sort_ind = np.argsort(imp_foc[:N_mcs_ale,i_imp_hyc,:], axis=0)
+                    # remove nans form array by removing respective indices
+                    mask = np.any(~np.take_along_axis(np.isnan(imp_foc[:N_mcs_ale,i_imp_hyc,:]), 
+                                                      sort_ind, 
+                                                      axis=0),
+                                  axis=1)
+                    sort_ind = sort_ind[mask,:]
                     
-                    
-                    TODO: Here remove all nans from imp_foc by removing respective indices, that way stat_eval, etc. wont even notice
                     # intervals = np.full((n_stat,2),np.nan)
                     # plt.figure()            
                     # for i, var in enumerate(vars_inc):
