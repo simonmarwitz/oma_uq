@@ -197,7 +197,6 @@ def mapping_function(E=2.1e11, a=0.9, b=None, t=None, rho=7850, N_wire=None,
         
         mech.build_conti(struct_parms, Ldiv=num_nodes, damping=zeta, 
                          num_modes=num_modes, meas_locs=meas_locs)
-        
         inp_node = num_nodes # should be the tip node
         _, frf_z = mech.frequency_response(N, inp_node,'uz',fmax=fs//2, out_quant='a')
         _, frf_y = mech.frequency_response(N, inp_node,'uy',fmax=fs//2, out_quant='a')

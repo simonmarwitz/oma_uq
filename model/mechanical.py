@@ -1,6 +1,7 @@
 # from importlib import reload; from model import mechanical; mechanical.main()
 # reload(mechanical); mechanical.main()
 
+import sys
 import time
 import numpy as np
 import os
@@ -8,6 +9,7 @@ import glob
 import shutil
 
 import logging
+logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 # global logger
 # logger = logger.getLogger('')
 logger = logging.getLogger(__name__)
@@ -840,7 +842,8 @@ class Mechanical(MechanicalDummy):
                 (zeta, zeta) -> global rayleigh (MP,BETD and MP,ALPD)
                 (alpha, beta, False) -> global  rayleigh (MP,BETD and MP,ALPD)
         '''
-        
+        self.damped_frequencies = None
+        self.frequencies = None
         logger.debug('self.build_conti')
         
         if num_modes is None:
@@ -887,12 +890,12 @@ class Mechanical(MechanicalDummy):
         
 
         if meas_locs is not None:
-            idcs = np.argmin(np.sqrt((nodes_coordinates[:,1,None]-meas_locs)**2), axis=0)
+            idcs = np.argmin(np.sqrt((nodes_coordinates[:, 1, None] - meas_locs)**2), axis=0)
             ansys.nsel(type='NONE')
             # for x_loc in meas_locs:
             for i,idx in enumerate(idcs):
                 # print(i,meas_locs[i],nodes_coordinates[idx,:])
-                n_node=nodes_coordinates[idx,0]
+                n_node=nodes_coordinates[idx, 0]
                 ansys.nsel('A', item='NODE', comp='', vmin=n_node, vmax=n_node)
             
             ansys.nsel('A', item='NODE',vmin='NKTMD2', vmax='NKTMD2')
@@ -1987,9 +1990,9 @@ class Mechanical(MechanicalDummy):
             # TODO: extend 3D
             
             if out_quant == 'a':
-                frf += -omegan**2 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
+                frf += -omegas**2 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
             elif out_quant == 'v':
-                frf += omegan / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
+                frf += 1j*omegas / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
             elif out_quant == 'd':
                 frf += 1 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
             else:
@@ -2203,6 +2206,8 @@ class Mechanical(MechanicalDummy):
                     # ,cname='meas_nodes'# for modal matrices we need the full mode shapes
                      )  # Controls the solution data written to the database.
         if damped:
+            if not self.globdamp:
+                logger.warning("Model is non-proportionally damped. Modal damping values will be errorneous.")
             ansys.modopt(method='QRDAMP', nmode=num_modes, freqb=0,
                          freqe=1e4,
                          cpxmod='cplx',
@@ -2254,8 +2259,6 @@ class Mechanical(MechanicalDummy):
             os.remove('MatMD.bin')
             # try:
             if damped:
-                if not self.globdamp:
-                    logger.warning("Model is non-proportionally damped. Modal damping values will be errorneous.")
                 ansys.dmat(matrix="MatCD", type="D", method="IMPORT", val1="FULL", val2=f"{self.jobname}.full", val3="DAMP")
                 ansys.export(matrix="MatCD", format="MMF", fname="MatCD.bin")
                 C = scipy.io.mmread('MatCD.bin')
@@ -3189,7 +3192,9 @@ def main():
     import matplotlib.pyplot as plt
     np.set_printoptions(precision=6)#precision=2)
         
-    from model.mechanical_fun import print_context_dict
+    from helpers import get_pcd 
+    print_context_dict = get_pcd('print')
+    
     global ansys
     try:
         print(ansys)
@@ -3202,31 +3207,52 @@ def main():
     # accelerance plots
     if True:
         fmax=3
-        fig,[ax1,ax2]=plt.subplots(2,1,gridspec_kw={'height_ratios':[3,1]}, sharex=True)
-        for color, zeta in [('dimgrey',0.001)
-                            #,('grey',0.005),('lightgrey',0.01)
-                            ]:
-            mech.example_beam(num_nodes=100, num_modes=14, damping=zeta, num_meas_nodes=1)
-            omegas, frf_y = mech.frequency_response(65536,100,'uz',fmax=fmax, out_quant='d')
-            # np.savez(f'/usr/scratch4/sima9999/work/modal_uq/system_frf/UZ_{zeta}.npz', frf)
-            # ax1.plot(omegas/2/np.pi, np.abs(frf), color=color,label=f"$\\zeta={zeta}$")
-            #
-            # ax2.plot(omegas/2/np.pi,np.angle(frf)/np.pi*180, color=color)
-            omegas, frf_z = mech.frequency_response(65536,100,'uy',fmax=fmax, out_quant='d')
-            # np.savez(f'/usr/scratch4/sima9999/work/modal_uq/system_frf/UY_{zeta}.npz',frf)
-            frf = (frf_y + frf_z) / np.sqrt(2)
-            frf_mag = np.sqrt((np.abs(frf_y)*np.cos(np.angle(frf_y)))**2 + (np.abs(frf_z)*np.cos(np.angle(frf_z)))**2)
-            frf_arg = np.arctan2(np.abs(frf_y)*np.cos(np.angle(frf_y)),np.abs(frf_z)*np.cos(np.angle(frf_z)))
-            frf = np.exp(frf_arg*1j)*frf_mag
-            
-            frf = (frf_y + frf_z) / np.sqrt(2)
-            ax1.plot(omegas/2/np.pi, np.abs(frf), color=color)
-            ax1.plot(omegas/2/np.pi, np.abs(frf_y), color=color, alpha=0.5)
-            ax1.plot(omegas/2/np.pi, np.abs(frf_z), color=color, alpha=0.5)
-            ax2.plot(omegas/2/np.pi,np.angle(frf)/np.pi*180, color=color)
-            ax2.plot(omegas/2/np.pi,np.angle(frf_y)/np.pi*180, color=color, alpha=0.5)
-            ax2.plot(omegas/2/np.pi,np.angle(frf_z)/np.pi*180, color=color, alpha=0.5)
+        plt.rc('text.latex', preamble="\\usepackage{siunitx}\\usepackage{xfrac}")
+        with matplotlib.rc_context(rc=print_context_dict):
+            fig,[ax1,ax2]=plt.subplots(2,1,gridspec_kw={'height_ratios':[3,1]}, sharex=True)
+            for color, zeta in [('dimgrey',0.01)
+                                ,('grey',0.05),('lightgrey',0.1)
+                                ]:
+                mech.example_beam(num_nodes=100, num_modes=14, damping=zeta, num_meas_nodes=1, mD=0)
+                
+                omegas, frf_y = mech.frequency_response(65536,100,'uz',fmax=fmax, out_quant='a')
+                frf_y = frf_y[:,0]
+                # np.savez(f'/usr/scratch4/sima9999/work/modal_uq/system_frf/UZ_{zeta}.npz', frf)
+                # ax1.plot(omegas/2/np.pi, np.abs(frf), color=color,label=f"$\\zeta={zeta}$")
+                #
+                # ax2.plot(omegas/2/np.pi,np.angle(frf)/np.pi*180, color=color)
+                omegas, frf_z = mech.frequency_response(65536,100,'uy',fmax=fmax, out_quant='a')
+                frf_z = frf_z[:,0]
+                # np.savez(f'/usr/scratch4/sima9999/work/modal_uq/system_frf/UY_{zeta}.npz',frf)
+                # frf = (frf_y + frf_z) / np.sqrt(2)
+                # frf_mag = np.sqrt((np.abs(frf_y)*np.cos(np.angle(frf_y)))**2 + (np.abs(frf_z)*np.cos(np.angle(frf_z)))**2)
+                # frf_arg = np.arctan2(np.abs(frf_y)*np.cos(np.angle(frf_y)),np.abs(frf_z)*np.cos(np.angle(frf_z)))
+                # frf = np.exp(frf_arg*1j)*frf_mag
+                
+                frf = 1000*(frf_y + frf_z) / np.sqrt(2) 
+                
+                ax1.plot(omegas/2/np.pi, np.abs(frf), color=color,label=f"$\\zeta={zeta}$")
+                # ax1.plot(omegas/2/np.pi, np.abs(frf_y), color=color, alpha=0.5)
+                # ax1.plot(omegas/2/np.pi, np.abs(frf_z), color=color, alpha=0.5)
+                ax2.plot(omegas/2/np.pi,np.angle(frf)/np.pi*180, color=color)
+                # ax2.plot(omegas/2/np.pi,np.angle(frf_y)/np.pi*180, color=color, alpha=0.5)
+                # ax2.plot(omegas/2/np.pi,np.angle(frf_z)/np.pi*180, color=color, alpha=0.5)
+                
             ax1.set_yscale('log')
+            
+            # ax1.set_ylim((5e-06, 0.02))
+            ax1.set_xlim((0,fmax))
+            ax1.legend()
+            ax1.set_ylabel('Accelerance $|\mathcal{H}_\mathrm{f-a}| [\si{\milli\meter\per\square\second\per\\newton}]$')
+            ax2.set_ylabel('$\\arg\\bigl(H_{f-a}\\bigr)$ [\si{\degree}]')
+            ax2.set_xlabel('Frequency [\si{\hertz}]')
+            ax2.yaxis.set_major_locator(plt.MultipleLocator(90))
+            ax2.yaxis.set_minor_locator(plt.MultipleLocator(45))
+            fig.subplots_adjust(top=0.97,bottom=0.125, left=0.105, right=0.97, hspace=0.1)
+            # plt.savefig('/usr/scratch4/sima9999/work/2019_OMA_UQ/tex/figures/introduction/frf_example_struc_beam.pdf')
+            # plt.savefig('/usr/scratch4/sima9999/work/2019_OMA_UQ/tex/figures/introduction/frf_example_struc_beam.png')
+            plt.show()
+        
         
     
     # parameter study TMD mass with FRF
@@ -3248,7 +3274,7 @@ def main():
         
             ax1.set_yscale('log')
             ax1.legend(loc='upper right')
-            fig.text(0.02, 0.5, 'Compliance $|\mathcal{H}_\mathrm{f-d}| [\si{\meter\per\\newton}]$', va='center', ha='center', rotation='vertical', )
+            fig.text(0.02, 0.5, 'Receptance $|\mathcal{H}_\mathrm{f-d}| [\si{\meter\per\\newton}]$', va='center', ha='center', rotation='vertical', )
             # ax1.set_ylabel('Compliance $|\mathcal{H}_\mathrm{f-d}| [\si{\meter\per\\newton}]$')
         
             fig.subplots_adjust(top=0.97,bottom=0.115, left=0.1, right=0.97, hspace=0.07, wspace=0.035)
@@ -3266,12 +3292,21 @@ def main():
             for linestyle,damp_mode in [('solid',1), ('dashed',2),('dotted',3),('solid',5)]:
         
                 mech.example_beam(num_nodes=100, num_modes=14, damping=zeta, damp_mode=damp_mode, num_meas_nodes=1, mD=800)
+                
+                # print(mech.modal(damped=True, use_cache=False))
                 omegas, frf = mech.frequency_response(65536,100,'uz',fmax=fmax, out_quant='d')
+                # print(frf, frf.shape)
+                
                 label=f'$j = {damp_mode}$'
                 color='#00000080'
                 if damp_mode==5: 
                     label='undamped'
                     color='lightgrey'
+                
+                frf = frf[:,0] # top displacement
+                # frf = frf[:,1] #tmd displacement
+                # frf = frf[:,1] - frf[:,0] # relative displacement
+                
                 ax.plot(omegas/2/np.pi, np.abs(frf), color=color, label =label,zorder=-1*damp_mode, ls=linestyle)
                 continue
                 omegas, frf = mech.frequency_response(65536,100,'uy',fmax=fmax, out_quant='d')
@@ -3279,7 +3314,7 @@ def main():
         
             ax.set_yscale('log')
             ax.legend(loc='upper right')
-            ax.set_ylabel('Compliance $|\mathcal{H}_\mathrm{f-d}| [\si{\meter\per\\newton}]$')
+            ax.set_ylabel('Receptance $|\mathcal{H}_\mathrm{f-d}| [\si{\meter\per\\newton}]$')
             # ax1.set_ylabel('Compliance $|\mathcal{H}_\mathrm{f-d}| [\si{\meter\per\\newton}]$')
         
             fig.subplots_adjust(top=0.97,bottom=0.115, left=0.1, right=0.97, hspace=0.07, wspace=0.035)
