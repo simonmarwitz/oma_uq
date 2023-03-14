@@ -2097,6 +2097,8 @@ class PolyUQ(object):
             out_dict['self.inp_samp_prim'] = self.inp_samp_prim
             out_dict['self.inp_suppl_ale'] = self.inp_suppl_ale
             out_dict['self.inp_suppl_epi'] = self.inp_suppl_epi
+            out_dict['self.loop_ale'] = self.loop_ale
+            out_dict['self.loop_epi'] = self.loop_epi
             
             if self.var_supp is not None:
                 out_dict['self.var_supp.columns'] = self.var_supp.columns
@@ -2117,8 +2119,6 @@ class PolyUQ(object):
         
         if differential is None or differential=='prop':
             out_dict['self.fcount'] = self.fcount
-            out_dict['self.loop_ale'] = self.loop_ale
-            out_dict['self.loop_epi'] = self.loop_epi
             out_dict['self.out_name'] = self.out_name
             out_dict['self.out_samp'] = self.out_samp
             out_dict['self.out_valid'] = self.out_valid
@@ -2183,6 +2183,8 @@ class PolyUQ(object):
             self.N_mcs_epi = validate_array(in_dict['self.N_mcs_epi'])
             self.percentiles = validate_array(in_dict['self.percentiles'])
             self.seed = validate_array(in_dict['self.seed'])
+            self.loop_ale = validate_array(in_dict.get('self.loop_ale',True))
+            self.loop_epi = validate_array(in_dict.get('self.loop_epi',True))
             
             self.var_supp = to_dataframe(validate_array(in_dict.get('self.var_supp')),
                                               validate_array(in_dict.get('self.var_supp.columns')))
@@ -2195,8 +2197,6 @@ class PolyUQ(object):
         
         if differential is None or differential=='prop':
             self.fcount = validate_array(in_dict['self.fcount'])
-            self.loop_ale = validate_array(in_dict['self.loop_ale'])
-            self.loop_epi = validate_array(in_dict['self.loop_epi'])
             self.out_name = validate_array(in_dict.get('self.out_name'))
             self.out_samp = validate_array(in_dict['self.out_samp'])
             self.out_valid = validate_array(in_dict.get('self.out_valid'))
