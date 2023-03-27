@@ -197,6 +197,7 @@ def mapping_function(E=2.1e11, a=0.9, b=None, t=None, rho=7850, N_wire=None,
         
         mech.build_conti(struct_parms, Ldiv=num_nodes, damping=zeta, 
                          num_modes=num_modes, meas_locs=meas_locs)
+        ansys.open_gui()
         inp_node = num_nodes # should be the tip node
         _, frf_z = mech.frequency_response(N, inp_node,'uz',fmax=fs//2, out_quant='a')
         _, frf_y = mech.frequency_response(N, inp_node,'uy',fmax=fs//2, out_quant='a')
@@ -504,7 +505,7 @@ def opt_inc(poly_uq, result_dir, ret_name, ret_ind):
     poly_uq.load_state(samp_path, differential='samp')
     poly_uq.load_state(prop_path, differential='prop')
     poly_uq.load_state(imp_path, differential='imp')
-
+    
     if False: # analyze unfinished samples
         samp_fin = np.nonzero(
                 np.any(
@@ -516,7 +517,7 @@ def opt_inc(poly_uq, result_dir, ret_name, ret_ind):
             poly_uq.N_mcs_ale = end_ale
         else:
             poly_uq.N_mcs_ale = poly_uq.imp_foc.shape[0]
-
+    
 
     def run_inc(poly_uq, inc_path, stat_fun, stat_fun_kwargs={}):
         print(stat_fun.__name__)
