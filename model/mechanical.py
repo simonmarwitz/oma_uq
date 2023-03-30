@@ -3205,7 +3205,7 @@ def main():
     ansys=mech.ansys
     
     # accelerance plots
-    if True:
+    if False:
         fmax=3
         plt.rc('text.latex', preamble="\\usepackage{siunitx}\\usepackage{xfrac}")
         with matplotlib.rc_context(rc=print_context_dict):
@@ -3336,15 +3336,15 @@ def main():
             print(f'{f[i]:1.3f} & {d[i]*100:1.3f} & {kappas[i]:1.3f} & {mus[i]:1.1f} & {etas[i]:1.3f} ')
     
     # Mode shape pictograms
-    if False:
+    if True:
         
         mech.example_beam(num_nodes=100, num_modes=14, damping=0.005, num_meas_nodes=100)
         f,d,phi, = mech.modal(num_modes=14, damped=True, modal_matrices=False,use_meas_nodes=False)
         x = np.array(mech.nodes_coordinates)[:,1]
-        ylim = np.abs(phi).max()
+        ylim = np.abs(phi).max()*1.1
         for i in range(len(f)):
             for j in [1,2]:
-                plt.figure(figsize=(1.5,0.3))
+                plt.figure(figsize=(1.5,0.57))
                 msh = np.abs(phi[:,j,i])
                 msh*=np.cos(np.angle(phi[:,j,i])) 
                 
@@ -3361,9 +3361,9 @@ def main():
                 plt.ylim((-ylim,ylim))
                 plt.xticks([])
                 plt.yticks([])
-                plt.subplots_adjust(top=0.99,bottom=0.05, left=0.02, right=0.99)
+                plt.subplots_adjust(top=1,bottom=0, left=0, right=1)
                 plt.gca().set_axis_off()
-                # plt.savefig(f'/usr/scratch4/sima9999/work/2019_OMA_UQ/tex/figures/introduction/mshs/{i}_{j}.pdf')
+                plt.savefig(f'/usr/scratch4/sima9999/home/2019_OMA_UQ/tex/figures/introduction/mshs/{i}_{j}_wide.pdf')
                 
                 
     plt.show()
