@@ -626,10 +626,224 @@ def opt_inc(poly_uq, result_dir, ret_name, ret_ind):
         inc_path = os.path.join(result_dir, 'estimations', ret_dir, inc_path_part)
         
         run_inc(poly_uq, inc_path, stat_fun_pdf, stat_fun_kwargs)
+
+def plots():
+    import matplotlib
+    import matplotlib.pyplot as plt
+    np.set_printoptions(precision=6)#precision=2)
         
+    from helpers import get_pcd 
+    print_context_dict = get_pcd('print')
+    
+    global ansys
+    try:
+        print(ansys)
+    except:
+        ansys=None
+    
+    mech = Mechanical(ansys, wdir='/run/user/30980/')
+    ansys=mech.ansys
+    
+    # accelerance plots
+    if False:
+        fmax=3
+        plt.rc('text.latex', preamble="\\usepackage{siunitx}\\usepackage{xfrac}")
+        with matplotlib.rc_context(rc=print_context_dict):
+            fig,[ax1,ax2]=plt.subplots(2,1,gridspec_kw={'height_ratios':[3,1]}, sharex=True)
+            for color, zeta in [('dimgrey',0.01)
+                                ,('grey',0.05),('lightgrey',0.1)
+                                ]:
+                mech.example_beam(num_nodes=100, num_modes=14, damping=zeta, num_meas_nodes=1, mD=0)
+                
+                omegas, frf_y = mech.frequency_response(65536,100,'uz',fmax=fmax, out_quant='a')
+                frf_y = frf_y[:,0]
+                # np.savez(f'/usr/scratch4/sima9999/work/modal_uq/system_frf/UZ_{zeta}.npz', frf)
+                # ax1.plot(omegas/2/np.pi, np.abs(frf), color=color,label=f"$\\zeta={zeta}$")
+                #
+                # ax2.plot(omegas/2/np.pi,np.angle(frf)/np.pi*180, color=color)
+                omegas, frf_z = mech.frequency_response(65536,100,'uy',fmax=fmax, out_quant='a')
+                frf_z = frf_z[:,0]
+                # np.savez(f'/usr/scratch4/sima9999/work/modal_uq/system_frf/UY_{zeta}.npz',frf)
+                # frf = (frf_y + frf_z) / np.sqrt(2)
+                # frf_mag = np.sqrt((np.abs(frf_y)*np.cos(np.angle(frf_y)))**2 + (np.abs(frf_z)*np.cos(np.angle(frf_z)))**2)
+                # frf_arg = np.arctan2(np.abs(frf_y)*np.cos(np.angle(frf_y)),np.abs(frf_z)*np.cos(np.angle(frf_z)))
+                # frf = np.exp(frf_arg*1j)*frf_mag
+                
+                frf = 1000*(frf_y + frf_z) / np.sqrt(2) 
+                
+                ax1.plot(omegas/2/np.pi, np.abs(frf), color=color,label=f"$\\zeta={zeta}$")
+                # ax1.plot(omegas/2/np.pi, np.abs(frf_y), color=color, alpha=0.5)
+                # ax1.plot(omegas/2/np.pi, np.abs(frf_z), color=color, alpha=0.5)
+                ax2.plot(omegas/2/np.pi,np.angle(frf)/np.pi*180, color=color)
+                # ax2.plot(omegas/2/np.pi,np.angle(frf_y)/np.pi*180, color=color, alpha=0.5)
+                # ax2.plot(omegas/2/np.pi,np.angle(frf_z)/np.pi*180, color=color, alpha=0.5)
+                
+            ax1.set_yscale('log')
+            
+            # ax1.set_ylim((5e-06, 0.02))
+            ax1.set_xlim((0,fmax))
+            ax1.legend()
+            ax1.set_ylabel('Accelerance $|\mathcal{H}_\mathrm{f-a}| [\si{\milli\meter\per\square\second\per\\newton}]$')
+            ax2.set_ylabel('$\\arg\\bigl(H_{f-a}\\bigr)$ [\si{\degree}]')
+            ax2.set_xlabel('Frequency [\si{\hertz}]')
+            ax2.yaxis.set_major_locator(plt.MultipleLocator(90))
+            ax2.yaxis.set_minor_locator(plt.MultipleLocator(45))
+            fig.subplots_adjust(top=0.97,bottom=0.125, left=0.105, right=0.97, hspace=0.1)
+            # plt.savefig('/usr/scratch4/sima9999/work/2019_OMA_UQ/tex/figures/introduction/frf_example_struc_beam.pdf')
+            # plt.savefig('/usr/scratch4/sima9999/work/2019_OMA_UQ/tex/figures/introduction/frf_example_struc_beam.png')
+            plt.show()
+        
+        
+    
+    # parameter study TMD mass with FRF
+    if False:
+        fmax=3
+        plt.rc('text.latex', preamble="\\usepackage{siunitx}\\usepackage{xfrac}")
+        with matplotlib.rc_context(rc=print_context_dict):
+            fig,[ax1,ax2, ax3, ax4]=plt.subplots(4,1,sharex=True, sharey=True)
+            zeta=0.005
+            for damp_mode, ax in enumerate([ax2, ax3, ax4, ax1]):
+                damp_mode += 1
+                for color, mD in [('dimgrey',800),('lightgrey',1600)]:
+        
+                    mech.example_beam(num_nodes=100, num_modes=14, damping=zeta, damp_mode=damp_mode, num_meas_nodes=1, mD=mD)
+                    omegas, frf = mech.frequency_response(65536,100,'uz',fmax=fmax, out_quant='d')
+                    ax.plot(omegas/2/np.pi, np.abs(frf), color=color, label =f'$m_D = {mD}$')
+                    omegas, frf = mech.frequency_response(65536,100,'uy',fmax=fmax, out_quant='d')
+                    ax.plot(omegas/2/np.pi, np.abs(frf), color=color)
+        
+            ax1.set_yscale('log')
+            ax1.legend(loc='upper right')
+            fig.text(0.02, 0.5, 'Receptance $|\mathcal{H}_\mathrm{f-d}| [\si{\meter\per\\newton}]$', va='center', ha='center', rotation='vertical', )
+            # ax1.set_ylabel('Compliance $|\mathcal{H}_\mathrm{f-d}| [\si{\meter\per\\newton}]$')
+        
+            fig.subplots_adjust(top=0.97,bottom=0.115, left=0.1, right=0.97, hspace=0.07, wspace=0.035)
+            ax4.set_xlabel('Frequency [\si{\hertz}]')
+            ax4.set_xlim((0,fmax))
+            plt.show()
+    
+    # parameter study TMD tuning with FRF
+    if False:
+        fmax=3
+        plt.rc('text.latex', preamble="\\usepackage{siunitx}\\usepackage{xfrac}")
+        with matplotlib.rc_context(rc=print_context_dict):
+            fig,ax=plt.subplots(1,1,sharex=True, sharey=True)
+            zeta=0.005
+            for linestyle,damp_mode in [('solid',1), ('dashed',2),('dotted',3),('solid',5)]:
+        
+                mech.example_beam(num_nodes=100, num_modes=14, damping=zeta, damp_mode=damp_mode, num_meas_nodes=1, mD=800)
+                
+                # print(mech.modal(damped=True, use_cache=False))
+                omegas, frf = mech.frequency_response(65536,100,'uy',fmax=fmax, out_quant='d')
+                # print(frf, frf.shape)
+                
+                label=f'$j = {damp_mode}$'
+                color='#00000080'
+                if damp_mode==5: 
+                    label='undamped'
+                    color='lightgrey'
+                
+                frf = frf[:,0] # top displacement
+                # frf = frf[:,1] #tmd displacement
+                # frf = frf[:,1] - frf[:,0] # relative displacement
+                
+                ax.plot(omegas/2/np.pi, np.abs(frf), color=color, label =label,zorder=-1*damp_mode, ls=linestyle)
+                continue
+                omegas, frf = mech.frequency_response(65536,100,'uy',fmax=fmax, out_quant='d')
+                ax.plot(omegas/2/np.pi, np.abs(frf), color=color)
+        
+            ax.set_yscale('log')
+            ax.legend(loc='upper right')
+            ax.set_ylabel('Receptance $|\mathcal{H}_\mathrm{f-d}| [\si{\meter\per\\newton}]$')
+            # ax1.set_ylabel('Compliance $|\mathcal{H}_\mathrm{f-d}| [\si{\meter\per\\newton}]$')
+        
+            fig.subplots_adjust(top=0.97,bottom=0.115, left=0.1, right=0.97, hspace=0.07, wspace=0.035)
+            ax.set_xlabel('Frequency [\si{\hertz}]')
+            ax.set_xlim((0,1))
+            # plt.savefig('/usr/scratch4/sima9999/work/2019_OMA_UQ/tex/figures/introduction/example_tmd_frf.pdf')
+            # plt.savefig('/usr/scratch4/sima9999/work/2019_OMA_UQ/tex/figures/introduction/example_tmd_frf.png')
+            plt.show()
+        
+    
+    #Modal parameters
+    if False:
+        
+        mech.example_beam(num_nodes=100, num_modes=14, damping=0.005, num_meas_nodes=100)
+        f,d,phi,kappas,mus,etas = mech.modal(num_modes=14, damped=True, modal_matrices=True,use_meas_nodes=False)
+        for i in range(len(f)):
+            # print(f'{f[i]:1.4f} & {d[i]*100:1.4f} & {np.sqrt(kappas[i]/mus[i])/2/np.pi*np.sqrt(1-d[i]**2):1.4f}& {etas[i]/2/np.sqrt(mus[i]*kappas[i]):1.4f} & \includegraphics{{figures/introduction/mshs/{i}_2}}  & \includegraphics{{figures/introduction/mshs/{i}_1}}  \\\\')
+            # print(f'{f[i]:1.4f} & {d[i]*100:1.4f} & {kappas[i]:1.4f} & {mus[i]:1.1f} & {etas[i]:1.4f} & \includegraphics{{figures/introduction/mshs/{i}_2}}  & \includegraphics{{figures/introduction/mshs/{i}_1}}  \\\\')
+            print(f'{f[i]:1.3f} & {d[i]*100:1.3f} & {kappas[i]:1.3f} & {mus[i]:1.1f} & {etas[i]:1.3f} ')
+    
+    # Mode shape pictograms
+    if False:
+        
+        mech.example_beam(num_nodes=100, num_modes=14, damping=0.005, num_meas_nodes=100, damp_mode=2)
+        f,d,phi, = mech.modal(num_modes=14, damped=True, modal_matrices=False,use_meas_nodes=False)
+        x = np.array(mech.nodes_coordinates)[:,1]
+        ylim = np.abs(phi).max()*1.1
+        for i in range(len(f)):
+            for j in [1,2]:
+                plt.figure(figsize=(1.5,0.57))
+                msh = np.abs(phi[:,j,i])
+                msh*=np.cos(np.angle(phi[:,j,i])) 
+                
+                plt.plot([160], [0], color='dimgrey', ls='none', marker='o', markerfacecolor='white', markersize=3)
+                plt.plot(x[:-2],msh[:-2], color='black', lw=1)
+                plt.plot([0,200],[0,0], color='dimgrey', lw=1, ls='dotted')
+                plt.plot([-4], [0], color='dimgrey', ls='none', marker='>', markerfacecolor='white', markersize=6)
+                plt.plot([0], [0], color='dimgrey', ls='none', marker='o', markerfacecolor='white', markersize=3)
+                
+                plt.plot([x[-2],x[-2]], [0,msh[x==x[-2]][0]], color='black', lw=1)
+                plt.plot([x[-1],x[-1]], msh[x==x[-1]], color='black', lw=1)
+                plt.plot([x[-1]], msh[-1], color='black', ls='none', marker='.')
+                
+                plt.ylim((-ylim,ylim))
+                plt.xticks([])
+                plt.yticks([])
+                plt.subplots_adjust(top=1,bottom=0, left=0, right=1)
+                plt.gca().set_axis_off()
+                # plt.savefig(f'/usr/scratch4/sima9999/home/2019_OMA_UQ/tex/figures/introduction/mshs/{i}_{j}_wide.pdf')
+                
+    # Mode shape in PlotMSH
+    if True:
+        from core.PreProcessingTools import GeometryProcessor, PreProcessSignals
+        from core.PlotMSH import ModeShapePlot
+        from GUI.PlotMSHGUI import start_msh_gui
+        from core.PostProcessingTools import MergePoSER
+        jid='test'
+        
+        mech.example_beam(num_nodes=100, num_modes=14, damping=0.005, num_meas_nodes=100, damp_mode=2)
+        f,d,phi, = mech.numerical_response_parameters(dofs=[0,1,2])
+        
+        mech.export_geometry(f'/dev/shm/womo1998/{jid}/')
+        
+        merged_data = MergePoSER()
+        merged_data.mean_damping = d[:,np.newaxis]
+        merged_data.mean_frequencies = f[:,np.newaxis]
+        merged_data.std_frequencies = np.zeros_like(f[:,np.newaxis])
+        merged_data.std_damping = np.zeros_like(d[:,np.newaxis])
+        merged_data.merged_mode_shapes = phi[:,np.newaxis,:]#np.reshape(phi[:,:,:],(np.product(phi.shape[:2]),phi.shape[2]),'C')[:,np.newaxis,:]# (total_dofs, 1, common_modes)
+        merged_data.merged_num_channels = merged_data.merged_mode_shapes.shape[0]
+        
+        geometry = GeometryProcessor.load_geometry(f'/dev/shm/womo1998/{jid}/grid.txt', f'/dev/shm/womo1998/{jid}/lines.txt')
+        merged_data.merged_chan_dofs = PreProcessSignals.load_chan_dofs(f'/dev/shm/womo1998/{jid}/chan_dofs.txt')
+        
+        mode_shape_plot = ModeShapePlot(geometry, merged_data=merged_data)
+        mode_shape_plot.draw_nodes()
+        mode_shape_plot.draw_lines()
+        mode_shape_plot.draw_master_slaves()
+        mode_shape_plot.draw_chan_dofs()
+        start_msh_gui(mode_shape_plot)
+        
+                
+                
+    plt.show()
+
 def main():
     # default_mapping()
-    test_domain()
+    # test_domain()
+    plots()
 
 
 if __name__ == '__main__':
