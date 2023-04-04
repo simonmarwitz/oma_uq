@@ -318,6 +318,13 @@ class MassFunction(UncertainVariable):
         
         return scipy.stats.uniform.rvs(supp[0], supp[1] - supp[0], size=size, **kwargs)
     
+    def prob_dens(self, values):
+        '''
+        compute the plausibility (?) function and treat it as a custom pdf
+        return densities for each value
+        '''
+        pass
+    
     def mass(self, value=None):
         # only single values may be provided        
         # value may be in more than one focal set, bel and pl are better used instead
@@ -859,6 +866,8 @@ class PolyUQ(object):
             assmble N_mcs_ale x N_mcs_epi grid of weights
         flatten samples and weights and apply stat_fun
         '''
+        
+        
     
     def probabilities_imp(self, i_imp=None):
         

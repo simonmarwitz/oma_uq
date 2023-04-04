@@ -827,6 +827,12 @@ def plots():
         merged_data.merged_num_channels = merged_data.merged_mode_shapes.shape[0]
         
         geometry = GeometryProcessor.load_geometry(f'/dev/shm/womo1998/{jid}/grid.txt', f'/dev/shm/womo1998/{jid}/lines.txt')
+        geometry.add_node('A1', (0,-70,    0))
+        geometry.add_node('A2', (0, 35, 60.6))
+        geometry.add_node('A3', (0, 35,-60.6))
+        geometry.add_line(('A1', '80'))
+        geometry.add_line(('A2', '80'))
+        geometry.add_line(('A3', '80'))
         merged_data.merged_chan_dofs = PreProcessSignals.load_chan_dofs(f'/dev/shm/womo1998/{jid}/chan_dofs.txt')
         
         mode_shape_plot = ModeShapePlot(geometry, merged_data=merged_data)
@@ -834,10 +840,10 @@ def plots():
         mode_shape_plot.draw_lines()
         mode_shape_plot.draw_master_slaves()
         mode_shape_plot.draw_chan_dofs()
+        mode_shape_plot.subplot.view_init(30,60,-106)
         start_msh_gui(mode_shape_plot)
         
-                
-                
+
     plt.show()
 
 def main():
