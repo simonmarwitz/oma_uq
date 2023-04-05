@@ -320,15 +320,22 @@ class MassFunction(UncertainVariable):
     
     def prob_dens(self, values):
         '''
-        compute the plausibility (?) function and treat it as a custom pdf
+        compute the pignistic transformation of the mass function(s)
         return densities for each value
         '''
-        pass
+        numeric_focals = self.numeric_focals # (n_focals, 2))
+        focal_lengths = numeric_focals[:,0] - numeric_focals[:,1]
+        masses = self.masses
+        inds = np.logical_and(numeric_focals[:,0] >=values,
+                              numeric_focals[:,1] <=values)
+        
+        
     
     def mass(self, value=None):
         # only single values may be provided        
         # value may be in more than one focal set, bel and pl are better used instead
         # may return multiple or no mass values
+        logger.warning('This function might be errorneous!')
         numeric_focals = self.numeric_focals
         
         masses = self.masses
@@ -854,12 +861,12 @@ class PolyUQ(object):
     
     def probabilities_stoch(self):
         '''
-        imprecision variables will be treated as distributed according to the aggregated mass e.g. plausibility function
+        imprecision variables will be treated as distributed according to the pignistic pdf
         variablity variables will be treated the usual way
-        incompletenes variables will be treated as distributed according to the aggregated mass e.g. plausbibility function
+        incompletenes variables will be treated as distributed according to the pignistic pdf
         
         algorithm
-        sample N_mcs_ale samples of incompleteness variables according to their distribution in a MCS sense (no probability weighting to be considered later)
+        sample N_mcs_ale samples of incompleteness variables with importance weighting by the pignistic pdf 
         for each N_mcs_ale sample:
             compute variability probability according to sampled incompleteness parameters
             compute imprecision probability according to sampled variability parameters
