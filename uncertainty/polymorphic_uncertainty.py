@@ -326,9 +326,11 @@ class MassFunction(UncertainVariable):
         numeric_focals = self.numeric_focals # (n_focals, 2))
         focal_lengths = numeric_focals[:,0] - numeric_focals[:,1]
         masses = self.masses
-        inds = np.logical_and(numeric_focals[:,0] >=values,
-                              numeric_focals[:,1] <=values)
+        inds = np.logical_and(numeric_focals[:,0] <= values[:,np.newaxis], 
+                              numeric_focals[:,1] >= values[:,np.newaxis])
+        pdf = np.array([np.sum(masses[ind]/focal_lengths[ind]) for ind in inds])
         
+        return pdf
         
     
     def mass(self, value=None):
@@ -566,9 +568,9 @@ class PolyUQ(object):
             samples[var.name] = vars_unif[i].ppf(this_samples)
                 
         
-        inp_samp_prim = samples[[var.name for var in all_vars_prim]]
-        inp_suppl_ale = samples.iloc[:N_mcs_ale][[var.name for var in vars_ale if not var.primary]]
-        inp_suppl_epi = samples.iloc[:N_mcs_epi][[var.name for var in vars_epi if not var.primary]]
+        inp_samp_prim = samples[[var.name for var in all_vars_prim]] # variability and imprecision
+        inp_suppl_ale = samples.iloc[:N_mcs_ale][[var.name for var in vars_ale if not var.primary]] # variability -> imprecision
+        inp_suppl_epi = samples.iloc[:N_mcs_ale][[var.name for var in vars_epi if not var.primary]] # incompleteness -> variability
         
         # check the number of samples per focal set
         if check_sample_sizes:
@@ -602,9 +604,9 @@ class PolyUQ(object):
         initialze rng
         
         for n_ale in range(N_mcs):
-            sample and freeze var_inc (uniform) pass 'random_state'=rng
+            sample and freeze var_inc (pignistic) pass 'random_state'=rng
             sample and freeze var_ale (pass percentiles) pass 'random_state'=rng
-            sample var_imp (uniform) pass 'random_state'=rng
+            sample var_imp (pignistic) pass 'random_state'=rng
         
         split prim, suppl_ale, suppl_epi
         
@@ -859,7 +861,7 @@ class PolyUQ(object):
         
         return out_samp#, p_weights
     
-    def probabilities_stoch(self):
+    def stat_full_stoch(self, stat_fun, n_stat, stat_fun_kwargs={}):
         '''
         imprecision variables will be treated as distributed according to the pignistic pdf
         variablity variables will be treated the usual way
