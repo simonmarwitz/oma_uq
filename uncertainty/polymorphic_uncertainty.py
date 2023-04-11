@@ -322,6 +322,7 @@ class MassFunction(UncertainVariable):
         '''
         compute the pignistic transformation of the mass function(s)
         return densities for each value
+        (properly returns 0 for values out of the support)
         '''
         numeric_focals = self.numeric_focals # (n_focals, 2))
         focal_lengths = numeric_focals[:,0] - numeric_focals[:,1]
@@ -861,7 +862,7 @@ class PolyUQ(object):
         
         return out_samp#, p_weights
     
-    def stat_full_stoch(self, stat_fun, n_stat, stat_fun_kwargs={}):
+    def stat_full_stoch(self, stat_fun, n_stat, stat_fun_kwargs={}, N_mcs_ale = None):
         '''
         imprecision variables will be treated as distributed according to the pignistic pdf
         variablity variables will be treated the usual way
@@ -875,8 +876,59 @@ class PolyUQ(object):
             assmble N_mcs_ale x N_mcs_epi grid of weights
         flatten samples and weights and apply stat_fun
         '''
+        if N_mcs_ale is None:
+            N_mcs_ale = self.N_mcs_ale
+        N_mcs_epi = self.N_mcs_epi
         
+        vars_ale = self.vars_ale
+        vars_var = tuple([var for var in vars_ale if var.primary])
+        vars_imp = self.vars_imp
+        vars_inc = self.vars_inc
         
+        inp_samp_prim = self.inp_samp_prim
+        inp_suppl_ale = self.inp_suppl_ale
+        inp_suppl_epi = self.inp_suppl_epi
+        
+        out_samp = self.out_samp[:N_mcs_ale,:]
+        p_weights = np.empty((N_mcs_ale, N_mcs_epi,))
+        
+        for n_ale in range(N_mcs_ale):
+            print('.',end='')
+        
+            
+            p_weight = 1
+            for var in vars_inc:
+                val = inp_suppl_epi[var.name].iloc[n_ale]
+                var.freeze(val)
+                p_weight *= var.prob_dens(np.array([val]))
+                
+            for var in vars_ale:
+                if var.primary:
+                    val = inp_samp_prim[var.name].iloc[n_ale]
+                else:
+                    val = inp_suppl_ale[var.name].iloc[n_ale]
+                var.freeze(val)
+                p_weight *= var.prob_dens(np.array([val]))
+                
+            p_weights[n_ale, :] = p_weight
+            
+            for var in vars_imp:
+                p_weights[n_ale, :] *= var.prob_dens(inp_samp_prim[var.name].iloc[:N_mcs_epi])
+        
+        # dividing by sum allows to skip proper integration due to nearly constant spacing of the Halton sequence
+        p_weights /= np.sum(p_weights)
+        out_samp = out_samp.flatten()
+        p_weights = p_weights.flatten()
+        
+        focals_stats = np.full((n_stat, 1, 1), np.nan)
+        for i_stat in range(n_stat):
+            stat_vals = stat_fun(out_samp, p_weights, i_stat, **stat_fun_kwargs)
+            focals_stats[i_stat,0,0] = stat_vals
+            
+        self.focals_stats = focals_stats
+        self.focals_mass = np.array([1,])
+        
+        return focals_stats, self.focals_mass
     
     def probabilities_imp(self, i_imp=None):
         
@@ -947,7 +999,8 @@ class PolyUQ(object):
                         hyp_dens[hyp_var.name] = hyp_var.prob_dens(inp_suppl_ale[hyp_var.name])
                 p_weights[:, i_weight] *= hyp_dens[hyp_var.name]
             # normalize
-            p_weights[:, i_weight] /= np.sum(p_weights[:, i_weight])
+            # dividing by sum allows to skip proper integration due to nearly constant spacing of the Halton sequence
+            p_weights[:, i_weight] /= np.sum(p_weights[:, i_weight]) 
         
         if i_imp is None:
             return p_weights
