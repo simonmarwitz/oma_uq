@@ -325,11 +325,15 @@ class MassFunction(UncertainVariable):
         (properly returns 0 for values out of the support)
         '''
         numeric_focals = self.numeric_focals # (n_focals, 2))
-        focal_lengths = numeric_focals[:,0] - numeric_focals[:,1]
+        focal_lengths = numeric_focals[:,1] - numeric_focals[:,0]
         masses = self.masses
         inds = np.logical_and(numeric_focals[:,0] <= values[:,np.newaxis], 
                               numeric_focals[:,1] >= values[:,np.newaxis])
-        pdf = np.array([np.sum(masses[ind]/focal_lengths[ind]) for ind in inds])
+        # print(inds)
+        pdf = np.array([np.sum(np.divide(masses[ind],
+                                         focal_lengths[ind],
+                                         out=np.full(np.sum(ind),np.infty), # account for empty intervals (singletons) -> probability density becomes infinite
+                                         where=focal_lengths[ind]>0)) for ind in inds])
         
         return pdf
         
@@ -862,7 +866,7 @@ class PolyUQ(object):
         
         return out_samp#, p_weights
     
-    def stat_full_stoch(self, stat_fun, n_stat, stat_fun_kwargs={}, N_mcs_ale = None):
+    def weights_full_stoch(self, N_mcs_ale=None):
         '''
         imprecision variables will be treated as distributed according to the pignistic pdf
         variablity variables will be treated the usual way
@@ -881,7 +885,6 @@ class PolyUQ(object):
         N_mcs_epi = self.N_mcs_epi
         
         vars_ale = self.vars_ale
-        vars_var = tuple([var for var in vars_ale if var.primary])
         vars_imp = self.vars_imp
         vars_inc = self.vars_inc
         
@@ -889,18 +892,18 @@ class PolyUQ(object):
         inp_suppl_ale = self.inp_suppl_ale
         inp_suppl_epi = self.inp_suppl_epi
         
-        out_samp = self.out_samp[:N_mcs_ale,:]
         p_weights = np.empty((N_mcs_ale, N_mcs_epi,))
         
+        pbar = simplePbar(N_mcs_ale)
         for n_ale in range(N_mcs_ale):
-            print('.',end='')
         
             
             p_weight = 1
             for var in vars_inc:
                 val = inp_suppl_epi[var.name].iloc[n_ale]
                 var.freeze(val)
-                p_weight *= var.prob_dens(np.array([val]))
+                # also divide pdf by sampling pdf
+                p_weight *= var.prob_dens(np.array([val]))*np.diff(var.support())
                 
             for var in vars_ale:
                 if var.primary:
@@ -908,16 +911,33 @@ class PolyUQ(object):
                 else:
                     val = inp_suppl_ale[var.name].iloc[n_ale]
                 var.freeze(val)
-                p_weight *= var.prob_dens(np.array([val]))
+                # also divide pdf by sampling pdf
+                p_weight *= var.prob_dens(np.array([val]))*np.diff(var.support())
                 
             p_weights[n_ale, :] = p_weight
             
             for var in vars_imp:
-                p_weights[n_ale, :] *= var.prob_dens(inp_samp_prim[var.name].iloc[:N_mcs_epi])
+                # print(var)
+                # also divide pdf by sampling pdf
+                p_weights[n_ale, :] *= var.prob_dens(inp_samp_prim[var.name].iloc[:N_mcs_epi])*np.diff(var.support())
+            
+            next(pbar)
+            
+        # dividing by sum allows to skip proper integration (?) due to nearly constant spacing of the Halton sequence
+        # p_weights /= np.sum(p_weights)
+        self.stoch_weights = p_weights
         
-        # dividing by sum allows to skip proper integration due to nearly constant spacing of the Halton sequence
-        p_weights /= np.sum(p_weights)
+        return p_weights
+        
+    def stat_full_stoch(self, stat_fun, n_stat, stat_fun_kwargs={},):
+        
+        p_weights = self.stoch_weights
+        N_mcs_ale = p_weights.shape[0]
+        
+        out_samp = self.out_samp[:N_mcs_ale,:]
+        
         out_samp = out_samp.flatten()
+        # p_weights /= np.sum(p_weights)
         p_weights = p_weights.flatten()
         
         focals_stats = np.full((n_stat, 1, 1), np.nan)
@@ -925,10 +945,10 @@ class PolyUQ(object):
             stat_vals = stat_fun(out_samp, p_weights, i_stat, **stat_fun_kwargs)
             focals_stats[i_stat,0,0] = stat_vals
             
-        self.focals_stats = focals_stats
-        self.focals_mass = np.array([1,])
+        self.stoch_stats = focals_stats
+        self.stoch_mass = np.array([1,])
         
-        return focals_stats, self.focals_mass
+        return focals_stats, self.stoch_mass
     
     def probabilities_imp(self, i_imp=None):
         
@@ -944,7 +964,7 @@ class PolyUQ(object):
         # -> p_weights are independent, not changing within epistemic loop
         
         # pass i_imp to compute weights only for imprecise hypercube number i_imp
-        
+        logger.warning("NotImplementedWarning: weights must be divided by sampling pdf (multiplied by support interval if sampling dist is uniform)")
         logger.info("Computing aleatory probability weights...")
         # compute probabilities for approximately equally spaced (due to low-discrepancy sampling) bins
         # TODO: theoretically integration has to be performed
@@ -2200,6 +2220,11 @@ class PolyUQ(object):
             out_dict['self.intp_errors'] = self.intp_errors
             out_dict['self.intp_exceed'] = self.intp_exceed
             out_dict['self.intp_undershot'] = self.intp_undershot
+            
+        if differential is None or differential=='stoch':
+            out_dict['self.stoch_stats'] = self.stoch_stats
+            out_dict['self.stoch_mass'] = self.stoch_mass
+            out_dict['self.stoch_weights'] = self.stoch_weights
         
         if differential is None or differential=='inc':
             out_dict['self.focals_stats'] = self.focals_stats
@@ -2277,6 +2302,13 @@ class PolyUQ(object):
             self.val_samp_prim = validate_array(in_dict.get('self.val_samp_prim'))
             self.intp_errors = validate_array(in_dict.get('self.intp_errors'))
             self.intp_exceed = validate_array(in_dict.get('self.intp_exceed'))
+            
+        if differential is None or differential=='stoch':
+            self.stoch_stats = validate_array(in_dict['self.imp_foc'])
+            self.stoch_mass = validate_array(in_dict.get('self.val_samp_prim'))
+            self.stoch_weights = validate_array(in_dict.get('self.intp_errors'))
+            self.intp_exceed = validate_array(in_dict.get('self.intp_exceed'))
+            self.intp_undershot = validate_array(in_dict.get('self.intp_undershot'))
             self.intp_undershot = validate_array(in_dict.get('self.intp_undershot'))
         
         if differential is None or differential=='inc':
@@ -2590,7 +2622,14 @@ def stat_fun_lci(a, weight, *args, **kwargs):
 stat_fun_lci.n_stat = 1
 
 def stat_fun_hist(a, weight, i_stat, *args, bins_densities, cum_dens):
-    '2. Quantify Variability for each incomplete sample and imprecise hypercube'
+    '''
+    It is not possible to estimate densities with this: after interval 
+    optimization for each bin individually, the weighted counts are not related to
+    each other anymore. density normalization can only be applied by dividing by the 
+    sum of counts over all bins, but they should be derived from the same data (and weights)
+    
+    Output is "weighted counts per bin"
+    '''
     if i_stat is None: # i_stat is never None in optimization loop
         hist,_ = np.histogram(a, bins_densities, weights=weight, density=True)
 
