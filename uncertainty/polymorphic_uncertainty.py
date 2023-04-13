@@ -382,6 +382,10 @@ class PolyUQ(object):
         self.vars_epi = tuple(vars_epi)
         self.vars_imp = tuple([var for var in vars_epi if var.primary])
         self.vars_inc = tuple([var for var in vars_epi if not var.primary])
+        
+        # check for variables that are primary- and hyper-variables concurrently
+        self.all_vars
+        
         self._hyc_hyp_vars = None
         
         self.dim_ex = dim_ex
@@ -411,6 +415,29 @@ class PolyUQ(object):
         self.focals_stats = None
         self.focals_mass = None
         
+    @property
+    def all_vars(self):
+               
+        def traverse_children(var):
+            # recursively add all child variables to the all_vars dictionary
+            for child_var  in var._children:
+                if not isinstance(child_var, UncertainVariable): continue
+                if child_var.primary:
+                    logger.warning(f"The variable {var.name} is a primary- and a hyper-variable concurrently. Unexpected behavior might occur!")
+                if not child_var.name in all_vars:
+                    all_vars[child_var.name] = child_var
+                traverse_children(child_var)
+            return
+        
+        all_vars = {}
+        # taking into account variables that share samples / are named equally
+        for var in self.vars_ale + self.vars_imp:
+            if not var.primary: continue
+            all_vars[var.name] = var
+            traverse_children(var)
+        
+        return all_vars
+            
     def sample_qmc(self, N_mcs_ale=1000000, N_mcs_epi=100, percentiles=(0.0001, 0.9999), 
                    sample_hypercubes=False, seed=None, check_sample_sizes=True, **kwargs):
         '''
@@ -477,22 +504,7 @@ class PolyUQ(object):
         loop_ale = np.any([var.primary for var in vars_ale])
         loop_epi = np.any([var.primary for var in vars_epi])
         
-        def traverse_children(var):
-            # recursively add all child variables to the all_vars dictionary
-            for child_var  in var._children:
-                if not isinstance(child_var, UncertainVariable): continue
-                if not child_var.name in all_vars:
-                    all_vars[child_var.name] = child_var
-                traverse_children(child_var)
-            return
-        
-        all_vars = {}
-        # taking into account variables that share samples / are named equally
-        for var in all_vars_prim:
-            all_vars[var.name] = var
-            traverse_children(var)
-        
-        all_vars = list(all_vars.values()) 
+        all_vars = list(self.all_vars.values()) 
         n_vars = len(all_vars)
         logger.info(f'Establishing support domain for all variables" {[var.name for var in all_vars]}')
         # get (truncated) support (define upper and lower bounds, e.g. 99.99 % quantiles, 0.01% quantiles)     
@@ -878,7 +890,51 @@ class PolyUQ(object):
             compute variability probability according to sampled incompleteness parameters
             compute imprecision probability according to sampled variability parameters
             assmble N_mcs_ale x N_mcs_epi grid of weights
-        flatten samples and weights and apply stat_fun
+        
+        
+        we have a problem here:
+        currently in evidential_stochastic_beams 88 % of samples get their p_weight=0
+        
+        1)
+        sampling incompleteness variables with wide intervals on the mean parameter
+        invalidates many aleatory samples due to them being "outside the stochastic pdf"
+        how to solve:
+            - sample incompleteness variables in a third dimension resulting in a
+                (N_mcs_epi x N_mcs_ale x N_mcs_epi) grid for p_weights
+                (that is 60 GB memory in evidential_stochastic_beams, double that for out_samp)
+                by that, each aleatory sample would be used multiple times and guaranteed to be used
+            -> implement it!
+        
+        this does not happen in incompleteness optimization, because we optimize
+        over the whole interval of the parameter.
+        Nevertheless with sharp pdfs and large uncertainty on the location parameter
+        only a small fraction of the computed samples is used in the statistic estimator
+        regardless of the location parameter (sliding the sharp pdf over the sample space)
+        which results in high standard error
+        
+        2)
+        similarly with imprecision variables with sole empty variability intervals
+        their pignistic pdf becomes zero for almost all epistemic samples, e.g. 
+        this is the case for ice_mass in evidential_stochastic_beams, where ice_occ==0
+        its pignistic pdf becomes zero for all epistemic samples. that in turn means,
+        that only those samples with ice_occ=1 are taken into account (see 3 as a related issue)
+        how to solve:
+            - we build the pignistic pdf with expected values from variability interval bounds
+            - we "normalize" the pignistic pdf
+            - we hack around it by redefining ice_mass as a non-polymorphic variable (pure imprecision)
+            also disengage similar uncertainty modeling (this had already required more hacks, i.e. 
+            variables can either be primary variables or hypervariables, but not both)
+            -> do this!
+        
+        this does not happen in imprecision optimization due to surrogate modeling 
+        and exclusion of empty intervals from the set of optimization variables
+        but still, the interpolator uses the input samples from the full interval
+        even though they might not be sensitive (ignored in the model function)
+        
+        3)
+        empty intervals (singletons) transform to infinity in the pignistic pdf
+        -> not quite suitable as weights 
+        
         '''
         if N_mcs_ale is None:
             N_mcs_ale = self.N_mcs_ale
@@ -891,6 +947,7 @@ class PolyUQ(object):
         inp_samp_prim = self.inp_samp_prim
         inp_suppl_ale = self.inp_suppl_ale
         inp_suppl_epi = self.inp_suppl_epi
+        var_supp = self.var_supp
         
         p_weights = np.empty((N_mcs_ale, N_mcs_epi,))
         
@@ -903,7 +960,10 @@ class PolyUQ(object):
                 val = inp_suppl_epi[var.name].iloc[n_ale]
                 var.freeze(val)
                 # also divide pdf by sampling pdf
-                p_weight *= var.prob_dens(np.array([val]))*np.diff(var.support())
+                p_weight *= var.prob_dens(np.array([val]))*np.diff(var_supp[var.name])
+                # if p_weight==0:
+                #     print(var, val, var_supp[var.name],var.params, var.prob_dens(np.array([val])))
+                #     return
                 
             for var in vars_ale:
                 if var.primary:
@@ -912,15 +972,18 @@ class PolyUQ(object):
                     val = inp_suppl_ale[var.name].iloc[n_ale]
                 var.freeze(val)
                 # also divide pdf by sampling pdf
-                p_weight *= var.prob_dens(np.array([val]))*np.diff(var.support())
+                p_weight *= var.prob_dens(np.array([val]))*np.diff(var_supp[var.name])
                 
+                # if p_weight==0:
+                    # print(var, val, var_supp[var.name],var.params, var.prob_dens(np.array([val])))
+                    # return
             p_weights[n_ale, :] = p_weight
             
             for var in vars_imp:
                 # print(var)
                 # also divide pdf by sampling pdf
-                p_weights[n_ale, :] *= var.prob_dens(inp_samp_prim[var.name].iloc[:N_mcs_epi])*np.diff(var.support())
-            
+                p_weights[n_ale, :] *= var.prob_dens(inp_samp_prim[var.name].iloc[:N_mcs_epi])*np.diff(var_supp[var.name])
+                
             next(pbar)
             
         # dividing by sum allows to skip proper integration (?) due to nearly constant spacing of the Halton sequence
@@ -964,7 +1027,7 @@ class PolyUQ(object):
         # -> p_weights are independent, not changing within epistemic loop
         
         # pass i_imp to compute weights only for imprecise hypercube number i_imp
-        logger.warning("NotImplementedWarning: weights must be divided by sampling pdf (multiplied by support interval if sampling dist is uniform)")
+        logger.warning("NotTestedWarning: weights must be divided by sampling pdf (multiplied by support interval if sampling dist is uniform)")
         logger.info("Computing aleatory probability weights...")
         # compute probabilities for approximately equally spaced (due to low-discrepancy sampling) bins
         # TODO: theoretically integration has to be performed
@@ -988,6 +1051,7 @@ class PolyUQ(object):
         
         inp_samp_prim = self.inp_samp_prim.iloc[:N_mcs_ale]
         inp_suppl_ale = self.inp_suppl_ale.iloc[:N_mcs_ale]
+        var_supp = self.var_supp
         
         # compute probabilities for imprecise samples
         p_weights = np.ones((N_mcs_ale, n_imp_hyc))
@@ -999,7 +1063,7 @@ class PolyUQ(object):
                 continue
             if var.primary:
                 # assign weight to to all hypercubes
-                p_weights *= np.repeat(var.prob_dens(inp_samp_prim[var.name])[:,np.newaxis], n_imp_hyc, axis=1)
+                p_weights *= np.repeat(var.prob_dens(inp_samp_prim[var.name])[:,np.newaxis]*np.diff(var_supp[var.name]), n_imp_hyc, axis=1)
             
         # probabilities are computed for pre-computed stochastic samples as the product of PDFs of the underlying RVs
         # each hypercube may be constructed from different hypervariables (RVs) -> has a different product probability
@@ -1014,9 +1078,9 @@ class PolyUQ(object):
                 if not hyp_var.name in hyp_dens: 
                     # caching probability densities if a variable is hypervariable of multiple variables
                     if hyp_var.primary:
-                        hyp_dens[hyp_var.name] = hyp_var.prob_dens(inp_samp_prim[hyp_var.name])
+                        hyp_dens[hyp_var.name] = hyp_var.prob_dens(inp_samp_prim[hyp_var.name])*np.diff(var_supp[hyp_var.name])
                     else:
-                        hyp_dens[hyp_var.name] = hyp_var.prob_dens(inp_suppl_ale[hyp_var.name])
+                        hyp_dens[hyp_var.name] = hyp_var.prob_dens(inp_suppl_ale[hyp_var.name])*np.diff(var_supp[hyp_var.name])
                 p_weights[:, i_weight] *= hyp_dens[hyp_var.name]
             # normalize
             # dividing by sum allows to skip proper integration due to nearly constant spacing of the Halton sequence
@@ -1466,8 +1530,6 @@ class PolyUQ(object):
                                   )
                 
                 # transform boundaries to unit cube for penalization
-                # will slightly exceed the unit cube due to samples being strictly inside the hypercube which was derived from all boundaries
-                # but the transformation is done to the minimum and maximum sample
                 unit_bounds = np.empty_like(focals)
                 for lu in range(2):
                     unit_bounds[:,lu] = scale(focals[:,lu])
@@ -2207,6 +2269,7 @@ class PolyUQ(object):
                 out_dict['self.inp_suppl_epi.columns'] = self.inp_suppl_epi.columns
             else:
                 out_dict['self.inp_suppl_epi.columns'] = None
+            out_dict['self.stoch_weights'] = self.stoch_weights
         
         if differential is None or differential=='prop':
             out_dict['self.fcount'] = self.fcount
@@ -2222,9 +2285,8 @@ class PolyUQ(object):
             out_dict['self.intp_undershot'] = self.intp_undershot
             
         if differential is None or differential=='stoch':
-            out_dict['self.stoch_stats'] = self.stoch_stats
             out_dict['self.stoch_mass'] = self.stoch_mass
-            out_dict['self.stoch_weights'] = self.stoch_weights
+            out_dict['self.stoch_stats'] = self.stoch_stats
         
         if differential is None or differential=='inc':
             out_dict['self.focals_stats'] = self.focals_stats
@@ -2291,6 +2353,8 @@ class PolyUQ(object):
             self.inp_suppl_epi = to_dataframe(validate_array(in_dict['self.inp_suppl_epi']),
                                               validate_array(in_dict['self.inp_suppl_epi.columns']))
         
+            self.stoch_weights = validate_array(in_dict.get('self.stoch_weights'))
+            
         if differential is None or differential=='prop':
             self.fcount = validate_array(in_dict['self.fcount'])
             self.out_name = validate_array(in_dict.get('self.out_name'))
@@ -2304,12 +2368,8 @@ class PolyUQ(object):
             self.intp_exceed = validate_array(in_dict.get('self.intp_exceed'))
             
         if differential is None or differential=='stoch':
-            self.stoch_stats = validate_array(in_dict['self.imp_foc'])
-            self.stoch_mass = validate_array(in_dict.get('self.val_samp_prim'))
-            self.stoch_weights = validate_array(in_dict.get('self.intp_errors'))
-            self.intp_exceed = validate_array(in_dict.get('self.intp_exceed'))
-            self.intp_undershot = validate_array(in_dict.get('self.intp_undershot'))
-            self.intp_undershot = validate_array(in_dict.get('self.intp_undershot'))
+            self.stoch_mass = validate_array(in_dict.get('self.stoch_mass'))
+            self.stoch_stats = validate_array(in_dict.get('self.stoch_stats'))
         
         if differential is None or differential=='inc':
             self.focals_stats = validate_array(in_dict['self.focals_stats'])
