@@ -949,7 +949,31 @@ class PolyUQ(object):
         inp_suppl_epi = self.inp_suppl_epi
         var_supp = self.var_supp
         
-        p_weights = np.empty((N_mcs_ale, N_mcs_epi,))
+        p_weights = np.full((N_mcs_epi, N_mcs_ale, N_mcs_epi,),1.0, dtype=np.float32)
+        
+        '''
+        for n_ale in range(N_mcs_ale):
+            freeze vars_ale (secondary) to inp_supp_ale.iloc[n_ale]
+            compute p_weights for vars_imp and inp_samp_prim.iloc[:N_mcs_epi]
+        
+        -> p_weights matrix (N_mcs_ale x N_mcs_epi)
+            
+        for n_epi in range(N_mcs_epi):
+            freeze vars_inc to inp_suppl_epi.iloc[n_epi]
+            compute p_weights for vars_ale (primary) and inp_samp_prim.iloc[:N_mcs_ale]
+            compute p_weights for vars_ale (secondary) and inp_supp_ale.iloc[:N_mcs_ale]
+        -> p_weights matrix (N_mcs_epi x N_mcs_ale)
+        
+        compute p_weights for vars_inc and inp_supp_epi.iloc[:N_mcs_epi] 
+        -> p_weights vector (N_mcs_epi,)
+        this would be (N_mcs_epi x N_mcs_epi) if any imprecision variable would 
+        be dependent on an incompletness variable, which does not make sense in 
+        terms of uncertainty modeling
+        
+        multiply full_p_weights matrix with all three p_weights vectors/matrices
+        '''
+        
+        
         
         pbar = simplePbar(N_mcs_ale)
         for n_ale in range(N_mcs_ale):
