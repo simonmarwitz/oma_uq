@@ -878,7 +878,7 @@ class PolyUQ(object):
         
         return out_samp#, p_weights
     
-    def weights_full_stoch(self, N_mcs_ale=None):
+    def weights_full_stoch(self, N_mcs_ale=None, N_mcs_epi=None):
         '''
         imprecision variables will be treated as distributed according to the pignistic pdf
         variablity variables will be treated the usual way
@@ -936,9 +936,13 @@ class PolyUQ(object):
         -> not quite suitable as weights 
         
         '''
+        
+        
+        logger.info('Computing full stochastic weights...')
         if N_mcs_ale is None:
             N_mcs_ale = self.N_mcs_ale
-        N_mcs_epi = self.N_mcs_epi
+        if N_mcs_epi is None:
+            N_mcs_epi = self.N_mcs_epi
         
         vars_ale = self.vars_ale
         vars_imp = self.vars_imp
@@ -972,43 +976,100 @@ class PolyUQ(object):
         
         multiply full_p_weights matrix with all three p_weights vectors/matrices
         '''
+
+        pbar = simplePbar(N_mcs_ale + N_mcs_epi + 3)
+        '''
+        1. Compute weights for imprecision variables
+        '''
+        # non-polymorphic weights
+        imp_weights =  np.full((N_mcs_epi,),1.0, dtype=np.float32)
+        for var in vars_imp:
+            if var.is_poly: continue
+            samp = inp_samp_prim[var.name].iloc[:N_mcs_epi].to_numpy()
+            # also divide pdf by sampling pdf
+            imp_weights = var.prob_dens(samp) * np.diff(var_supp[var.name])
+            if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{var.name}:{imp_weights}')
+        next(pbar)
         
-        
-        
-        pbar = simplePbar(N_mcs_ale)
+        #polymorphic weights
         for n_ale in range(N_mcs_ale):
-        
-            
-            p_weight = 1
-            for var in vars_inc:
-                val = inp_suppl_epi[var.name].iloc[n_ale]
-                var.freeze(val)
-                # also divide pdf by sampling pdf
-                p_weight *= var.prob_dens(np.array([val]))*np.diff(var_supp[var.name])
-                # if p_weight==0:
-                #     print(var, val, var_supp[var.name],var.params, var.prob_dens(np.array([val])))
-                #     return
-                
+            # freeze aleatory hypervariables (variability + imprecision)
             for var in vars_ale:
                 if var.primary:
-                    val = inp_samp_prim[var.name].iloc[n_ale]
+                    continue
+                    # val = inp_samp_prim[var.name].iloc[n_ale]
                 else:
                     val = inp_suppl_ale[var.name].iloc[n_ale]
                 var.freeze(val)
                 # also divide pdf by sampling pdf
-                p_weight *= var.prob_dens(np.array([val]))*np.diff(var_supp[var.name])
-                
-                # if p_weight==0:
-                    # print(var, val, var_supp[var.name],var.params, var.prob_dens(np.array([val])))
-                    # return
-            p_weights[n_ale, :] = p_weight
             
+            # compute weights for imprecision variables and epistemic primary samples 
+            this_weights =  np.copy(imp_weights)
             for var in vars_imp:
-                # print(var)
+                if not var.is_poly: continue
                 # also divide pdf by sampling pdf
-                p_weights[n_ale, :] *= var.prob_dens(inp_samp_prim[var.name].iloc[:N_mcs_epi])*np.diff(var_supp[var.name])
-                
+                samp = inp_samp_prim[var.name].iloc[:N_mcs_epi].to_numpy()
+                this_weights *= var.prob_dens(samp) * np.diff(var_supp[var.name])
+            
+                if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{var.name}:{this_weights}')
+            # repeat weights for all incompleteness variables along first axis (epistemic)
+            p_weights[:, n_ale, :] *= np.repeat(this_weights[np.newaxis,:], N_mcs_epi, 0)
             next(pbar)
+        
+        '''
+        1. Compute weights for variability variables
+        '''
+        # non-polymorphic weights
+        var_weights = np.full((N_mcs_ale,),1.0, dtype=np.float32)
+        for var in vars_ale:
+            if var.is_poly: continue
+            if var.primary:
+                samp = inp_samp_prim[var.name].iloc[:N_mcs_ale].to_numpy()
+            else:
+                samp = inp_suppl_ale[var.name].iloc[:N_mcs_ale].to_numpy()
+            # also divide pdf by sampling pdf
+            var_weights *= var.prob_dens(samp) * np.diff(var_supp[var.name])
+            
+            if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{var.name}:{var_weights}')
+        next(pbar)
+        
+        #polymorphic weights
+        for n_epi in range(N_mcs_epi):
+            # freeze epistemic hypervariables (incompleteness + variability)
+            for var in vars_inc:
+                val = inp_suppl_epi[var.name].iloc[n_epi]
+                var.freeze(val)
+            
+            # compute weights for variability variables and aleatory samples (primary and supplemental) 
+            this_weights =np.copy(var_weights)
+            for var in vars_ale:
+                if not var.is_poly: continue
+                if var.primary:
+                    samp = inp_samp_prim[var.name].iloc[:N_mcs_ale].to_numpy()
+                else:
+                    samp = inp_suppl_ale[var.name].iloc[:N_mcs_ale].to_numpy()
+                # also divide pdf by sampling pdf
+                this_weights *= var.prob_dens(samp) * np.diff(var_supp[var.name])
+                if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{var.name}:{this_weights}')
+            
+            # repeat weights for all imprecision variables along last axis (epistemic)
+            p_weights[n_epi, :, :] *= np.repeat(this_weights[:, np.newaxis], N_mcs_epi, 1)
+            next(pbar)
+            
+        '''
+        1. Compute weights for incompleteness variables
+        '''
+        # non-polymorphic weights
+        inc_weights = np.full((N_mcs_epi,),1.0, dtype=np.float32)
+        for var in vars_inc:
+            samp = inp_suppl_epi[var.name].iloc[:N_mcs_epi].to_numpy()
+            inc_weights *= var.prob_dens(samp) * np.diff(var_supp[var.name])
+        
+            if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{var.name}:{inc_weights}')
+        # repeat weights for all imprecision variables along last axis (epistemic)
+        rep_inc_weights = np.repeat(inc_weights[:, np.newaxis], N_mcs_ale, -1)
+        p_weights[:, :, :] *=  np.repeat(rep_inc_weights[:, :, np.newaxis], N_mcs_epi, -1)
+        next(pbar)
             
         # dividing by sum allows to skip proper integration (?) due to nearly constant spacing of the Halton sequence
         # p_weights /= np.sum(p_weights)
@@ -2955,6 +3016,7 @@ def example_e():
     vars_ale = [q1, *inc_q2a0]
     
     return example_num, dim_ex, vars_ale, vars_epi,
+
 
 def test_to_dm():
 
