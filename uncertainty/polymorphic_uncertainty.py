@@ -166,7 +166,7 @@ class RandomVariable(UncertainVariable):
 class MassFunction(UncertainVariable):
     # currently only continuous-valued belief functions are supported
     # may be extended to set-valued belief functions 
-    # Another Class fur fuzzy sets may be created, exposing the same set of methods
+    # Another Class for fuzzy sets may be created, exposing the same set of methods
     '''
        - properties such as frame, core, bel, pl, q, focal, singletons, 
    - transformations: pignistic, normalize, inverse pignistic (defining a mass function from samples)
@@ -191,6 +191,9 @@ class MassFunction(UncertainVariable):
                 if len(focal) == 1:
                     focal_arr[:] = np.nan
                     focal_arr[1] = focal[0]
+                    if isinstance(focal[0], UncertainVariable) and focal[0].name != self.name:
+                        logger.warning(f'A singleton focal interval consisting of variable {focal[0].name}.'
+                                       'Consider sharing samples with {self.name} by setting names equal.')
                 elif len(focal) == 2:
                     focal_arr[1:] = focal
                     focal_arr[0] = np.nan
@@ -318,18 +321,48 @@ class MassFunction(UncertainVariable):
         
         return scipy.stats.uniform.rvs(supp[0], supp[1] - supp[0], size=size, **kwargs)
     
-    def prob_dens(self, values):
+    def prob_dens(self, values, singleton_width=None):
         '''
         compute the pignistic transformation of the mass function(s)
         return densities for each value
         (properly returns 0 for values out of the support)
+        
+        if a imprecision variable contains a polymorphic singleton
+        the pignistic pdf will (probably) not match any sample, so this information is effectively discarded
+        
+        that means, if the support is governed by the support of the child variable and only part of 
+        it is governed by remaining intervals, any samples outside of it are useless
+        
+        also, in this case the child variability variable is meant to be the primary variable and the 
+        sample should be weighted according to its probabilistic pdf
+        
+        we move from the imprecision axis to the variability axis
+        but the respective sample does not exist
+        
+        to cirumvent singletons should be expanded to short intervals
+        by a given percentage of the support !!!
+        by a minimum number of samples
+        by closest two samples
+        ensure that the hypercube at this stripe is sufficiently sampled (difficult, as this must be implemented in MassFunction and that does not know about other variables)
         '''
         numeric_focals = self.numeric_focals # (n_focals, 2))
         focal_lengths = numeric_focals[:,1] - numeric_focals[:,0]
+        
+        if singleton_width is not None:
+            assert singleton_width < 1
+            assert singleton_width > 0
+            supp_len = np.diff(self.support())
+            for ind in np.where(focal_lengths==0)[0]:
+                numeric_focals[ind,0] = numeric_focals[ind,0] - supp_len * singleton_width / 2 
+                numeric_focals[ind,1] = numeric_focals[ind,0] + supp_len * singleton_width / 2 
+            
+            focal_lengths = numeric_focals[:,1] - numeric_focals[:,0]
+            assert np.all(focal_lengths > 0)
         masses = self.masses
         inds = np.logical_and(numeric_focals[:,0] <= values[:,np.newaxis], 
                               numeric_focals[:,1] >= values[:,np.newaxis])
-        # print(inds)
+        
+        # print(self.name, numeric_focals, inds)
         pdf = np.array([np.sum(np.divide(masses[ind],
                                          focal_lengths[ind],
                                          out=np.full(np.sum(ind),np.infty), # account for empty intervals (singletons) -> probability density becomes infinite
@@ -878,7 +911,7 @@ class PolyUQ(object):
         
         return out_samp#, p_weights
     
-    def weights_full_stoch(self, N_mcs_ale=None, N_mcs_epi=None):
+    def weights_full_stoch(self, N_mcs_ale=None, N_mcs_epi=None, singleton_enlargement=0.01):
         '''
         imprecision variables will be treated as distributed according to the pignistic pdf
         variablity variables will be treated the usual way
@@ -935,6 +968,14 @@ class PolyUQ(object):
         empty intervals (singletons) transform to infinity in the pignistic pdf
         -> not quite suitable as weights 
         
+        
+        Parameters:
+        -----------
+        
+            singleton_enlargement: float (0...1)
+                Empty intervals are characterized by singletons. In order to match
+                a sufficient number of samples, they are converted to intervals with
+                the width set to a percentage of the support given by this parameter.
         '''
         
         
@@ -981,13 +1022,16 @@ class PolyUQ(object):
         '''
         1. Compute weights for imprecision variables
         '''
+        # plt.figure()
         # non-polymorphic weights
         imp_weights =  np.full((N_mcs_epi,),1.0, dtype=np.float32)
         for var in vars_imp:
             if var.is_poly: continue
             samp = inp_samp_prim[var.name].iloc[:N_mcs_epi].to_numpy()
             # also divide pdf by sampling pdf
-            imp_weights = var.prob_dens(samp) * np.diff(var_supp[var.name])
+            pdf = var.prob_dens(samp, singleton_enlargement) * np.diff(var_supp[var.name])
+            imp_weights = pdf
+            # plt.plot((samp-var_supp[var.name][0])/np.diff(var_supp[var.name]), pdf, label=var.name, ls='none', marker='.')
             if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{var.name}:{imp_weights}')
         next(pbar)
         
@@ -1002,17 +1046,20 @@ class PolyUQ(object):
                     val = inp_suppl_ale[var.name].iloc[n_ale]
                 var.freeze(val)
                 # also divide pdf by sampling pdf
-            
             # compute weights for imprecision variables and epistemic primary samples 
             this_weights =  np.copy(imp_weights)
             for var in vars_imp:
                 if not var.is_poly: continue
                 # also divide pdf by sampling pdf
                 samp = inp_samp_prim[var.name].iloc[:N_mcs_epi].to_numpy()
-                this_weights *= var.prob_dens(samp) * np.diff(var_supp[var.name])
-            
+                pdf = var.prob_dens(samp, singleton_enlargement) * np.diff(var_supp[var.name])
+                this_weights *= pdf
+                # plt.plot((samp-var_supp[var.name][0])/np.diff(var_supp[var.name]), pdf, label=var.name, ls='none', marker='.')
                 if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{var.name}:{this_weights}')
             # repeat weights for all incompleteness variables along first axis (epistemic)
+            # plt.legend()
+            # plt.show()
+            # return
             p_weights[:, n_ale, :] *= np.repeat(this_weights[np.newaxis,:], N_mcs_epi, 0)
             next(pbar)
         
@@ -1028,7 +1075,8 @@ class PolyUQ(object):
             else:
                 samp = inp_suppl_ale[var.name].iloc[:N_mcs_ale].to_numpy()
             # also divide pdf by sampling pdf
-            var_weights *= var.prob_dens(samp) * np.diff(var_supp[var.name])
+            pdf = var.prob_dens(samp) * np.diff(var_supp[var.name])
+            var_weights *= pdf
             
             if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{var.name}:{var_weights}')
         next(pbar)
@@ -1049,7 +1097,8 @@ class PolyUQ(object):
                 else:
                     samp = inp_suppl_ale[var.name].iloc[:N_mcs_ale].to_numpy()
                 # also divide pdf by sampling pdf
-                this_weights *= var.prob_dens(samp) * np.diff(var_supp[var.name])
+                pdf = var.prob_dens(samp) * np.diff(var_supp[var.name])
+                this_weights *= pdf
                 if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{var.name}:{this_weights}')
             
             # repeat weights for all imprecision variables along last axis (epistemic)
@@ -1063,15 +1112,17 @@ class PolyUQ(object):
         inc_weights = np.full((N_mcs_epi,),1.0, dtype=np.float32)
         for var in vars_inc:
             samp = inp_suppl_epi[var.name].iloc[:N_mcs_epi].to_numpy()
-            inc_weights *= var.prob_dens(samp) * np.diff(var_supp[var.name])
+            pdf = var.prob_dens(samp, singleton_enlargement) * np.diff(var_supp[var.name])
+            inc_weights *= pdf
         
             if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{var.name}:{inc_weights}')
         # repeat weights for all imprecision variables along last axis (epistemic)
         rep_inc_weights = np.repeat(inc_weights[:, np.newaxis], N_mcs_ale, -1)
         p_weights[:, :, :] *=  np.repeat(rep_inc_weights[:, :, np.newaxis], N_mcs_epi, -1)
         next(pbar)
-            
-        # dividing by sum allows to skip proper integration (?) due to nearly constant spacing of the Halton sequence
+        
+        # sum up along incompleteness dimension (the alternative: repeating samples would simply count and weight multiple times)
+        p_weights = np.sum(p_weights, axis=0)
         # p_weights /= np.sum(p_weights)
         self.stoch_weights = p_weights
         

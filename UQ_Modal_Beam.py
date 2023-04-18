@@ -359,6 +359,8 @@ def vars_definition():
     b = MassFunction('b',[(1.7/2,1.9/2),],[1,], primary=True) # meter
     tnorm = RandomVariable('norm','tnorm', [6e-3,1e-4], primary=False) # meter
     t = MassFunction('t',[(5.9e-3,6.1e-3),(tnorm,),],[0.7,0.3], primary=True) # meter
+    # t and tnorm should have had the same name to ensure samples are aligned 
+    # but that also means, the number of samples must be equal
     add_mass = MassFunction('add_mass', [(20,100),(40,50)],[0.8, 0.2], primary=True) # kilogram per meter
     muNwire = MassFunction('muNwire',[(60000,),(40000,180000)],[0.75,0.25], primary=False) # Newton
     N_wire = RandomVariable('norm','N_wire', [muNwire, 2655], primary=True) # Newton
