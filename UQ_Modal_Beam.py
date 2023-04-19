@@ -629,6 +629,60 @@ def opt_inc(poly_uq, result_dir, ret_name, ret_ind):
         
         run_inc(poly_uq, inc_path, stat_fun_pdf, stat_fun_kwargs)
 
+def est_stoch(poly_uq, result_dir, ret_name, ret_ind):
+    
+    def stoch_fun_ecdf(samp_flat, weight_flat, target_probabilities):    
+        ecdf = np.cumsum(weight_flat)
+        ecdf /= ecdf[-1]
+        return np.interp(target_probabilities, ecdf, samp_flat)
+    
+    def stoch_fun_hist(samp_flat, weight_flat, bins, density):
+        hist, _ = np.histogram(samp_flat, bins, weights=weight_flat, density=density)
+        return hist
+    
+    ret_dir = f'{ret_name}-{".".join(str(e) for e in ret_ind.values())}'
+    samp_path = os.path.join(result_dir,'polyuq_samp_weights.npz')
+    prop_path = os.path.join(result_dir, 'estimations', f'{ret_dir}/polyuq_prop.npz')
+    imp_path = os.path.join(result_dir, 'estimations', f'{ret_dir}/polyuq_imp.npz')
+    
+    poly_uq.load_state(samp_path, differential='samp')
+    poly_uq.load_state(prop_path, differential='prop')
+    poly_uq.load_state(imp_path, differential='imp')
+    
+    if True:
+        if ret_name != 'frf':
+            # ensure same bins as for inc_hist_pl-ret_name-ret_ind
+            nbin_fact=20
+            n_imp_hyc = len(poly_uq.imp_hyc_foc_inds)
+            bins_densities = generate_histogram_bins(poly_uq.imp_foc.reshape(poly_uq.N_mcs_ale, n_imp_hyc * 2), 1, nbin_fact/2) # divide nbin_fact by 2 to account for reshaping intervals
+            stat_fun_hist.n_stat = len(bins_densities) - 1
+            stat_fun_kwargs = {'bins':bins_densities, 'density':True}
+        else:
+            # ensure same bins as for inc_avg_pl-frf-xxx.x
+            nbin_fact = 100
+            n_hyc = len(poly_uq.hyc_mass(poly_uq.vars_epi))
+            n_bins_dens = np.ceil(np.sqrt(n_hyc) * nbin_fact).astype(int)
+            if ret_ind['space']==1:
+                bins_densities = np.linspace(0, 0.012, n_bins_dens)
+            elif ret_ind['space']==2:
+                bins_densities = np.linspace(0, 0.0021, n_bins_dens)
+            stat_fun_kwargs = {'bins':bins_densities, 'density':True}
+    
+        stoch_path_part = 'polyuq_hist_stoch.npz'
+        stoch_path = os.path.join(result_dir, 'estimations', ret_dir, stoch_path_part)
+        poly_uq.stat_full_stoch(stoch_fun_hist, stat_fun_kwargs)
+        poly_uq.save_state(stoch_path, differential='stoch')
+        
+    if True:
+        n_stat = 100
+        target_probabilities = np.linspace(0,1,n_stat)
+        stat_fun_kwargs = {'target_probabilities':target_probabilities}
+        stoch_path_part = 'polyuq_cdf_stoch.npz'
+        stoch_path = os.path.join(result_dir, 'estimations', ret_dir, stoch_path_part)
+        poly_uq.stat_full_stoch(stoch_fun_ecdf, stat_fun_kwargs)
+        poly_uq.save_state(stoch_path, differential='stoch')
+
+
 def plots():
     import matplotlib
     import matplotlib.pyplot as plt

@@ -341,8 +341,6 @@ class MassFunction(UncertainVariable):
         
         to cirumvent singletons should be expanded to short intervals
         by a given percentage of the support !!!
-        by a minimum number of samples
-        by closest two samples
         ensure that the hypercube at this stripe is sufficiently sampled (difficult, as this must be implemented in MassFunction and that does not know about other variables)
         '''
         numeric_focals = self.numeric_focals # (n_focals, 2))
@@ -1126,23 +1124,36 @@ class PolyUQ(object):
         # p_weights /= np.sum(p_weights)
         self.stoch_weights = p_weights
         
+        non_zero = p_weights!=0
+        logger.info(f'{np.sum(non_zero)/(N_mcs_ale*N_mcs_epi)*100} percent of samples have non-zero weights. '
+                    f'Gobal coverage: {np.sum(np.any(non_zero, axis=0))} out of {N_mcs_epi} imprecision samples and {np.sum(np.any(non_zero, axis=1))} out of {N_mcs_ale} aleatory samples')
+      
         return p_weights
         
-    def stat_full_stoch(self, stat_fun, n_stat, stat_fun_kwargs={},):
+    def stat_full_stoch(self, stat_fun, stat_fun_kwargs={},):
+        '''
+        stat_fun should return all n_stat at once
+        
+        '''
         
         p_weights = self.stoch_weights
-        N_mcs_ale = p_weights.shape[0]
+        N_mcs_ale, N_mcs_epi = p_weights.shape
         
-        out_samp = self.out_samp[:N_mcs_ale,:]
+        out_samp = self.out_samp[:N_mcs_ale,:N_mcs_epi]
         
         out_samp = out_samp.flatten()
-        # p_weights /= np.sum(p_weights)
         p_weights = p_weights.flatten()
         
-        focals_stats = np.full((n_stat, 1, 1), np.nan)
-        for i_stat in range(n_stat):
-            stat_vals = stat_fun(out_samp, p_weights, i_stat, **stat_fun_kwargs)
-            focals_stats[i_stat,0,0] = stat_vals
+        non_zero = p_weights!=0
+        out_samp = out_samp[non_zero]
+        p_weights = p_weights[non_zero]
+        
+        sort_ind = np.argsort(out_samp)
+        out_samp = out_samp[sort_ind]
+        p_weights = p_weights[sort_ind]
+        
+        stat_vals = stat_fun(out_samp, p_weights, **stat_fun_kwargs)
+        focals_stats = stat_vals[:,np.newaxis, np.newaxis]
             
         self.stoch_stats = focals_stats
         self.stoch_mass = np.array([1,])
@@ -2466,7 +2477,7 @@ class PolyUQ(object):
             else:
                 return pd.DataFrame(data=arr, columns=columns)
         
-        logger.info('Now loading previous results from  {}'.format(fname))
+        logger.info('Loading previous results from  {}'.format(fname))
         
         in_dict = np.load(fname, allow_pickle=True)
         
