@@ -6,7 +6,7 @@ import numpy as np
 import zlib, zipfile
 from model.mechanical import Mechanical, MechanicalDummy
 from uncertainty.polymorphic_uncertainty import MassFunction, RandomVariable, PolyUQ, \
-stat_fun_avg, stat_fun_cdf, stat_fun_ci, stat_fun_hist, stat_fun_lci, stat_fun_pdf, generate_histogram_bins
+stat_fun_avg, stat_fun_cdf, stat_fun_ci, stat_fun_hist, stat_fun_lci, stat_fun_pdf, generate_histogram_bins, aggregate_mass
 import logging
 import psutil
 import time
@@ -651,12 +651,18 @@ def est_stoch(poly_uq, result_dir, ret_name, ret_ind):
     
     if True:
         if ret_name != 'frf':
-            # ensure same bins as for inc_hist_pl-ret_name-ret_ind
-            nbin_fact=20
-            n_imp_hyc = len(poly_uq.imp_hyc_foc_inds)
-            bins_densities = generate_histogram_bins(poly_uq.imp_foc.reshape(poly_uq.N_mcs_ale, n_imp_hyc * 2), 1, nbin_fact/2) # divide nbin_fact by 2 to account for reshaping intervals
-            stat_fun_hist.n_stat = len(bins_densities) - 1
-            stat_fun_kwargs = {'bins':bins_densities, 'density':True}
+            # ensure same bins as for inc_avg_pl-ret_name-ret_ind
+            
+            inc_path = os.path.join(result_dir, 'estimations', f'{ret_dir}/polyuq_avg_inc.npz')
+            poly_uq.load_state(inc_path, differential='inc')
+            focals_stats, focals_mass = poly_uq.focals_stats, poly_uq.focals_mass
+            _, _, _, bins_bel = aggregate_mass(focals_stats, focals_mass, 10, False)
+            
+            # nbin_fact=20
+            # n_imp_hyc = len(poly_uq.imp_hyc_foc_inds)
+            # bins_densities = generate_histogram_bins(poly_uq.imp_foc.reshape(poly_uq.N_mcs_ale, n_imp_hyc * 2), 1, nbin_fact/2) # divide nbin_fact by 2 to account for reshaping intervals
+            stat_fun_hist.n_stat = len(bins_bel) - 1
+            stat_fun_kwargs = {'bins':bins_bel, 'density':True}
         else:
             # ensure same bins as for inc_avg_pl-frf-xxx.x
             nbin_fact = 100
