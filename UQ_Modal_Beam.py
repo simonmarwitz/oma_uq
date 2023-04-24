@@ -828,14 +828,15 @@ def plots():
         
     
     #Modal parameters
-    if False:
+    if True:
         
         mech.example_beam(num_nodes=100, num_modes=14, damping=0.005, num_meas_nodes=100)
         f,d,phi,kappas,mus,etas = mech.modal(num_modes=14, damped=True, modal_matrices=True,use_meas_nodes=False)
         for i in range(len(f)):
             # print(f'{f[i]:1.4f} & {d[i]*100:1.4f} & {np.sqrt(kappas[i]/mus[i])/2/np.pi*np.sqrt(1-d[i]**2):1.4f}& {etas[i]/2/np.sqrt(mus[i]*kappas[i]):1.4f} & \includegraphics{{figures/introduction/mshs/{i}_2}}  & \includegraphics{{figures/introduction/mshs/{i}_1}}  \\\\')
             # print(f'{f[i]:1.4f} & {d[i]*100:1.4f} & {kappas[i]:1.4f} & {mus[i]:1.1f} & {etas[i]:1.4f} & \includegraphics{{figures/introduction/mshs/{i}_2}}  & \includegraphics{{figures/introduction/mshs/{i}_1}}  \\\\')
-            print(f'{f[i]:1.3f} & {d[i]*100:1.3f} & {kappas[i]:1.3f} & {mus[i]:1.1f} & {etas[i]:1.3f} ')
+            print(f'{f[i]:1.8f} & {d[i]*100:1.3f} & {kappas[i]:1.3f} & {mus[i]:1.1f} & {etas[i]:1.3f} ')
+        
     
     # Mode shape pictograms
     if False:
@@ -868,7 +869,7 @@ def plots():
                 # plt.savefig(f'/usr/scratch4/sima9999/home/2019_OMA_UQ/tex/figures/introduction/mshs/{i}_{j}_wide.pdf')
                 
     # Mode shape in PlotMSH
-    if True:
+    if False:
         from core.PreProcessingTools import GeometryProcessor, PreProcessSignals
         from core.PlotMSH import ModeShapePlot
         from GUI.PlotMSHGUI import start_msh_gui

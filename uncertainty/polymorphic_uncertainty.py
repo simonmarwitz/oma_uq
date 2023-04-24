@@ -193,7 +193,7 @@ class MassFunction(UncertainVariable):
                     focal_arr[1] = focal[0]
                     if isinstance(focal[0], UncertainVariable) and focal[0].name != self.name:
                         logger.warning(f'A singleton focal interval consisting of variable {focal[0].name}.'
-                                       'Consider sharing samples with {self.name} by setting names equal.')
+                                       f'Consider sharing samples with {self.name} by setting names equal.')
                 elif len(focal) == 2:
                     focal_arr[1:] = focal
                     focal_arr[0] = np.nan
