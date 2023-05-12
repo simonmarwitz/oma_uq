@@ -377,9 +377,9 @@ def vars_definition():
     # that is why ice_occ had to be passed to the mapping function and thus needed to be primary
     ice_mass = MassFunction('ice_mass', [(0, ice_occ),],[1], primary=True, incremental=True) #, imprecision
     
-    vars_epi = [b, t, add_mass, muNwire, A_wire, zeta, stddD, ice_mass, ice_days]
+    vars_epi = [b, t, add_mass, muNwire, A_wire, zeta, stddD, ice_mass, ice_days] # 9, inc: 3
     # vars_epi = [E, A, rho, L]
-    vars_ale = [tnorm, N_wire, dD, ice_occ]
+    vars_ale = [tnorm, N_wire, dD, ice_occ] # 4, sec: 1
     # vars_ale = [Elognorm, Enorm, Anorm]
     
     # E, a, b, t, rho, add_mass, N_wire, A_wire, zeta, dD, ice_occ, ice_mass,
@@ -390,8 +390,8 @@ def vars_definition():
                 'A_wire':A_wire.name,
                 'zeta':zeta.name,
                 'dD':dD.name,
-                'ice_occ':ice_occ.name,
-                'ice_mass':ice_mass.name,}
+                'ice_occ':ice_occ.name, #
+                'ice_mass':ice_mass.name,} # 9 
     return vars_ale, vars_epi, arg_vars
 
 def export_datamanager():
