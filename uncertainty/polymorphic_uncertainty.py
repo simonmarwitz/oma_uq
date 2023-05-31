@@ -1230,7 +1230,7 @@ class PolyUQ(object):
                         hyp_dens[hyp_var.name] = hyp_var.prob_dens(inp_suppl_ale[hyp_var.name])*np.diff(var_supp[hyp_var.name])
                 p_weights[:, i_weight] *= hyp_dens[hyp_var.name]
             # normalize
-            # dividing by sum allows to skip proper integration due to nearly constant spacing of the Halton sequence
+            # dividing by sum.... why?
             p_weights[:, i_weight] /= np.sum(p_weights[:, i_weight]) 
         
         if i_imp is None:
@@ -2809,7 +2809,7 @@ def stat_fun_ci(a, weight, i_stat, *args, **kwargs):
         conf= [mean, mean]
     else:
         sem = std / np.sqrt(n)
-        conf = scipy.stats.t.interval(confidence=0.95, df=n-1, loc=mean, scale=sem) 
+        conf = scipy.stats.t.interval(confidence=0.95, df=n-1, loc=mean, scale=sem)
     if i_stat is not None:
         return conf[i_stat]
     else: 
