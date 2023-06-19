@@ -2078,6 +2078,88 @@ class PolyUQ(object):
         
         return focals_stats, hyc_mass
     
+    def estimate_sensi(self, method='var', samp_sel='rand', Nr=None, num_resample=None):
+        
+        from SALib.analyze import delta as delta
+        
+        assert method in ['var', 'dens']
+        assert samp_sel in ['diag', 'all', 'rand']
+        
+        vars_epi = self.vars_epi
+        vars_ale = self.vars_ale
+        
+        N_mcs_ale = self.N_mcs_ale
+        N_mcs_epi = self.N_mcs_epi
+        
+        inp_samp = self.inp_samp_prim
+        out_samp = self.out_samp
+        
+        
+        def estimate_first_order_sens(x, y, num_subdivisions=None):
+            num_samples, num_params = x.shape
+            if num_subdivisions is None:
+                # taken from SALib.analyze.delta
+                exp = 2.0 / (7.0 + np.tanh((1500.0 - num_samples) / 500.0))
+                num_subdivisions = int(np.round(min(int(np.ceil(num_samples**exp)), 48)))
+                # print(f'Using {num_subdivisions} subdivisions')
+            S = np.full((num_params,), 1/np.var(y))
+            n_per_s = num_samples // num_subdivisions
+            # print(f'Remaining {num_samples % num_subdivisions} samples will be discarded.')
+            for k in range(num_params):
+                sort_ind = np.argsort(x[:,k])
+                # xk_sort = x[sort_ind,k]
+                y_sort = y[sort_ind]
+                means = np.empty((num_subdivisions,))
+                for s in range(num_subdivisions):
+                    means[s] = np.mean(y_sort[s * n_per_s:(s + 1) * n_per_s])
+                S[k] *= np.var(means)
+            return S
+        
+        def bootstr_wrap(ind):
+            ind = np.random.randint(0, Y.shape[0], len(ind))
+            this_X = X[ind,:]
+            this_Y = Y[ind]
+            return estimate_first_order_sens(this_X,this_Y)
+        
+        if samp_sel=='diag': #diagonal selection
+            if Nr is not None:
+                Nr = min(N_mcs_ale, N_mcs_epi)
+                logger.warning(f"Diagonal selection. Nr has been reset: Nr={Nr}")
+            else:
+                Nr = min(N_mcs_ale, N_mcs_epi)
+            ind_diag = np.arange(Nr)
+            
+            X = inp_samp.iloc[:Nr].to_numpy()
+            Y = out_samp[ind_diag, ind_diag]
+            names = inp_samp.columns
+        elif samp_sel=='all' or samp_sel=='rand': # select all, flat; only variance-based is fast enough for this
+            logger.warning("Indexing flat arrays untested. Results may be wrong!")
+            inds_ale, inds_epi = np.mgrid[0:N_mcs_ale, 0:N_mcs_epi]
+            inds_ale, inds_epi = inds_ale.ravel(), inds_epi.ravel()
+            
+            names_ale = [var.name for var in vars_ale if var.primary]
+            names_epi = [var.name for var in vars_epi if var.primary]
+            
+            arrays_grid  = [inp_samp[name].iloc[inds_ale] for name in names_ale]
+            arrays_grid += [inp_samp[name].iloc[inds_epi] for name in names_epi]
+            
+            X = np.array(arrays_grid)
+            Y = out_samp[inds_ale, inds_epi]
+            names = names_ale + names_epi
+        
+        if method=='var':
+            ind = np.random.randint(0, Y.shape[0], Nr)
+            S1 = estimate_first_order_sens(X[ind,:],Y[ind])
+            res = scipy.stats.bootstrap(np.arange(Nr)[np.newaxis,:], bootstr_wrap, n_resamples=num_resample, vectorized=False)
+            conf = [res.confidence_interval.low,res.confidence_interval.high]
+        elif method=='dens':
+            problem = {'num_vars': len(names), 'names': names}
+            SA_S = delta.analyze(problem, X, Y, Nr=Nr)
+            S1 = SA_S['delta']
+            conf = [SA_S['delta'] - SA_S['delta_conf'],SA_S['delta'] - SA_S['delta_conf']]
+            
+        return S1, conf, names
+        
     def check_sample_sizes(self, vars_epi, samples, N_mcs_ale=None, N_mcs_epi=None):
         '''
         A function to check sample sizes for approximation of epistemic hypercubes
