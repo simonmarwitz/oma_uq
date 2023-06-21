@@ -2078,11 +2078,14 @@ class PolyUQ(object):
         
         return focals_stats, hyc_mass
     
-    def estimate_sensi(self, method='var', samp_sel='rand', Nr=None, num_resample=None):
+    def estimate_sensi(self, method='var', samp_sel='rand', Nr=None, num_resamples=None, num_subdivisions=None):
         
-        from SALib.analyze import delta as delta
         
         assert method in ['var', 'dens']
+        if method =='dens':
+            # import here to reduce dependencies
+            # anyway this requires a customized delta
+            from SALib.analyze import delta as delta
         assert samp_sel in ['diag', 'all', 'rand']
         
         vars_epi = self.vars_epi
@@ -2094,17 +2097,20 @@ class PolyUQ(object):
         inp_samp = self.inp_samp_prim
         out_samp = self.out_samp
         
-        
-        def estimate_first_order_sens(x, y, num_subdivisions=None):
+        def estimate_first_order_sens(x, y):
+            # must declare num_subdivision global, because scipy.stats.bootstrap 
+            # does not allow to pass additional arguments to statistic
+            # global num_subdivisions
+            # print(num_subdivisions)
             num_samples, num_params = x.shape
-            if num_subdivisions is None:
+            if True:#num_subdivisions is None:
                 # taken from SALib.analyze.delta
                 exp = 2.0 / (7.0 + np.tanh((1500.0 - num_samples) / 500.0))
                 num_subdivisions = int(np.round(min(int(np.ceil(num_samples**exp)), 48)))
-                # print(f'Using {num_subdivisions} subdivisions')
+                logger.debug(f'Using {num_subdivisions} subdivisions')
             S = np.full((num_params,), 1/np.var(y))
             n_per_s = num_samples // num_subdivisions
-            # print(f'Remaining {num_samples % num_subdivisions} samples will be discarded.')
+            logger.debug(f'Remaining {num_samples % num_subdivisions} samples will be discarded.')
             for k in range(num_params):
                 sort_ind = np.argsort(x[:,k])
                 # xk_sort = x[sort_ind,k]
@@ -2122,18 +2128,26 @@ class PolyUQ(object):
             return estimate_first_order_sens(this_X,this_Y)
         
         if samp_sel=='diag': #diagonal selection
-            if Nr is not None:
-                Nr = min(N_mcs_ale, N_mcs_epi)
+            b = Nr is not None
+            Nr = min(N_mcs_ale, N_mcs_epi)
+            if b: # b: Nr was not None
                 logger.warning(f"Diagonal selection. Nr has been reset: Nr={Nr}")
-            else:
-                Nr = min(N_mcs_ale, N_mcs_epi)
+
             ind_diag = np.arange(Nr)
             
-            X = inp_samp.iloc[:Nr].to_numpy()
+            X = inp_samp.iloc[:Nr].to_numpy().T
             Y = out_samp[ind_diag, ind_diag]
             names = inp_samp.columns
         elif samp_sel=='all' or samp_sel=='rand': # select all, flat; only variance-based is fast enough for this
             logger.warning("Indexing flat arrays untested. Results may be wrong!")
+            
+            if samp_sel=='all':
+                if Nr is not None:
+                    logger.warning(f"All sample selection. Nr has been reset: Nr={Nr}")
+                Nr = N_mcs_ale * N_mcs_epi
+            elif Nr is None:
+                raise ValueError('Nr must be specified when using random selection.')
+            
             inds_ale, inds_epi = np.mgrid[0:N_mcs_ale, 0:N_mcs_epi]
             inds_ale, inds_epi = inds_ale.ravel(), inds_epi.ravel()
             
@@ -2143,20 +2157,30 @@ class PolyUQ(object):
             arrays_grid  = [inp_samp[name].iloc[inds_ale] for name in names_ale]
             arrays_grid += [inp_samp[name].iloc[inds_epi] for name in names_epi]
             
-            X = np.array(arrays_grid)
+            X = np.array(arrays_grid).T
             Y = out_samp[inds_ale, inds_epi]
             names = names_ale + names_epi
         
+        logger.debug(f"Shapes: X {X.shape}, Y {Y.shape}, Nr {Nr}, N_mcs_ale {N_mcs_ale}, N_mcs_epi {N_mcs_epi}")
+        
         if method=='var':
-            ind = np.random.randint(0, Y.shape[0], Nr)
-            S1 = estimate_first_order_sens(X[ind,:],Y[ind])
-            res = scipy.stats.bootstrap(np.arange(Nr)[np.newaxis,:], bootstr_wrap, n_resamples=num_resample, vectorized=False)
+            # ind = np.random.randint(0, Y.shape[0], Nr)
+            # S1 = estimate_first_order_sens(X[ind,:],Y[ind])
+            if num_resamples is None:
+                num_resamples = 9999
+            
+            res = scipy.stats.bootstrap(np.arange(Nr)[np.newaxis,:], bootstr_wrap, n_resamples=num_resamples, vectorized=False)
+            S1 = (res.confidence_interval.low + res.confidence_interval.high) / 2
             conf = [res.confidence_interval.low,res.confidence_interval.high]
         elif method=='dens':
+            if num_subdivisions is not None:
+                logger.warning('The number of subdivisions can not be provided for density based estimation.')
+            if num_resamples is None:
+                num_resamples = 100
             problem = {'num_vars': len(names), 'names': names}
-            SA_S = delta.analyze(problem, X, Y, Nr=Nr)
+            SA_S = delta.analyze(problem, X, Y, Nr=Nr, num_resamples=num_resamples)
             S1 = SA_S['delta']
-            conf = [SA_S['delta'] - SA_S['delta_conf'],SA_S['delta'] - SA_S['delta_conf']]
+            conf = [SA_S['delta'] - SA_S['delta_conf'],SA_S['delta'] + SA_S['delta_conf']]
             
         return S1, conf, names
         
