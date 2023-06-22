@@ -386,6 +386,7 @@ class MassFunction(UncertainVariable):
 
 
 class PolyUQ(object):
+
     
     def __init__(self, vars_ale, vars_epi, dim_ex='cartesian'):
         '''
@@ -445,6 +446,10 @@ class PolyUQ(object):
                           
         self.focals_stats = None
         self.focals_mass = None
+        
+        self.S_point = None
+        self.S_conf = None
+        self.S_meth = None
         
     @property
     def all_vars(self):
@@ -2078,7 +2083,8 @@ class PolyUQ(object):
         
         return focals_stats, hyc_mass
     
-    def estimate_sensi(self, method='var', samp_sel='rand', Nr=None, num_resamples=None, num_subdivisions=None):
+    def estimate_sensi(self, method='var', samp_sel='rand', Nr=None, 
+                       num_resamples=None, num_subdivisions=None):
         
         
         assert method in ['var', 'dens']
@@ -2088,6 +2094,8 @@ class PolyUQ(object):
             from SALib.analyze import delta as delta
         assert samp_sel in ['diag', 'all', 'rand']
         
+        logger.info(f'Estimating  {method}-based sensitivity indices with {samp_sel} sample selection and {Nr} samples for bootstrapping with {num_resamples} resamples...')
+
         vars_epi = self.vars_epi
         vars_ale = self.vars_ale
         
@@ -2097,20 +2105,13 @@ class PolyUQ(object):
         inp_samp = self.inp_samp_prim
         out_samp = self.out_samp
         
+        
+        
         def estimate_first_order_sens(x, y):
-            # must declare num_subdivision global, because scipy.stats.bootstrap 
-            # does not allow to pass additional arguments to statistic
-            # global num_subdivisions
-            # print(num_subdivisions)
-            num_samples, num_params = x.shape
-            if True:#num_subdivisions is None:
-                # taken from SALib.analyze.delta
-                exp = 2.0 / (7.0 + np.tanh((1500.0 - num_samples) / 500.0))
-                num_subdivisions = int(np.round(min(int(np.ceil(num_samples**exp)), 48)))
-                logger.debug(f'Using {num_subdivisions} subdivisions')
+            _, num_params = x.shape
+            
             S = np.full((num_params,), 1/np.var(y))
-            n_per_s = num_samples // num_subdivisions
-            logger.debug(f'Remaining {num_samples % num_subdivisions} samples will be discarded.')
+
             for k in range(num_params):
                 sort_ind = np.argsort(x[:,k])
                 # xk_sort = x[sort_ind,k]
@@ -2125,6 +2126,7 @@ class PolyUQ(object):
             ind = np.random.randint(0, Y.shape[0], len(ind))
             this_X = X[ind,:]
             this_Y = Y[ind]
+            next(pbar)
             return estimate_first_order_sens(this_X,this_Y)
         
         if samp_sel=='diag': #diagonal selection
@@ -2139,7 +2141,7 @@ class PolyUQ(object):
             Y = out_samp[ind_diag, ind_diag]
             names = inp_samp.columns
         elif samp_sel=='all' or samp_sel=='rand': # select all, flat; only variance-based is fast enough for this
-            logger.warning("Indexing flat arrays untested. Results may be wrong!")
+            # logger.warning("Indexing flat arrays untested. Results may be wrong!")
             
             if samp_sel=='all':
                 if Nr is not None:
@@ -2160,16 +2162,29 @@ class PolyUQ(object):
             X = np.array(arrays_grid).T
             Y = out_samp[inds_ale, inds_epi]
             names = names_ale + names_epi
+            
         
         logger.debug(f"Shapes: X {X.shape}, Y {Y.shape}, Nr {Nr}, N_mcs_ale {N_mcs_ale}, N_mcs_epi {N_mcs_epi}")
         
-        if method=='var':
+        if method=='var':          
+            if num_subdivisions is None:
+                # taken from SALib.analyze.delta
+                exp = 2.0 / (7.0 + np.tanh((1500.0 - Nr) / 500.0))
+                num_subdivisions = int(np.round(min(int(np.ceil(Nr**exp)), 48)))
+                logger.debug(f'Using {num_subdivisions} subdivisions')
+                
+            n_per_s = Nr // num_subdivisions
+            logger.debug(f'Remaining {Nr % num_subdivisions} samples will be discarded.')
             # ind = np.random.randint(0, Y.shape[0], Nr)
             # S1 = estimate_first_order_sens(X[ind,:],Y[ind])
             if num_resamples is None:
                 num_resamples = 9999
             
-            res = scipy.stats.bootstrap(np.arange(Nr)[np.newaxis,:], bootstr_wrap, n_resamples=num_resamples, vectorized=False)
+            pbar = simplePbar(num_resamples)
+            res = scipy.stats.bootstrap(np.arange(Nr)[np.newaxis,:], bootstr_wrap,
+                                        method='basic', 
+                                        n_resamples=num_resamples, vectorized=False,
+                                        )
             S1 = (res.confidence_interval.low + res.confidence_interval.high) / 2
             conf = [res.confidence_interval.low,res.confidence_interval.high]
         elif method=='dens':
@@ -2181,7 +2196,11 @@ class PolyUQ(object):
             SA_S = delta.analyze(problem, X, Y, Nr=Nr, num_resamples=num_resamples)
             S1 = SA_S['delta']
             conf = [SA_S['delta'] - SA_S['delta_conf'],SA_S['delta'] + SA_S['delta_conf']]
-            
+        
+        self.S_point = S1
+        self.S_conf = conf
+        self.S_meth = method
+        
         return S1, conf, names
         
     def check_sample_sizes(self, vars_epi, samples, N_mcs_ale=None, N_mcs_epi=None):
@@ -2545,6 +2564,11 @@ class PolyUQ(object):
             out_dict['self.focals_stats'] = self.focals_stats
             out_dict['self.focals_mass'] = self.focals_mass
         
+        if differential is None or differential=='sens':
+            out_dict['self.S_point'] = self.S_point
+            out_dict['self.S_conf'] = self.S_conf
+            out_dict['self.S_meth'] = self.S_meth
+        
         with open(fname + '.tmp', 'wb') as f:
             np.savez_compressed(f, **out_dict)
         if os.path.exists(fname):
@@ -2627,6 +2651,11 @@ class PolyUQ(object):
         if differential is None or differential=='inc':
             self.focals_stats = validate_array(in_dict['self.focals_stats'])
             self.focals_mass = validate_array(in_dict['self.focals_mass'])
+        
+        if differential is None or differential=='sens':
+            self.S_point = validate_array(in_dict['self.S_point'])
+            self.S_conf = validate_array(in_dict['self.S_conf'])
+            self.S_meth = validate_array(in_dict['self.S_meth'])
         
         if self.var_supp is None:
             self.sample_qmc(percentiles= self.percentiles, supp_only=True)
