@@ -2083,7 +2083,7 @@ class PolyUQ(object):
         
         return focals_stats, hyc_mass
     
-    def estimate_sensi(self, method='var', samp_sel='rand', Nr=None, 
+    def estimate_sensi(self, method='var', samp_sel='rand', y_resamples=None, 
                        num_resamples=None, num_subdivisions=None):
         
         
@@ -2094,7 +2094,7 @@ class PolyUQ(object):
             from SALib.analyze import delta as delta
         assert samp_sel in ['diag', 'all', 'rand']
         
-        logger.info(f'Estimating  {method}-based sensitivity indices with {samp_sel} sample selection and {Nr} samples for bootstrapping with {num_resamples} resamples...')
+        logger.info(f'Estimating  {method}-based sensitivity indices with {samp_sel} sample selection and {y_resamples} samples for bootstrapping with {num_resamples} resamples...')
 
         vars_epi = self.vars_epi
         vars_ale = self.vars_ale
@@ -2130,25 +2130,25 @@ class PolyUQ(object):
             return estimate_first_order_sens(this_X,this_Y)
         
         if samp_sel=='diag': #diagonal selection
-            b = Nr is not None
-            Nr = min(N_mcs_ale, N_mcs_epi)
-            if b: # b: Nr was not None
-                logger.warning(f"Diagonal selection. Nr has been reset: Nr={Nr}")
+            b = y_resamples is not None
+            y_resamples = min(N_mcs_ale, N_mcs_epi)
+            if b: # b: y_resamples was not None
+                logger.warning(f"Diagonal selection. y_resamples has been reset: y_resamples={y_resamples}")
 
-            ind_diag = np.arange(Nr)
+            ind_diag = np.arange(y_resamples)
             
-            X = inp_samp.iloc[:Nr].to_numpy().T
+            X = inp_samp.iloc[:y_resamples].to_numpy().T
             Y = out_samp[ind_diag, ind_diag]
             names = inp_samp.columns
         elif samp_sel=='all' or samp_sel=='rand': # select all, flat; only variance-based is fast enough for this
             # logger.warning("Indexing flat arrays untested. Results may be wrong!")
             
             if samp_sel=='all':
-                if Nr is not None:
-                    logger.warning(f"All sample selection. Nr has been reset: Nr={Nr}")
-                Nr = N_mcs_ale * N_mcs_epi
-            elif Nr is None:
-                raise ValueError('Nr must be specified when using random selection.')
+                if y_resamples is not None:
+                    logger.warning(f"All sample selection. y_resamples has been reset: y_resamples={y_resamples}")
+                y_resamples = N_mcs_ale * N_mcs_epi
+            elif y_resamples is None:
+                raise ValueError('y_resamples must be specified when using random selection.')
             
             inds_ale, inds_epi = np.mgrid[0:N_mcs_ale, 0:N_mcs_epi]
             inds_ale, inds_epi = inds_ale.ravel(), inds_epi.ravel()
@@ -2164,24 +2164,24 @@ class PolyUQ(object):
             names = names_ale + names_epi
             
         
-        logger.debug(f"Shapes: X {X.shape}, Y {Y.shape}, Nr {Nr}, N_mcs_ale {N_mcs_ale}, N_mcs_epi {N_mcs_epi}")
+        logger.debug(f"Shapes: X {X.shape}, Y {Y.shape}, y_resamples {y_resamples}, N_mcs_ale {N_mcs_ale}, N_mcs_epi {N_mcs_epi}")
         
         if method=='var':          
             if num_subdivisions is None:
                 # taken from SALib.analyze.delta
-                exp = 2.0 / (7.0 + np.tanh((1500.0 - Nr) / 500.0))
-                num_subdivisions = int(np.round(min(int(np.ceil(Nr**exp)), 48)))
+                exp = 2.0 / (7.0 + np.tanh((1500.0 - y_resamples) / 500.0))
+                num_subdivisions = int(np.round(min(int(np.ceil(y_resamples**exp)), 48)))
                 logger.debug(f'Using {num_subdivisions} subdivisions')
                 
-            n_per_s = Nr // num_subdivisions
-            logger.debug(f'Remaining {Nr % num_subdivisions} samples will be discarded.')
-            # ind = np.random.randint(0, Y.shape[0], Nr)
+            n_per_s = y_resamples // num_subdivisions
+            logger.debug(f'Remaining {y_resamples % num_subdivisions} samples will be discarded.')
+            # ind = np.random.randint(0, Y.shape[0], y_resamples)
             # S1 = estimate_first_order_sens(X[ind,:],Y[ind])
             if num_resamples is None:
                 num_resamples = 9999
             
             pbar = simplePbar(num_resamples)
-            res = scipy.stats.bootstrap(np.arange(Nr)[np.newaxis,:], bootstr_wrap,
+            res = scipy.stats.bootstrap(np.arange(y_resamples)[np.newaxis,:], bootstr_wrap,
                                         method='basic', 
                                         n_resamples=num_resamples, vectorized=False,
                                         )
@@ -2193,7 +2193,7 @@ class PolyUQ(object):
             if num_resamples is None:
                 num_resamples = 100
             problem = {'num_vars': len(names), 'names': names}
-            SA_S = delta.analyze(problem, X, Y, Nr=Nr, num_resamples=num_resamples)
+            SA_S = delta.analyze(problem, X, Y, y_resamples=y_resamples, num_resamples=num_resamples)
             S1 = SA_S['delta']
             conf = [SA_S['delta'] - SA_S['delta_conf'],SA_S['delta'] + SA_S['delta_conf']]
         
