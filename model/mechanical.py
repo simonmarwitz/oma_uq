@@ -2269,6 +2269,7 @@ class Mechanical(MechanicalDummy):
                 C = np.zeros_like(K)
                 # compute modal matrices
                 
+            
             kappas = np.zeros((num_modes))
             mus = np.zeros((num_modes))
             etas = np.zeros((num_modes))
@@ -2972,6 +2973,10 @@ class Mechanical(MechanicalDummy):
             # print(e)
             c = np.zeros_like(k)
         ansys.finish()
+        
+        ansys.smat(matrix='USR2SOLV', type='D', method='IMPORT', val1='FULL', val2=f"{jid}.full", val3='USR2SOLV')
+        ansys.export(matrix="USR2SOLV", format="MMF", fname="USR2SOLV.bin")
+        usr2solv = np.array(scipy.io.mmread('USR2SOLV.bin'))
         
         # full_path = os.path.join(ansys.directory, ansys.jobname + '.full')
         # full = pyansys.read_binary(full_path)
