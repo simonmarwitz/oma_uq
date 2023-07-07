@@ -1989,15 +1989,24 @@ class Mechanical(MechanicalDummy):
             modal_coordinate = mode_shapes[inp_node_ind, dof_ind, mode]
             # TODO: extend 3D
             
+            # for non-proportionally damped modes / non-classical modes the 
+            # complex conjugate pairs have to be taken into account
+            # kappa, omegan and zeta are the same, only the modal coordinates would
+            # appear as complex conjugate pairs 
+            # complex conjugation is distributive so it would suffice, to compute
+            # this_frf + conj(this_frf), for real frf this would double up the response
+            logger.warning('FRF computation for non-classical modes not thouroughly tested.')
             if out_quant == 'a':
-                frf += -omegas**2 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
+                this_frf = -omegas**2 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
             elif out_quant == 'v':
-                frf += 1j*omegas / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
+                this_frf = 1j*omegas / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
             elif out_quant == 'd':
-                frf += 1 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
+                this_frf = 1 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
             else:
                 logger.warning(f'This output quantity is invalid: {out_quant}')
-                
+            
+            frf += this_frf + this_frf.conj()
+            
         self.omegas = omegas
         self.frf= frf
         
@@ -2325,6 +2334,7 @@ class Mechanical(MechanicalDummy):
         # print(res.time_values)
         if res._resultheader['cpxrst']:
             for mode in range(num_modes):
+                print(res.time_values[2*mode:2*mode+1])
                 sigma = res.time_values[2 * mode]
                 omega = res.time_values[2 * mode + 1]
                 if omega < 0 : continue  # complex conjugate pair
