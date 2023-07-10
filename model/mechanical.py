@@ -1958,8 +1958,8 @@ class Mechanical(MechanicalDummy):
         dof_ind = ['ux', 'uy', 'uz'].index(dof)
         
         # too complicated to get compensated (numerical damping, period elongation) modal_matrices, a marginal error will be accepted
-        _, _, mode_shapes, kappas, _, _ = self.modal(modal_matrices=True)
-        frequencies, damping, mode_shapes_n = self.numerical_response_parameters(compensate=True, dofs=[dof_ind])
+        _, _, mode_shapes, kappas, mus, etas = self.modal(modal_matrices=True)
+        frequencies, damping,mode_shapes_n = self.numerical_response_parameters(compensate=True, dofs=[dof_ind])
         # we have to distinguish between input and output mode shapes
         # output mode shapes are generally only for meas_nodes,
         # while input mode shapes must be complete i.e. input node does not have to be in meas_nodes
@@ -1980,11 +1980,17 @@ class Mechanical(MechanicalDummy):
         
         frf = np.zeros((N // 2 + 1, num_meas_nodes), dtype=complex)
         
+        logger.warning('FRF computation for non-classical modes not thouroughly tested.')
+        
         for mode in range(num_modes):
             
             omegan = omegans[mode]
             zeta = damping[mode]
             kappa = kappas[mode]
+            # print(kappas[mode], mus[mode], etas[mode], omegans[mode], damping[mode])
+            # if mode<2:
+            #     zeta = zeta / 1
+            #     kappa = kappa / np.sqrt(2)
             mode_shape = mode_shapes_n[:, mode]
             modal_coordinate = mode_shapes[inp_node_ind, dof_ind, mode]
             # TODO: extend 3D
@@ -1995,17 +2001,19 @@ class Mechanical(MechanicalDummy):
             # appear as complex conjugate pairs 
             # complex conjugation is distributive so it would suffice, to compute
             # this_frf + conj(this_frf), for real frf this would double up the response
-            logger.warning('FRF computation for non-classical modes not thouroughly tested.')
             if out_quant == 'a':
                 this_frf = -omegas**2 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
+                this_frf += -omegas**2 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * np.conj(modal_coordinate * mode_shape[np.newaxis, :])
             elif out_quant == 'v':
                 this_frf = 1j*omegas / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
+                this_frf += 1j*omegas / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * np.conj(modal_coordinate * mode_shape[np.newaxis, :])
             elif out_quant == 'd':
                 this_frf = 1 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
+                this_frf += 1 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * np.conj(modal_coordinate * mode_shape[np.newaxis, :])
             else:
                 logger.warning(f'This output quantity is invalid: {out_quant}')
             
-            frf += this_frf + this_frf.conj()
+            frf += this_frf / 2
             
         self.omegas = omegas
         self.frf= frf
@@ -2240,64 +2248,119 @@ class Mechanical(MechanicalDummy):
             
             ansys.wrfull()
             ansys.finish()
-            ansys.aux2()
-            '''
-            APDL Guide 4.4
-            The mode shapes from the .MODE file and the DOF results from 
-            the .RST file are in the internal ordering, and they need 
-            to be converted before use with any of the matrices from the .FULL file, as shown below:
-            '''
-            ansys.smat(matrix='Nod2Solv', type='D', method='IMPORT', val1='FULL', val2=f"{self.jobname}.full", val3="NOD2SOLV")
-            # Permutation operators can not be exported, so the mode shapes must be redordered to solver ordering in APDL 
-            if damped:
-                ansys.dmat(matrix="PhiI", type="Z", method="IMPORT", val1="MODE", val2=f"{self.jobname}.mode")
-            else:
-                ansys.dmat(matrix="PhiI", type="D", method="IMPORT", val1="MODE", val2=f"{self.jobname}.mode")
-            ansys.mult(m1='Nod2Solv', t1='', m2='PhiI', t2='', m3='PhiB')
-            ansys.export(matrix="PhiB", format="MMF", fname="PhiB.bin")
-            msh = np.array(scipy.io.mmread('PhiB.bin'))
-            os.remove('PhiB.bin')
-            # print(msh)
-            ansys.smat(matrix="MatKD", type="D", method="IMPORT", val1="FULL", val2=f"{self.jobname}.full", val3="STIFF")
-            ansys.export(matrix="MatKD", format="MMF", fname="MatKD.bin")
-            K = scipy.io.mmread('MatKD.bin').toarray()
-            os.remove('MatKD.bin')
-            ansys.smat(matrix="MatMD", type="D", method="IMPORT", val1="FULL", val2=f"{self.jobname}.full", val3="MASS")
-            ansys.export(matrix="MatMD", format="MMF", fname="MatMD.bin")
-            M = scipy.io.mmread('MatMD.bin').toarray()
-            os.remove('MatMD.bin')
-            # try:
-            if damped:
-                ansys.dmat(matrix="MatCD", type="D", method="IMPORT", val1="FULL", val2=f"{self.jobname}.full", val3="DAMP")
-                ansys.export(matrix="MatCD", format="MMF", fname="MatCD.bin")
-                C = scipy.io.mmread('MatCD.bin')
-                os.remove('MatCD.bin')
-            # except Exception as e:
-            else:
-                # print(e)
-                C = np.zeros_like(K)
+            
+            if False:
+                ansys.aux2()
+                '''
+                APDL Guide 4.4
+                The mode shapes from the .MODE file and the DOF results from 
+                the .RST file are in the internal ordering, and they need 
+                to be converted before use with any of the matrices from the .FULL file, as shown below:
+                '''
+                ansys.smat(matrix='Nod2Solv', type='D', method='IMPORT', val1='FULL', val2=f"{self.jobname}.full", val3="NOD2SOLV")
+                # Permutation operators can not be exported, so the mode shapes must be redordered to solver ordering in APDL 
+                if damped:
+                    ansys.dmat(matrix="PhiI", type="Z", method="IMPORT", val1="MODE", val2=f"{self.jobname}.mode")
+                else:
+                    ansys.dmat(matrix="PhiI", type="D", method="IMPORT", val1="MODE", val2=f"{self.jobname}.mode")
+                ansys.mult(m1='Nod2Solv', t1='', m2='PhiI', t2='', m3='PhiB')
+                ansys.export(matrix="PhiB", format="MMF", fname="PhiB.bin")
+                msh = np.array(scipy.io.mmread('PhiB.bin'))
+                os.remove('PhiB.bin')
+                
+                ansys.smat(matrix="MatKD", type="D", method="IMPORT", val1="FULL", val2=f"{self.jobname}.full", val3="STIFF")
+                ansys.export(matrix="MatKD", format="MMF", fname="MatKD.bin")
+                K = scipy.io.mmread('MatKD.bin').toarray()
+                os.remove('MatKD.bin')
+                ansys.smat(matrix="MatMD", type="D", method="IMPORT", val1="FULL", val2=f"{self.jobname}.full", val3="MASS")
+                ansys.export(matrix="MatMD", format="MMF", fname="MatMD.bin")
+                M = scipy.io.mmread('MatMD.bin').toarray()
+                os.remove('MatMD.bin')
+                # try:
+                if damped:
+                    ansys.dmat(matrix="MatCD", type="D", method="IMPORT", val1="FULL", val2=f"{self.jobname}.full", val3="DAMP")
+                    ansys.export(matrix="MatCD", format="MMF", fname="MatCD.bin")
+                    C = scipy.io.mmread('MatCD.bin')
+                    os.remove('MatCD.bin')
+                # except Exception as e:
+                else:
+                    # print(e)
+                    C = np.zeros_like(K)
+            
                 # compute modal matrices
+                kappas = np.zeros((num_modes))
+                mus = np.zeros((num_modes))
+                etas = np.zeros((num_modes))
                 
-            
-            kappas = np.zeros((num_modes))
-            mus = np.zeros((num_modes))
-            etas = np.zeros((num_modes))
-            
-            for mode in range(num_modes):
+                for mode in range(num_modes):
+                    
+                    # TODO: should work, since I assume K, M and C are 3D
+                    # properly remove constraint nodes
+                    # check complex conjugate?
+                    msh_f = msh[:, mode]
+                    
+                    # unit normalization would have to be done for returned mode shapes
+                    # as well, otherwise subsequent calculations may be errorneous (e.g. frfs)
+                    if False:
+                        msh_f /= msh_f[np.argmax(np.abs(msh_f))]
+                    
+                    kappas[mode] = (msh_f.T.dot(K.dot(msh_f.conj()))).real
+                    mus[mode] = (msh_f.T.dot(M.dot(msh_f.conj()))).real
+                    etas[mode] = (msh_f.T.dot(C.dot(msh_f.conj()))).real
+            else:
+                print('Direct computation of modal parameters')
                 
-                # TODO: should work, since I assume K, M and C are 3D
-                # properly remove constraint nodes
-                # check complex conjugate?
-                msh_f = msh[:, mode]
+                full_path = os.path.join(ansys.directory, ansys.jobname + '.full')
+                full = pyansys.read_binary(full_path)
+                # # TODO: Check, that Nodes and DOFS are in the same order in modeshapes and k,m
+                dof_ref, k, m, c = full.load_kmc(as_sparse=False, sort=False)
+                k += np.triu(k, 1).T
+                m += np.triu(m, 1).T
+                c += np.triu(c, 1).T
+                del full
                 
-                # unit normalization would have to be done for returned mode shapes
-                # as well, otherwise subsequent calculations may be errorneous (e.g. frfs)
-                if False:
-                    msh_f /= msh_f[np.argmax(np.abs(msh_f))]
+                mask1 = ~np.all(k==0, axis=1)
+                mask2= ~np.all(k==0, axis=0)
+                dof_ref_ = dof_ref[mask1,:]
+                k_ = k[mask2,:]
+                m_ = m[mask2,:]
+                c_ = c[mask2,:]
+                k_ = k_[:,mask1]
+                m_ = m_[:,mask1]
+                c_ = c_[:,mask1]
                 
-                kappas[mode] = (msh_f.T.dot(K.dot(msh_f.conj()))).real
-                mus[mode] = (msh_f.T.dot(M.dot(msh_f.conj()))).real
-                etas[mode] = (msh_f.T.dot(C.dot(msh_f.conj()))).real
+                o = np.zeros_like(k_)
+                B = np.vstack([np.hstack([k_,o]),
+                               np.hstack([o,-m_])])
+                A = np.vstack([np.hstack([o,k_]),
+                               np.hstack([k_,-c_])])
+                '''!!!!!'''
+                A = np.vstack([np.hstack([o,k_]),
+                               np.hstack([k_,o])])
+                w,v = scipy.linalg.eig(A,-B)
+                
+                f = np.imag(w)/2/np.pi
+                zeta = -np.real(w)/np.abs(w)
+                
+                ind = np.argsort(f)
+                f = f[ind]
+                ind2 = (f > 0)
+                f = f[ind2][:num_modes]
+                zeta = zeta[ind][ind2][:num_modes]
+                
+                v = v[k_.shape[0]:, ind][:, ind2][:,:num_modes]
+                
+                mu = np.diag(v.T @ m_ @ np.conj(v))
+                
+                for mode in range(num_modes):
+                    v[:, mode] /= np.sqrt(mu[mode])
+                
+                kappas =  np.diag(v.T @ k_ @ v).real
+                mus = np.diag(v.T @ m_ @ v).real
+                etas = v.T @ c_ @ np.conj(v)
+                if np.sum(np.abs(etas)) - np.sum(np.abs(np.diag(etas))) > np.sum(np.abs(np.diag(etas)))/100:
+                    logger.warning("Modal damping matrix is not diagonal. Non-classical modes expected.")
+                etas = np.diag(etas).real
             
         
         ansys.finish()
@@ -2334,9 +2397,9 @@ class Mechanical(MechanicalDummy):
         # print(res.time_values)
         if res._resultheader['cpxrst']:
             for mode in range(num_modes):
-                print(res.time_values[2*mode:2*mode+1])
-                sigma = res.time_values[2 * mode]
-                omega = res.time_values[2 * mode + 1]
+                # print(res.time_values[2*mode:2*mode+1])
+                sigma = res.time_values[2 * mode] # real part
+                omega = res.time_values[2 * mode + 1] # imaginary part
                 if omega < 0 : continue  # complex conjugate pair
 
                 frequencies[mode] = omega  # damped frequency
