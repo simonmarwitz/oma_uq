@@ -1416,31 +1416,35 @@ class Mechanical(MechanicalDummy):
     def example_beam(self, num_nodes, damping=None, num_modes=None, damp_mode=1, # structural parameters
                     num_meas_nodes=None, 
                     ** kwargs):
-        
-        damp_ind = slice((damp_mode-1)*2,damp_mode*2)
-        #mu = 0.07 #m/M        #(5)    je groesser umso groesser die bedaempfte frequenzbreite
-        
-        # pre-generated "design" solution 
-        frequencies = [0.18613589, 0.18693765, 0.33319226, 0.35275437, 
-                       0.66958636, 0.67296631, 1.38965809, 1.39465315, 100,100]
-        modal_masses = [22691.6,22759.9,6695.5,6549.7,
-                        20753.4,22915.7,14980.4,15316.2, 53000,53000]
-        M = np.mean(modal_masses[damp_ind]) # modal mass of first mode(s)
-        fH=np.mean(frequencies[damp_ind]) # mean of first mode(s)
-        # fH=100
-        
-        #mD = mu * M
-        mD = kwargs.get('mD',800)
-        mu = mD / M
-        kappa_opt = 1/(1+mu)    #(22)
-        zeta_opt = np.sqrt(3 * mu / (8 * (1 + mu)**3))    #(23)
-        fD = kappa_opt * fH    #(62)
-        kD = (2*np.pi*fD)**2*mD #(63)
-        dD=2*mD*(2*np.pi*fD)*zeta_opt
-        
-        print(f"The TMD is designed to damp mode(s) {damp_mode} at {fH:1.3f} Hz with a mass ratio of {mu},"   
-              f" a mass {mD:1.3f}, frequency {fD:1.3f} and damping ratio {zeta_opt:1.3f}.")
-        
+        if damp_mode is not None:
+            damp_ind = slice((damp_mode-1)*2,damp_mode*2)
+            #mu = 0.07 #m/M        #(5)    je groesser umso groesser die bedaempfte frequenzbreite
+            
+            # pre-generated "design" solution 
+            frequencies = [0.18613589, 0.18693765, 0.33319226, 0.35275437, 
+                           0.66958636, 0.67296631, 1.38965809, 1.39465315, 100,100]
+            modal_masses = [22691.6,22759.9,6695.5,6549.7,
+                            20753.4,22915.7,14980.4,15316.2, 53000,53000]
+            M = np.mean(modal_masses[damp_ind]) # modal mass of first mode(s)
+            fH=np.mean(frequencies[damp_ind]) # mean of first mode(s)
+            # fH=100
+            
+            #mD = mu * M
+            mD = kwargs.get('mD',800)
+            mu = mD / M
+            kappa_opt = 1/(1+mu)    #(22)
+            zeta_opt = np.sqrt(3 * mu / (8 * (1 + mu)**3))    #(23)
+            fD = kappa_opt * fH    #(62)
+            kD = (2*np.pi*fD)**2*mD #(63)
+            dD=2*mD*(2*np.pi*fD)*zeta_opt
+            
+            print(f"The TMD is designed to damp mode(s) {damp_mode} at {fH:1.3f} Hz with a mass ratio of {mu},"   
+                  f" a mass {mD:1.3f}, frequency {fD:1.3f} and damping ratio {zeta_opt:1.3f}.")
+        else:
+            mD=0
+            kD=1
+            dD=0
+            
         struct_parms = {
                 'L'         : 200,
 
@@ -1958,7 +1962,8 @@ class Mechanical(MechanicalDummy):
         dof_ind = ['ux', 'uy', 'uz'].index(dof)
         
         # too complicated to get compensated (numerical damping, period elongation) modal_matrices, a marginal error will be accepted
-        _, _, mode_shapes, kappas, mus, etas = self.modal(modal_matrices=True)
+        # _, _, mode_shapes, kappas, mus, etas = self.modal(modal_matrices=True)
+        _, _, mode_shapes = self.modal()
         frequencies, damping,mode_shapes_n = self.numerical_response_parameters(compensate=True, dofs=[dof_ind])
         # we have to distinguish between input and output mode shapes
         # output mode shapes are generally only for meas_nodes,
@@ -1986,7 +1991,8 @@ class Mechanical(MechanicalDummy):
             
             omegan = omegans[mode]
             zeta = damping[mode]
-            kappa = kappas[mode]
+            # kappa = kappas[mode]
+            kappa = omegan**2 # modeshapes are mass-normalized
             # print(kappas[mode], mus[mode], etas[mode], omegans[mode], damping[mode])
             # if mode<2:
             #     zeta = zeta / 1
@@ -1999,8 +2005,8 @@ class Mechanical(MechanicalDummy):
             # complex conjugate pairs have to be taken into account
             # kappa, omegan and zeta are the same, only the modal coordinates would
             # appear as complex conjugate pairs 
-            # complex conjugation is distributive so it would suffice, to compute
-            # this_frf + conj(this_frf), for real frf this would double up the response
+            # complex conjugation is distributive
+            # for real frf this would double up the response
             if out_quant == 'a':
                 this_frf = -omegas**2 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
                 this_frf += -omegas**2 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * np.conj(modal_coordinate * mode_shape[np.newaxis, :])
@@ -2022,6 +2028,99 @@ class Mechanical(MechanicalDummy):
         
         return omegas, frf
     
+    def frequency_response_non_classical(self, N, inp_node, dof, fmax=None, out_quant='a', use_meas_nodes=True):
+        '''
+        As in Brincker & Ventura: Introduction to Operational Modal Analysis, p. 99 ff
+        '''
+        
+        nodes_coordinates = self.nodes_coordinates
+        ansys = self.ansys
+        num_modes = self.num_modes
+        
+        dof_ind = ['ux', 'uy', 'uz'].index(dof)
+        
+        frequencies, damping, mode_shapes_n = self.numerical_response_parameters(compensate=True, dofs=[dof_ind])
+        
+        print('Direct computation of modal parameters')
+        
+        full_path = os.path.join(ansys.directory, ansys.jobname + '.full')
+        full = pyansys.read_binary(full_path)
+        # # TODO: Check, that Nodes and DOFS are in the same order in modeshapes and k,m
+        dof_ref, k, m, c = full.load_kmc(as_sparse=False, sort=False)
+        k += np.triu(k, 1).T
+        m += np.triu(m, 1).T
+        c += np.triu(c, 1).T
+        del full
+        
+        mask1 = ~np.all(k==0, axis=1)
+        mask2= ~np.all(k==0, axis=0)
+        dof_ref_ = dof_ref[mask1,:]
+        k_ = k[mask2,:]
+        m_ = m[mask2,:]
+        c_ = c[mask2,:]
+        k_ = k_[:,mask1]
+        m_ = m_[:,mask1]
+        c_ = c_[:,mask1]
+        
+        o = np.zeros_like(k_)
+        A = np.vstack([np.hstack([ o,  m_]),
+                       np.hstack([ m_, c_])])
+        B = np.vstack([np.hstack([-m_, o ]),
+                       np.hstack([ o,  k_])])
+        w,v = scipy.linalg.eig(-B,A)
+        f = np.imag(w)/2/np.pi
+        zeta = -np.real(w)/np.abs(w)
+        
+        ind = np.argsort(f)
+        f = f[ind]
+        ind2 = (f > 0)
+        f = f[ind2][:num_modes]
+        zeta = zeta[ind][ind2][:num_modes]
+        v = v[:, ind][:, ind2][:,:num_modes]
+        
+        inp_node_ind = np.logical_and(dof_ref_[:,0] == inp_node, dof_ref_[:,1] == dof_ind)        
+        
+        if fmax is None:
+            fmax = np.max(frequencies)
+        
+        df = fmax / (N // 2 + 1)
+    
+        omegas = np.linspace(0, fmax, N // 2 + 1, False) * 2 * np.pi
+        assert np.isclose(df * 2 * np.pi, (omegas[-1] - omegas[0]) / (N // 2 + 1 - 1))
+        omegas = omegas[:, np.newaxis]
+        
+        num_meas_nodes = len(self.meas_nodes)
+        omegans = frequencies * 2 * np.pi
+        
+        frf = np.zeros((N // 2 + 1, num_meas_nodes), dtype=complex)
+        
+        logger.warning('FRF computation for non-classical modes not thouroughly tested.')
+        
+        for mode in range(num_modes):
+            # phi_n = v[:,mode:mode+1]
+            lambda_n = w[ind][ind2][:num_modes][mode]
+            b_n = v[k_.shape[0]:,mode:mode+1] # complex vector (num_nodes,)
+            # a_n = phi_n.T @ A @ phi_n # complex scalar
+            a_n = 2 * lambda_n * b_n.T @ m_ @ b_n 
+            a_n += b_n.T @ c_ @ b_n
+            mode_shape = mode_shapes_n[:, mode]
+            # b_n = phi_n.T @ B @ phi_n
+            # A_n = b_n @ b_n.T / a_n # complex matrix (num_nodes, num_nodes)
+            # display(A_n[ind3,ind4], b_n[ind3]*b_n[ind4]/a_n)
+            # continue
+            # H_n = A_n[:,:,np.newaxis] / (1j * omegas[np.newaxis,np.newaxis,:] - lambda_n) \
+            #     + np.conj(A_n[:,:,np.newaxis]) / (1j * omegas[np.newaxis,np.newaxis,:] - np.conj(lambda_n))
+            # H_s += A_n[ind3,ind4,np.newaxis] / (1j * omegas[np.newaxis,np.newaxis,:] - lambda_n)
+            # H_s += np.conj(A_n[ind3,ind4,np.newaxis]) / (1j * omegas[np.newaxis,np.newaxis,:] - np.conj(lambda_n))
+            frf += 1 / (1j * omegas -         lambda_n)  *         b_n[inp_node_ind] * mode_shape[np.newaxis, :] / a_n
+            frf += 1 / (1j * omegas - np.conj(lambda_n)) * np.conj(b_n[inp_node_ind] * mode_shape[np.newaxis, :] / a_n)
+            
+        self.omegas = omegas
+        self.frf= frf
+        
+        self.state[8] = True
+        
+        return omegas, frf    
     def ambient_ifrf(self, f_scale, deltat=None, dt_fact=None, timesteps=None, num_cycles=None, out_quant=['d', 'v', 'a'], dofs=['ux', 'uy', 'uz'], seed=None, **kwargs):
         '''
         a shortcut function for ambient using the linear frf and the
@@ -2224,7 +2323,7 @@ class Mechanical(MechanicalDummy):
                      )  # Controls the solution data written to the database.
         if damped:
             if not self.globdamp:
-                logger.warning("Model is non-proportionally damped. Modal damping values will be errorneous.")
+                logger.warning("Model is non-proportionally damped. Modal damping values may be errorneous.")
             ansys.modopt(method='QRDAMP', nmode=num_modes, freqb=0,
                          freqe=1e4,
                          cpxmod='cplx',
@@ -2335,8 +2434,8 @@ class Mechanical(MechanicalDummy):
                 A = np.vstack([np.hstack([o,k_]),
                                np.hstack([k_,-c_])])
                 '''!!!!!'''
-                A = np.vstack([np.hstack([o,k_]),
-                               np.hstack([k_,o])])
+                # A = np.vstack([np.hstack([o,k_]),
+                #                np.hstack([k_,o])])
                 w,v = scipy.linalg.eig(A,-B)
                 
                 f = np.imag(w)/2/np.pi
@@ -2358,6 +2457,7 @@ class Mechanical(MechanicalDummy):
                 kappas =  np.diag(v.T @ k_ @ v).real
                 mus = np.diag(v.T @ m_ @ v).real
                 etas = v.T @ c_ @ np.conj(v)
+                # print(etas)
                 if np.sum(np.abs(etas)) - np.sum(np.abs(np.diag(etas))) > np.sum(np.abs(np.diag(etas)))/100:
                     logger.warning("Modal damping matrix is not diagonal. Non-classical modes expected.")
                 etas = np.diag(etas).real
