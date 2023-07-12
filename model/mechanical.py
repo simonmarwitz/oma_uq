@@ -1950,6 +1950,11 @@ class Mechanical(MechanicalDummy):
         dof is currently used for input and output,e.g. if input is in z direction, output cannot be in y direction
         '''
         
+        if not self.globdamp:
+            logger.warning('This method assumes proporional damping. \
+                System is non-proportionally damped. Results might be errorneous. \
+                Consider using self.frequency_response_non_classical')
+            
         nodes_coordinates = self.nodes_coordinates
         
         for i, (node, x, y, z) in enumerate(nodes_coordinates):
@@ -1985,8 +1990,6 @@ class Mechanical(MechanicalDummy):
         
         frf = np.zeros((N // 2 + 1, num_meas_nodes), dtype=complex)
         
-        logger.warning('FRF computation for non-classical modes not thouroughly tested.')
-        
         for mode in range(num_modes):
             
             omegan = omegans[mode]
@@ -2001,25 +2004,19 @@ class Mechanical(MechanicalDummy):
             modal_coordinate = mode_shapes[inp_node_ind, dof_ind, mode]
             # TODO: extend 3D
             
-            # for non-proportionally damped modes / non-classical modes the 
-            # complex conjugate pairs have to be taken into account
-            # kappa, omegan and zeta are the same, only the modal coordinates would
-            # appear as complex conjugate pairs 
-            # complex conjugation is distributive
-            # for real frf this would double up the response
-            if out_quant == 'a':
-                this_frf = -omegas**2 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
-                this_frf += -omegas**2 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * np.conj(modal_coordinate * mode_shape[np.newaxis, :])
-            elif out_quant == 'v':
-                this_frf = 1j*omegas / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
-                this_frf += 1j*omegas / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * np.conj(modal_coordinate * mode_shape[np.newaxis, :])
-            elif out_quant == 'd':
-                this_frf = 1 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
-                this_frf += 1 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * np.conj(modal_coordinate * mode_shape[np.newaxis, :])
-            else:
-                logger.warning(f'This output quantity is invalid: {out_quant}')
+            this_frf = 1 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
+            this_frf += 1 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * np.conj(modal_coordinate * mode_shape[np.newaxis, :])
             
             frf += this_frf / 2
+            
+        if out_quant == 'a':
+            frf *=   -omegas**2
+        elif out_quant == 'v':
+            frf *= 1j*omegas
+        elif out_quant == 'd':
+            ...
+        else:
+            logger.warning(f'This output quantity is invalid: {out_quant}')
             
         self.omegas = omegas
         self.frf= frf
@@ -2028,99 +2025,230 @@ class Mechanical(MechanicalDummy):
         
         return omegas, frf
     
-    def frequency_response_non_classical(self, N, inp_node, dof, fmax=None, out_quant='a', use_meas_nodes=True):
+    def frequency_response_non_classical(self, N, inp_node, inp_dof, 
+                                         use_meas_nodes=True, out_dofs=['ux','uy','uz'], 
+                                         fmax=None, out_quant='a'):
         '''
         As in Brincker & Ventura: Introduction to Operational Modal Analysis, p. 99 ff
+        
+        How would we want to return our FRF?
+        It should be limited so some nodes of interest to save computational time
+        It should be limited to one or more degrees of freedom
+        adopt the procedure taken in numerical_response_parameters to get (len(meas_nodes)*len(dof_ind),:num_modes)
+        dof_ref should be returned alongside the output
+        
+        
         '''
-        
-        nodes_coordinates = self.nodes_coordinates
-        ansys = self.ansys
         num_modes = self.num_modes
+        if isinstance(out_dofs, str):
+            out_dofs = [out_dofs]
         
-        dof_ind = ['ux', 'uy', 'uz'].index(dof)
+        dof_ind = ['ux', 'uy', 'uz'].index(inp_dof)
         
-        frequencies, damping, mode_shapes_n = self.numerical_response_parameters(compensate=True, dofs=[dof_ind])
+        _, m_, c_, lamda, phi, dof_ref = self.modal_ext()
+        omegans = np.imag(lamda)
         
-        print('Direct computation of modal parameters')
+        logger.warning('FRF computation for non-classical modes (non-proportional damping).')
         
-        full_path = os.path.join(ansys.directory, ansys.jobname + '.full')
-        full = pyansys.read_binary(full_path)
-        # # TODO: Check, that Nodes and DOFS are in the same order in modeshapes and k,m
-        dof_ref, k, m, c = full.load_kmc(as_sparse=False, sort=False)
-        k += np.triu(k, 1).T
-        m += np.triu(m, 1).T
-        c += np.triu(c, 1).T
-        del full
-        
-        mask1 = ~np.all(k==0, axis=1)
-        mask2= ~np.all(k==0, axis=0)
-        dof_ref_ = dof_ref[mask1,:]
-        k_ = k[mask2,:]
-        m_ = m[mask2,:]
-        c_ = c[mask2,:]
-        k_ = k_[:,mask1]
-        m_ = m_[:,mask1]
-        c_ = c_[:,mask1]
-        
-        o = np.zeros_like(k_)
-        A = np.vstack([np.hstack([ o,  m_]),
-                       np.hstack([ m_, c_])])
-        B = np.vstack([np.hstack([-m_, o ]),
-                       np.hstack([ o,  k_])])
-        w,v = scipy.linalg.eig(-B,A)
-        f = np.imag(w)/2/np.pi
-        zeta = -np.real(w)/np.abs(w)
-        
-        ind = np.argsort(f)
-        f = f[ind]
-        ind2 = (f > 0)
-        f = f[ind2][:num_modes]
-        zeta = zeta[ind][ind2][:num_modes]
-        v = v[:, ind][:, ind2][:,:num_modes]
-        
-        inp_node_ind = np.logical_and(dof_ref_[:,0] == inp_node, dof_ref_[:,1] == dof_ind)        
         
         if fmax is None:
-            fmax = np.max(frequencies)
-        
+            fmax = np.max(omegans) / 2 / np.pi
         df = fmax / (N // 2 + 1)
-    
         omegas = np.linspace(0, fmax, N // 2 + 1, False) * 2 * np.pi
         assert np.isclose(df * 2 * np.pi, (omegas[-1] - omegas[0]) / (N // 2 + 1 - 1))
         omegas = omegas[:, np.newaxis]
         
-        num_meas_nodes = len(self.meas_nodes)
-        omegans = frequencies * 2 * np.pi
+        # if use_meas_nodes:
+        #     out_dofs = Mechanical.dofs_str_to_ind(out_dofs)
+        #     ndof = len(out_dofs)
+        #     meas_nodes = self.meas_nodes
+        #     n_nod = len(meas_nodes)
+        #     _, _,mode_shapes_n = self.numerical_response_parameters(compensate=True, dofs=out_dofs)
+        #
+        #     dof_ref_red = np.empty((len(meas_nodes)*ndof, 2))
+        #     for i in range(ndof):
+        #         dof_ref_red[i*n_nod:(i+1)*n_nod,0] = meas_nodes
+        #         dof_ref_red[i*n_nod:(i+1)*n_nod,1] = out_dofs[i]
+            
         
-        frf = np.zeros((N // 2 + 1, num_meas_nodes), dtype=complex)
         
-        logger.warning('FRF computation for non-classical modes not thouroughly tested.')
+        if use_meas_nodes:
+            if out_dofs is None:
+                out_dofs = ['ux', 'uy', 'uz']
+            out_dofs = Mechanical.dofs_str_to_ind(out_dofs)
+            ndof = len(out_dofs)
+            meas_nodes = self.meas_nodes
+        
+            # build indices for mode_shapes_n and mode_shapes
+            meas_ind = []
+            mod_ind = []
+            dof_ref_red = []
+            for node in meas_nodes:
+                for dof_ind in out_dofs:
+                    ind = np.where(np.logical_and(dof_ref[:,0]==node, dof_ref[:,1]==dof_ind))[0]
+                    dof_ref_red.append([node, dof_ind])
+                    if len(ind):
+                        meas_ind.append(ind[0])
+                        mod_ind.append(True)
+                    else:
+                        mod_ind.append(False)
+            meas_ind = np.array(meas_ind)
+            mod_ind = np.array(mod_ind)
+            dof_ref_red = np.array(dof_ref_red)
+        
+            mode_shapes_n = np.full((len(meas_nodes) * ndof, num_modes), 
+                                    np.nan + 1j*np.nan, dtype=complex)
+            mode_shapes_n[mod_ind,:] = phi[meas_ind, :]
+        else:
+            mode_shapes_n = phi
+            dof_ref_red = dof_ref
+
+        inp_node_ind = np.logical_and(dof_ref_red[:,0] == inp_node, dof_ref_red[:,1] == dof_ind)        
+        frf = np.zeros((N // 2 + 1, dof_ref_red.shape[0]), dtype=complex)
         
         for mode in range(num_modes):
-            # phi_n = v[:,mode:mode+1]
-            lambda_n = w[ind][ind2][:num_modes][mode]
-            b_n = v[k_.shape[0]:,mode:mode+1] # complex vector (num_nodes,)
-            # a_n = phi_n.T @ A @ phi_n # complex scalar
-            a_n = 2 * lambda_n * b_n.T @ m_ @ b_n 
-            a_n += b_n.T @ c_ @ b_n
-            mode_shape = mode_shapes_n[:, mode]
-            # b_n = phi_n.T @ B @ phi_n
-            # A_n = b_n @ b_n.T / a_n # complex matrix (num_nodes, num_nodes)
-            # display(A_n[ind3,ind4], b_n[ind3]*b_n[ind4]/a_n)
-            # continue
-            # H_n = A_n[:,:,np.newaxis] / (1j * omegas[np.newaxis,np.newaxis,:] - lambda_n) \
-            #     + np.conj(A_n[:,:,np.newaxis]) / (1j * omegas[np.newaxis,np.newaxis,:] - np.conj(lambda_n))
-            # H_s += A_n[ind3,ind4,np.newaxis] / (1j * omegas[np.newaxis,np.newaxis,:] - lambda_n)
-            # H_s += np.conj(A_n[ind3,ind4,np.newaxis]) / (1j * omegas[np.newaxis,np.newaxis,:] - np.conj(lambda_n))
-            frf += 1 / (1j * omegas -         lambda_n)  *         b_n[inp_node_ind] * mode_shape[np.newaxis, :] / a_n
-            frf += 1 / (1j * omegas - np.conj(lambda_n)) * np.conj(b_n[inp_node_ind] * mode_shape[np.newaxis, :] / a_n)
+            '''
+            We can get lamda and msh from anys modal .rst file (user ordering)
+            we can get msh, k, m and c from ansys binary file (solver ordering) 
+                but we will miss dof_ref for this
+            we can get k, m and c from from .full file (solver ordering?)
+            
+            ideally we would use lamda and msh from ansys modal and combine it with k, m and c from somewhere else
+            maybe we can use msh from ansys binary for computation of a_n
+            and msh from ansys modal for the input and output scaling
+            
+            check, that both msh are equivalent, just differently ordered....
+            '''
+            
+            
+            lambda_n = lamda[mode]
+            mode_shape_n = mode_shapes_n[:, mode:mode + 1] # complex vector (num_nodes,)
+            mode_shape = phi[:, mode:mode + 1] # complex vector (num_nodes,)
+            
+            a_n = 2 * lambda_n * mode_shape.T @ m_ @ mode_shape 
+            a_n += mode_shape.T @ c_ @ mode_shape
+            mode_shape = np.squeeze(mode_shape)
+        
+            this_frf  = 1 / (1j * omegas -         lambda_n)  *         mode_shape_n[inp_node_ind] * mode_shape_n.T / a_n        
+            this_frf += 1 / (1j * omegas - np.conj(lambda_n)) * np.conj(mode_shape_n[inp_node_ind] * mode_shape_n.T / a_n)
+            frf += this_frf
+            
+        if out_quant == 'a':
+            frf *=   -omegas**2
+        elif out_quant == 'v':
+            frf *= 1j*omegas
+        elif out_quant == 'd':
+            ...
+        else:
+            logger.warning(f'This output quantity is invalid: {out_quant}')
             
         self.omegas = omegas
         self.frf= frf
         
         self.state[8] = True
         
-        return omegas, frf    
+        return omegas, frf, dof_ref_red
+    
+    def modal_ext(self, damped=True, num_modes=None):  # Modal Analysis
+        ansys = self.ansys
+
+        print('External (in python) computation of modal parameters using the state-space formulation')
+        num_nodes = self.num_nodes
+        if num_modes is None:
+            num_modes = self.num_modes
+        assert num_modes <= num_nodes
+        if num_modes > 10 * num_nodes:
+            logger.warning(f'The number of modes {num_modes} should be greater/equal than 10 number of nodes {num_nodes}.')
+        
+        ansys.run('/SOL')
+        ansys.antype('MODAL')
+
+        ansys.outres(item='ERASE')
+        ansys.outres(item='ALL', freq='NONE')  # Disable all output
+        ansys.nsel(type='ALL')
+
+        ansys.outres(item='NSOL',
+                     freq='ALL'
+                     )  # Controls the solution data written to the database.
+        if damped:
+            if not self.globdamp:
+                logger.warning("Model is non-proportionally damped. Modal damping values may be errorneous.")
+            ansys.modopt(method='QRDAMP', nmode=num_modes, freqb=0,
+                         freqe=1e4,
+                         cpxmod='cplx',
+                         nrmkey='off',
+                         )
+        else:
+            ansys.modopt(method='LANB', nmode=num_modes, freqb=0,
+                         freqe=1e4,
+                         nrmkey='off',
+                         )
+
+        ansys.mxpand(nmode='all', elcalc=1)
+        ansys.wrfull()
+        
+        full_path = os.path.join(ansys.directory, ansys.jobname + '.full')
+        full = pyansys.read_binary(full_path)
+        dof_ref, k, m, c = full.load_kmc(as_sparse=False, sort=False)
+        
+        k += np.triu(k, 1).T
+        m += np.triu(m, 1).T
+        c += np.triu(c, 1).T
+        
+        # remove all-zero rows and columns
+        mask_0= ~np.all(k==0, axis=0)
+        mask_1 = ~np.all(k==0, axis=1)
+        
+        k_ = k[mask_0,:]
+        m_ = m[mask_0,:]
+        c_ = c[mask_0,:]
+        k_ = k_[:,mask_1]
+        m_ = m_[:,mask_1]
+        c_ = c_[:,mask_1]
+        
+        dof_ref = dof_ref[mask_1,:]
+        
+        # assemble state-space matrices as in Brincker and Ventura, Eq.5.103
+        o = np.zeros_like(k_)
+        A = np.vstack([np.hstack([ o,  m_]),
+                       np.hstack([ m_, c_])])
+        B = np.vstack([np.hstack([-m_, o ]),
+                       np.hstack([ o,  k_])])
+        
+        # solve Eigenvalue problem
+        w, v = scipy.linalg.eig(-B,A)
+        
+        
+        # compute omega
+        omegans = np.imag(w)
+        
+        # sort by ascending frequencies
+        sort_ind = np.argsort(omegans)
+        omegans = omegans[sort_ind]
+        # remove complex conjugates and remove all modes higher than num_modes
+        conj_ind = omegans > 0
+        lamda = w[sort_ind][conj_ind][:num_modes]
+        phi = v[v.shape[0]//2:, sort_ind][:, conj_ind][:, :num_modes]
+        
+        for mode in range(num_modes):
+            this_phi = phi[:,mode]
+            mu = this_phi.T @ m_ @np.conj(this_phi)
+            phi[:,mode] /= np.sqrt(mu)
+        
+        return k_, m_, c_, lamda, phi, dof_ref
+
+    @staticmethod
+    def dofs_str_to_ind(dofs):    
+        strdof_list = ['ux', 'uy', 'uz', 'rx', 'ry', 'rz']
+        dof_inds = []
+        for dof in dofs:
+            if dof in strdof_list:
+                dof_ind = strdof_list.index(dof)
+                dof_inds.append(dof_ind)
+            elif dof > 6:
+                dof_inds.append(dof)
+        return dof_inds
+    
     def ambient_ifrf(self, f_scale, deltat=None, dt_fact=None, timesteps=None, num_cycles=None, out_quant=['d', 'v', 'a'], dofs=['ux', 'uy', 'uz'], seed=None, **kwargs):
         '''
         a shortcut function for ambient using the linear frf and the
@@ -2348,119 +2476,63 @@ class Mechanical(MechanicalDummy):
             ansys.wrfull()
             ansys.finish()
             
-            if False:
-                ansys.aux2()
-                '''
-                APDL Guide 4.4
-                The mode shapes from the .MODE file and the DOF results from 
-                the .RST file are in the internal ordering, and they need 
-                to be converted before use with any of the matrices from the .FULL file, as shown below:
-                '''
-                ansys.smat(matrix='Nod2Solv', type='D', method='IMPORT', val1='FULL', val2=f"{self.jobname}.full", val3="NOD2SOLV")
-                # Permutation operators can not be exported, so the mode shapes must be redordered to solver ordering in APDL 
-                if damped:
-                    ansys.dmat(matrix="PhiI", type="Z", method="IMPORT", val1="MODE", val2=f"{self.jobname}.mode")
-                else:
-                    ansys.dmat(matrix="PhiI", type="D", method="IMPORT", val1="MODE", val2=f"{self.jobname}.mode")
-                ansys.mult(m1='Nod2Solv', t1='', m2='PhiI', t2='', m3='PhiB')
-                ansys.export(matrix="PhiB", format="MMF", fname="PhiB.bin")
-                msh = np.array(scipy.io.mmread('PhiB.bin'))
-                os.remove('PhiB.bin')
-                
-                ansys.smat(matrix="MatKD", type="D", method="IMPORT", val1="FULL", val2=f"{self.jobname}.full", val3="STIFF")
-                ansys.export(matrix="MatKD", format="MMF", fname="MatKD.bin")
-                K = scipy.io.mmread('MatKD.bin').toarray()
-                os.remove('MatKD.bin')
-                ansys.smat(matrix="MatMD", type="D", method="IMPORT", val1="FULL", val2=f"{self.jobname}.full", val3="MASS")
-                ansys.export(matrix="MatMD", format="MMF", fname="MatMD.bin")
-                M = scipy.io.mmread('MatMD.bin').toarray()
-                os.remove('MatMD.bin')
-                # try:
-                if damped:
-                    ansys.dmat(matrix="MatCD", type="D", method="IMPORT", val1="FULL", val2=f"{self.jobname}.full", val3="DAMP")
-                    ansys.export(matrix="MatCD", format="MMF", fname="MatCD.bin")
-                    C = scipy.io.mmread('MatCD.bin')
-                    os.remove('MatCD.bin')
-                # except Exception as e:
-                else:
-                    # print(e)
-                    C = np.zeros_like(K)
-            
-                # compute modal matrices
-                kappas = np.zeros((num_modes))
-                mus = np.zeros((num_modes))
-                etas = np.zeros((num_modes))
-                
-                for mode in range(num_modes):
-                    
-                    # TODO: should work, since I assume K, M and C are 3D
-                    # properly remove constraint nodes
-                    # check complex conjugate?
-                    msh_f = msh[:, mode]
-                    
-                    # unit normalization would have to be done for returned mode shapes
-                    # as well, otherwise subsequent calculations may be errorneous (e.g. frfs)
-                    if False:
-                        msh_f /= msh_f[np.argmax(np.abs(msh_f))]
-                    
-                    kappas[mode] = (msh_f.T.dot(K.dot(msh_f.conj()))).real
-                    mus[mode] = (msh_f.T.dot(M.dot(msh_f.conj()))).real
-                    etas[mode] = (msh_f.T.dot(C.dot(msh_f.conj()))).real
+            ansys.aux2()
+            '''
+            APDL Guide 4.4
+            The mode shapes from the .MODE file and the DOF results from 
+            the .RST file are in the internal ordering, and they need 
+            to be converted before use with any of the matrices from the .FULL file, as shown below:
+            '''
+            ansys.smat(matrix='Nod2Solv', type='D', method='IMPORT', val1='FULL', val2=f"{self.jobname}.full", val3="NOD2SOLV")
+            # Permutation operators can not be exported, so the mode shapes must be redordered to solver ordering in APDL 
+            if damped:
+                ansys.dmat(matrix="PhiI", type="Z", method="IMPORT", val1="MODE", val2=f"{self.jobname}.mode")
             else:
-                print('Direct computation of modal parameters')
+                ansys.dmat(matrix="PhiI", type="D", method="IMPORT", val1="MODE", val2=f"{self.jobname}.mode")
+            ansys.mult(m1='Nod2Solv', t1='', m2='PhiI', t2='', m3='PhiB')
+            ansys.export(matrix="PhiB", format="MMF", fname="PhiB.bin")
+            msh = np.array(scipy.io.mmread('PhiB.bin'))
+            os.remove('PhiB.bin')
+            
+            ansys.smat(matrix="MatKD", type="D", method="IMPORT", val1="FULL", val2=f"{self.jobname}.full", val3="STIFF")
+            ansys.export(matrix="MatKD", format="MMF", fname="MatKD.bin")
+            K = scipy.io.mmread('MatKD.bin').toarray()
+            os.remove('MatKD.bin')
+            ansys.smat(matrix="MatMD", type="D", method="IMPORT", val1="FULL", val2=f"{self.jobname}.full", val3="MASS")
+            ansys.export(matrix="MatMD", format="MMF", fname="MatMD.bin")
+            M = scipy.io.mmread('MatMD.bin').toarray()
+            os.remove('MatMD.bin')
+            # try:
+            if damped:
+                ansys.dmat(matrix="MatCD", type="D", method="IMPORT", val1="FULL", val2=f"{self.jobname}.full", val3="DAMP")
+                ansys.export(matrix="MatCD", format="MMF", fname="MatCD.bin")
+                C = scipy.io.mmread('MatCD.bin')
+                os.remove('MatCD.bin')
+            # except Exception as e:
+            else:
+                # print(e)
+                C = np.zeros_like(K)
+        
+            # compute modal matrices
+            kappas = np.zeros((num_modes))
+            mus = np.zeros((num_modes))
+            etas = np.zeros((num_modes))
+            
+            for mode in range(num_modes):
                 
-                full_path = os.path.join(ansys.directory, ansys.jobname + '.full')
-                full = pyansys.read_binary(full_path)
-                # # TODO: Check, that Nodes and DOFS are in the same order in modeshapes and k,m
-                dof_ref, k, m, c = full.load_kmc(as_sparse=False, sort=False)
-                k += np.triu(k, 1).T
-                m += np.triu(m, 1).T
-                c += np.triu(c, 1).T
-                del full
+                # TODO: should work, since I assume K, M and C are 3D
+                # properly remove constraint nodes
+                # check complex conjugate?
+                msh_f = msh[:, mode]
                 
-                mask1 = ~np.all(k==0, axis=1)
-                mask2= ~np.all(k==0, axis=0)
-                dof_ref_ = dof_ref[mask1,:]
-                k_ = k[mask2,:]
-                m_ = m[mask2,:]
-                c_ = c[mask2,:]
-                k_ = k_[:,mask1]
-                m_ = m_[:,mask1]
-                c_ = c_[:,mask1]
+                # unit normalization would have to be done for returned mode shapes
+                # as well, otherwise subsequent calculations may be errorneous (e.g. frfs)
+                if False:
+                    msh_f /= msh_f[np.argmax(np.abs(msh_f))]
                 
-                o = np.zeros_like(k_)
-                B = np.vstack([np.hstack([k_,o]),
-                               np.hstack([o,-m_])])
-                A = np.vstack([np.hstack([o,k_]),
-                               np.hstack([k_,-c_])])
-                '''!!!!!'''
-                # A = np.vstack([np.hstack([o,k_]),
-                #                np.hstack([k_,o])])
-                w,v = scipy.linalg.eig(A,-B)
-                
-                f = np.imag(w)/2/np.pi
-                zeta = -np.real(w)/np.abs(w)
-                
-                ind = np.argsort(f)
-                f = f[ind]
-                ind2 = (f > 0)
-                f = f[ind2][:num_modes]
-                zeta = zeta[ind][ind2][:num_modes]
-                
-                v = v[k_.shape[0]:, ind][:, ind2][:,:num_modes]
-                
-                mu = np.diag(v.T @ m_ @ np.conj(v))
-                
-                for mode in range(num_modes):
-                    v[:, mode] /= np.sqrt(mu[mode])
-                
-                kappas =  np.diag(v.T @ k_ @ v).real
-                mus = np.diag(v.T @ m_ @ v).real
-                etas = v.T @ c_ @ np.conj(v)
-                # print(etas)
-                if np.sum(np.abs(etas)) - np.sum(np.abs(np.diag(etas))) > np.sum(np.abs(np.diag(etas)))/100:
-                    logger.warning("Modal damping matrix is not diagonal. Non-classical modes expected.")
-                etas = np.diag(etas).real
+                kappas[mode] = (msh_f.T.dot(K.dot(msh_f.conj()))).real
+                mus[mode] = (msh_f.T.dot(M.dot(msh_f.conj()))).real
+                etas[mode] = (msh_f.T.dot(C.dot(msh_f.conj()))).real
             
         
         ansys.finish()
