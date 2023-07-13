@@ -139,6 +139,7 @@ class MechanicalDummy(object):
         self.kappas = None
         self.mus = None
         self.etas = None
+        self.gen_mod_coeff = None
         
         #signal_parameters
         self.deltat = None
@@ -293,6 +294,7 @@ class MechanicalDummy(object):
             out_dict['self.kappas'] = self.kappas
             out_dict['self.mus'] = self.mus
             out_dict['self.etas'] = self.etas
+            out_dict['self.gen_mod_coeff'] = self.gen_mod_coeff
         
         if self.state[5]:
             out_dict['self.frequencies_comp'] = self.frequencies_comp
@@ -451,6 +453,7 @@ class MechanicalDummy(object):
             mech.kappas = validate_array(in_dict['self.kappas'])
             mech.mus = validate_array(in_dict['self.mus'])
             mech.etas = validate_array(in_dict['self.etas'])
+            mech.gen_mod_coeff = validate_array(in_dict.get('self.etas', gen_mod_coeff))
         
         if state[5]:
             mech.frequencies_comp = in_dict['self.frequencies_comp']
@@ -650,6 +653,7 @@ class Mechanical(MechanicalDummy):
 
     @session_restore
     def voigt_kelvin(self, k="", d="", dof='UX',**kwargs):
+        print(k,d)
         ansys = self.ansys
 
         ansys.prep7()
@@ -1367,14 +1371,18 @@ class Mechanical(MechanicalDummy):
         nodes_coordinates = []
         k_vals = [0 for _ in range(num_nodes - 1)]
         masses = [0 for _ in range(num_nodes)]
-        d_vals = None  # [0 for i in range(num_nodes-1)]
+        d_vals = [0 for i in range(num_nodes-1)]
         eps_duff_vals = [0 for _ in range(num_nodes - 1)]
         sl_force_vals = [0 for _ in range(num_nodes - 1)]
         hyst_vals = [0 for _ in range(num_nodes - 1)]
         
+        
+        
         if isinstance(damping, (list, tuple)):
             if len(damping) == 2 and isinstance(damping[1], bool):
                 hyst_damp = damping[0]
+            else:
+                hyst_damp = None
         else:
             hyst_damp = None
         
@@ -1393,6 +1401,17 @@ class Mechanical(MechanicalDummy):
                     sl_force_vals[i - 1] = sl_forces
                 if hyst_damp is not None:
                     hyst_vals[i - 1] = hyst_damp
+                    
+        masses.append(800)
+        d_vals.append(6.651e3)
+        k_vals.append(1.1035e6)
+        eps_duff_vals.append(0)
+        sl_force_vals.append(0)
+        hyst_vals.append(0)
+        nodes_coordinates.append([i + 2, 0, 0, i + 1])
+        if num_modes == num_nodes - 1:
+            num_modes += 1
+        
         if num_meas_nodes is None and meas_nodes is None:
             meas_nodes = [node for node, _, _, _ in nodes_coordinates[1:]]  # exclude the constrained node
         elif num_meas_nodes is not None and meas_nodes is None:
@@ -2045,10 +2064,15 @@ class Mechanical(MechanicalDummy):
         
         dof_ind = ['ux', 'uy', 'uz'].index(inp_dof)
         
-        _, m_, c_, lamda, phi, dof_ref = self.modal_ext()
-        omegans = np.imag(lamda)
+        self.modal(modal_matrices=True) 
+        gen_mod_coeff = self.gen_mod_coeff
+        lamda = self.lamda
+        # lamda.imag *= 2*np.pi
+        # _, m_, c_, lamda, phi, dof_ref = self.modal_ext()
+        omegans = np.imag(lamda)# * 2 * np.pi
+        # print(omegans)
         
-        logger.warning('FRF computation for non-classical modes (non-proportional damping).')
+        logger.info('FRF computation for non-classical modes (non-proportional damping).')
         
         
         if fmax is None:
@@ -2058,50 +2082,51 @@ class Mechanical(MechanicalDummy):
         assert np.isclose(df * 2 * np.pi, (omegas[-1] - omegas[0]) / (N // 2 + 1 - 1))
         omegas = omegas[:, np.newaxis]
         
-        # if use_meas_nodes:
-        #     out_dofs = Mechanical.dofs_str_to_ind(out_dofs)
-        #     ndof = len(out_dofs)
-        #     meas_nodes = self.meas_nodes
-        #     n_nod = len(meas_nodes)
-        #     _, _,mode_shapes_n = self.numerical_response_parameters(compensate=True, dofs=out_dofs)
-        #
-        #     dof_ref_red = np.empty((len(meas_nodes)*ndof, 2))
-        #     for i in range(ndof):
-        #         dof_ref_red[i*n_nod:(i+1)*n_nod,0] = meas_nodes
-        #         dof_ref_red[i*n_nod:(i+1)*n_nod,1] = out_dofs[i]
-            
-        
-        
         if use_meas_nodes:
-            if out_dofs is None:
-                out_dofs = ['ux', 'uy', 'uz']
             out_dofs = Mechanical.dofs_str_to_ind(out_dofs)
             ndof = len(out_dofs)
             meas_nodes = self.meas_nodes
+            n_nod = len(meas_nodes)
+            _, _,mode_shapes_n = self.numerical_response_parameters(compensate=True, dofs=out_dofs)
         
-            # build indices for mode_shapes_n and mode_shapes
-            meas_ind = []
-            mod_ind = []
-            dof_ref_red = []
-            for node in meas_nodes:
-                for dof_ind in out_dofs:
-                    ind = np.where(np.logical_and(dof_ref[:,0]==node, dof_ref[:,1]==dof_ind))[0]
-                    dof_ref_red.append([node, dof_ind])
-                    if len(ind):
-                        meas_ind.append(ind[0])
-                        mod_ind.append(True)
-                    else:
-                        mod_ind.append(False)
-            meas_ind = np.array(meas_ind)
-            mod_ind = np.array(mod_ind)
-            dof_ref_red = np.array(dof_ref_red)
-        
-            mode_shapes_n = np.full((len(meas_nodes) * ndof, num_modes), 
-                                    np.nan + 1j*np.nan, dtype=complex)
-            mode_shapes_n[mod_ind,:] = phi[meas_ind, :]
+            dof_ref_red = np.empty((len(meas_nodes)*ndof, 2))
+            for i in range(ndof):
+                dof_ref_red[i*n_nod:(i+1)*n_nod,0] = meas_nodes
+                dof_ref_red[i*n_nod:(i+1)*n_nod,1] = out_dofs[i]
         else:
-            mode_shapes_n = phi
-            dof_ref_red = dof_ref
+            logger.warning('When use_meas_nodes=False, out_dofs is ignored. Returning full FRF.')
+            
+        #
+        # if use_meas_nodes:
+        #     if out_dofs is None:
+        #         out_dofs = ['ux', 'uy', 'uz']
+        #     out_dofs = Mechanical.dofs_str_to_ind(out_dofs)
+        #     ndof = len(out_dofs)
+        #     meas_nodes = self.meas_nodes
+        #
+        #     # build indices for mode_shapes_n and mode_shapes
+        #     meas_ind = []
+        #     mod_ind = []
+        #     dof_ref_red = []
+        #     for node in meas_nodes:
+        #         for dof_ind in out_dofs:
+        #             ind = np.where(np.logical_and(dof_ref[:,0]==node, dof_ref[:,1]==dof_ind))[0]
+        #             dof_ref_red.append([node, dof_ind])
+        #             if len(ind):
+        #                 meas_ind.append(ind[0])
+        #                 mod_ind.append(True)
+        #             else:
+        #                 mod_ind.append(False)
+        #     meas_ind = np.array(meas_ind)
+        #     mod_ind = np.array(mod_ind)
+        #     dof_ref_red = np.array(dof_ref_red)
+        #
+        #     mode_shapes_n = np.full((len(meas_nodes) * ndof, num_modes), 
+        #                             np.nan + 1j*np.nan, dtype=complex)
+        #     mode_shapes_n[mod_ind,:] = phi[meas_ind, :]
+        # else:
+        #     mode_shapes_n = phi
+        #     dof_ref_red = dof_ref
 
         inp_node_ind = np.logical_and(dof_ref_red[:,0] == inp_node, dof_ref_red[:,1] == dof_ind)        
         frf = np.zeros((N // 2 + 1, dof_ref_red.shape[0]), dtype=complex)
@@ -2118,17 +2143,23 @@ class Mechanical(MechanicalDummy):
             and msh from ansys modal for the input and output scaling
             
             check, that both msh are equivalent, just differently ordered....
+            
+            msh from ansys binary and msh from ansys modal rst are equivalent!
+            
             '''
             
             
             lambda_n = lamda[mode]
+            # lambda_n.real *= 2 * np.pi
             mode_shape_n = mode_shapes_n[:, mode:mode + 1] # complex vector (num_nodes,)
-            mode_shape = phi[:, mode:mode + 1] # complex vector (num_nodes,)
-            
-            a_n = 2 * lambda_n * mode_shape.T @ m_ @ mode_shape 
-            a_n += mode_shape.T @ c_ @ mode_shape
-            mode_shape = np.squeeze(mode_shape)
+            # mode_shape = phi[:, mode:mode + 1] # complex vector (num_nodes,)
+            #
+            # a_n = 2 * lambda_n * mode_shape.T @ m_ @ mode_shape 
+            # a_n += mode_shape.T @ c_ @ mode_shape
+            # mode_shape = np.squeeze(mode_shape)
         
+            a_n = gen_mod_coeff[mode]
+            
             this_frf  = 1 / (1j * omegas -         lambda_n)  *         mode_shape_n[inp_node_ind] * mode_shape_n.T / a_n        
             this_frf += 1 / (1j * omegas - np.conj(lambda_n)) * np.conj(mode_shape_n[inp_node_ind] * mode_shape_n.T / a_n)
             frf += this_frf
@@ -2381,10 +2412,11 @@ class Mechanical(MechanicalDummy):
                     kappas = self.kappas
                     mus =  self.mus
                     etas = self.etas
+                    gen_mod_coeff = self.gen_mod_coeff
                     if kappas is None or mus is None or etas is None:
                         pass
                     else:
-                        return frequencies, damping, mode_shapes, kappas,mus, etas
+                        return frequencies, damping, mode_shapes, kappas,mus, etas, gen_mod_coeff
                 else:
                     return frequencies, damping, mode_shapes
         elif not damped and num_modes == self.num_modes and use_cache:
@@ -2396,10 +2428,11 @@ class Mechanical(MechanicalDummy):
                     kappas = self.kappas
                     mus =  self.mus
                     etas = self.etas
+                    gen_mod_coeff = self.gen_mod_coeff
                     if kappas is None or mus is None:
                         pass
                     else:
-                        return frequencies, damping, mode_shapes, kappas,mus, etas
+                        return frequencies, damping, mode_shapes, kappas,mus, etas, gen_mod_coeff
                 else:
                     return frequencies, damping, mode_shapes
 
@@ -2451,7 +2484,7 @@ class Mechanical(MechanicalDummy):
                      )  # Controls the solution data written to the database.
         if damped:
             if not self.globdamp:
-                logger.warning("Model is non-proportionally damped. Modal damping values may be errorneous.")
+                logger.warning("Model is undamped or non-proportionally damped. Modal damping values may be errorneous.")
             ansys.modopt(method='QRDAMP', nmode=num_modes, freqb=0,
                          freqe=1e4,
                          cpxmod='cplx',
@@ -2470,6 +2503,78 @@ class Mechanical(MechanicalDummy):
 
         ansys.mxpand(nmode='all', elcalc=1)
         ansys.solve()
+        
+
+        #self.last_analysis = 'modal'
+
+        res = pyansys.read_binary(os.path.join(ansys.directory, ansys.jobname + '.rst'))
+
+        num_modes_ = res.nsets
+        if res._resultheader['cpxrst']:  # real and imaginary parts are saved as separate sets
+            num_modes_ //= 2
+        if num_modes_ != num_modes:
+            logger.warning(f'The number of numerical modes {num_modes_} differs from the requested number of modes {num_modes}.')
+            num_modes = num_modes_
+
+        nnodes = res._resultheader['nnod']
+        # print(nnodes, self.num_nodes)
+        # print(res._resultheader['neqv'])
+        # assert nnodes == self.num_nodes
+        ndof = res._resultheader['numdof']
+
+        mode_shapes = np.full((nnodes, ndof, num_modes), (1 + 1j) * np.nan, dtype=complex)
+        frequencies = np.full(num_modes, np.nan)
+        damping = np.full(num_modes, np.nan)
+
+        lamda = np.full((num_modes,), np.nan+1j*np.nan, dtype=complex)
+        # print(res.time_values)
+        if res._resultheader['cpxrst']:
+            # print('damped')
+            for mode in range(num_modes):
+                # print(res.time_values[2*mode:2*mode+1])
+                sigma = res.time_values[2 * mode] # real part
+                omega = res.time_values[2 * mode + 1] # imaginary part
+                if omega < 0 : continue  # complex conjugate pair
+                # print(omega)
+                lamda[mode] = (sigma+1j*omega)*2*np.pi
+                
+                frequencies[mode] = omega  # damped frequency
+                damping[mode] = -sigma / np.sqrt(sigma ** 2 + omega ** 2)
+
+                mode_shapes[:, :, mode].real = res.nodal_solution(2 * mode)[1]
+                mode_shapes[:, :, mode].imag = res.nodal_solution(2 * mode + 1)[1]
+            else:
+                nnum = res.nodal_solution(0)[0]
+
+        else:
+            # print('Undamped')
+            frequencies[:] = res.time_values
+            for mode in range(num_modes):
+                nnum, modal_disp = res.nodal_solution(mode)
+                mode_shapes[:, :, mode] = modal_disp
+                # print(frequencies[mode])
+            mode_shapes = mode_shapes.real
+            lamda=None
+            
+        # self.msh_ans_rst = np.copy(mode_shapes)
+        self.lamda = lamda
+        
+        # reduce mode shapes to meas_nodes and translational dof
+        if use_meas_nodes:
+            _,meas_indices = np.where(self.meas_nodes[:,None]==nnum)
+            mode_shapes = mode_shapes[meas_indices, :3, :]
+        else:
+            #account for internal element nodes by reducing length
+            mode_shapes = mode_shapes[nnum<=num_nodes, :3, :]
+        
+        if damped:
+            self.damped_frequencies = frequencies
+            self.modal_damping = damping
+            self.damped_mode_shapes = mode_shapes
+        else:
+            self.frequencies = frequencies
+            self.mode_shapes = mode_shapes
+        self.num_modes = num_modes
         
         if modal_matrices:
             
@@ -2517,6 +2622,8 @@ class Mechanical(MechanicalDummy):
             kappas = np.zeros((num_modes))
             mus = np.zeros((num_modes))
             etas = np.zeros((num_modes))
+            # generalized complex modal coefficients (Brincker and Ventura, Eq. 5.112)
+            gen_mod_coeff = np.zeros((num_modes), dtype=complex)
             
             for mode in range(num_modes):
                 
@@ -2524,6 +2631,7 @@ class Mechanical(MechanicalDummy):
                 # properly remove constraint nodes
                 # check complex conjugate?
                 msh_f = msh[:, mode]
+                lamda_n = lamda[mode]
                 
                 # unit normalization would have to be done for returned mode shapes
                 # as well, otherwise subsequent calculations may be errorneous (e.g. frfs)
@@ -2533,8 +2641,9 @@ class Mechanical(MechanicalDummy):
                 kappas[mode] = (msh_f.T.dot(K.dot(msh_f.conj()))).real
                 mus[mode] = (msh_f.T.dot(M.dot(msh_f.conj()))).real
                 etas[mode] = (msh_f.T.dot(C.dot(msh_f.conj()))).real
+                gen_mod_coeff[mode]  = msh_f.T @ M @ msh_f * 2 * lamda_n
+                gen_mod_coeff[mode] += msh_f.T @ C @ msh_f
             
-        
         ansys.finish()
         
         ansys.prep7()
@@ -2544,78 +2653,17 @@ class Mechanical(MechanicalDummy):
                 ansys.rmodif(nset, 1, real_constant[0])
                 ansys.rmodif(nset, 5, real_constant[1])
         ansys.finish()
-
-        #self.last_analysis = 'modal'
-
-        res = pyansys.read_binary(os.path.join(ansys.directory, ansys.jobname + '.rst'))
-
-        num_modes_ = res.nsets
-        if res._resultheader['cpxrst']:  # real and imaginary parts are saved as separate sets
-            num_modes_ //= 2
-        if num_modes_ != num_modes:
-            logger.warning(f'The number of numerical modes {num_modes_} differs from the requested number of modes {num_modes}.')
-            num_modes = num_modes_
-
-        nnodes = res._resultheader['nnod']
-        # print(nnodes, self.num_nodes)
-        # print(res._resultheader['neqv'])
-        # assert nnodes == self.num_nodes
-        ndof = res._resultheader['numdof']
-
-        mode_shapes = np.full((nnodes, ndof, num_modes), (1 + 1j) * np.nan, dtype=complex)
-        frequencies = np.full(num_modes, np.nan)
-        damping = np.full(num_modes, np.nan)
-
-        # print(res.time_values)
-        if res._resultheader['cpxrst']:
-            for mode in range(num_modes):
-                # print(res.time_values[2*mode:2*mode+1])
-                sigma = res.time_values[2 * mode] # real part
-                omega = res.time_values[2 * mode + 1] # imaginary part
-                if omega < 0 : continue  # complex conjugate pair
-
-                frequencies[mode] = omega  # damped frequency
-                damping[mode] = -sigma / np.sqrt(sigma ** 2 + omega ** 2)
-
-                mode_shapes[:, :, mode].real = res.nodal_solution(2 * mode)[1]
-                mode_shapes[:, :, mode].imag = res.nodal_solution(2 * mode + 1)[1]
-            else:
-                nnum = res.nodal_solution(0)[0]
-
-        else:
-            frequencies[:] = res.time_values
-            for mode in range(num_modes):
-                nnum, modal_disp = res.nodal_solution(mode)
-                mode_shapes[:, :, mode] = modal_disp
-            mode_shapes = mode_shapes.real
-            
         
-        # reduce mode shapes to meas_nodes and translational dof
-        if use_meas_nodes:
-            _,meas_indices = np.where(self.meas_nodes[:,None]==nnum)
-            mode_shapes = mode_shapes[meas_indices, :3, :]
-        else:
-            #account for internal element nodes by reducing length
-            mode_shapes = mode_shapes[nnum<=num_nodes, :3, :]
-        
-        if damped:
-            self.damped_frequencies = frequencies
-            self.modal_damping = damping
-            self.damped_mode_shapes = mode_shapes
-        else:
-            self.frequencies = frequencies
-            self.mode_shapes = mode_shapes
-        self.num_modes = num_modes
-        # print(mode_shapes.shape, mode_shapes)
         self.state[4] = True
         
         if modal_matrices:
             self.kappas = kappas
             self.mus = mus
             self.etas = etas
+            self.gen_mod_coeff = gen_mod_coeff
             # print(mode_shapes)
             # print(f'{frequencies} {damping} {np.sqrt(kappas/mus)/2/np.pi*np.sqrt(1-damping**2)} {etas/2/np.sqrt(mus*kappas)}')
-            return frequencies, damping, mode_shapes, kappas, mus, etas
+            return frequencies, damping, mode_shapes, kappas, mus, etas, gen_mod_coeff
         else:
             return frequencies, damping, mode_shapes
 
