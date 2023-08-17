@@ -1953,7 +1953,7 @@ class Mechanical(MechanicalDummy):
 
         return time_values, response_time_history, f , modal_imp_energies, modal_amplitudes
 
-    def frequency_response(self, N, inp_node, dof, fmax=None, out_quant='a', use_meas_nodes=True):
+    def frequency_response(self, N, inp_node, dof, fmax=None, out_quant='a', modes=None):
         '''
         Returns the onesided FRF matrix of the linear(ized) system
         at N//2 + 1 frequency lines for all nodes in meas_nodes
@@ -2009,7 +2009,10 @@ class Mechanical(MechanicalDummy):
         
         frf = np.zeros((N // 2 + 1, num_meas_nodes), dtype=complex)
         
-        for mode in range(num_modes):
+        if modes is None:
+            modes = range(num_modes)
+            
+        for mode in modes:
             
             omegan = omegans[mode]
             zeta = damping[mode]
@@ -2046,7 +2049,7 @@ class Mechanical(MechanicalDummy):
     
     def frequency_response_non_classical(self, N, inp_node, inp_dof, 
                                          use_meas_nodes=True, out_dofs=['ux','uy','uz'], 
-                                         fmax=None, out_quant='a'):
+                                         fmax=None, out_quant='a', modes=None):
         '''
         As in Brincker & Ventura: Introduction to Operational Modal Analysis, p. 99 ff
         
@@ -2131,7 +2134,10 @@ class Mechanical(MechanicalDummy):
         inp_node_ind = np.logical_and(dof_ref_red[:,0] == inp_node, dof_ref_red[:,1] == dof_ind)        
         frf = np.zeros((N // 2 + 1, dof_ref_red.shape[0]), dtype=complex)
         
-        for mode in range(num_modes):
+        if modes is None:
+            modes = range(num_modes)
+        
+        for mode in modes:
             '''
             We can get lamda and msh from anys modal .rst file (user ordering)
             we can get msh, k, m and c from ansys binary file (solver ordering) 
@@ -2638,9 +2644,9 @@ class Mechanical(MechanicalDummy):
                 if False:
                     msh_f /= msh_f[np.argmax(np.abs(msh_f))]
                 
-                kappas[mode] = (msh_f.T.dot(K.dot(msh_f.conj()))).real
-                mus[mode] = (msh_f.T.dot(M.dot(msh_f.conj()))).real
-                etas[mode] = (msh_f.T.dot(C.dot(msh_f.conj()))).real
+                kappas[mode]= (msh_f.T @ K @ msh_f.conj()).real
+                mus[mode]   = (msh_f.T @ M @ msh_f.conj()).real
+                etas[mode]  = (msh_f.T @ C @ msh_f.conj()).real
                 gen_mod_coeff[mode]  = msh_f.T @ M @ msh_f * 2 * lamda_n
                 gen_mod_coeff[mode] += msh_f.T @ C @ msh_f
             
