@@ -1656,12 +1656,16 @@ class PolyUQ(object):
             
             now=time.time()
             numeric_focals = [var.numeric_focals for var in vars_imp] # no-imp => []
+            logger.debug(f'{numeric_focals}, {vars_imp}')
             # palette = sns.color_palette(n_colors=n_imp_hyc)
             for i_hyc, hypercube in enumerate(imp_hyc_foc_inds):
                 # get focal sets / intervals
                 focals = np.vstack([focals[ind,:] for focals, ind in zip(numeric_focals, hypercube)])
                 vars_opt = focals[:,0]!=focals[:,1]# focals are not a singleton
                 n_vars_opt = np.sum(vars_opt)
+                
+                if not n_vars_opt:
+                    logger.warning("There are no free variables for interval optimization (n_vars_opt=0).")
                 
                 if plot_intp:
                     engine = scipy.stats.qmc.Halton(n_vars_imp)
