@@ -18,6 +18,7 @@ import sys
 import warnings
 from uncertainty import data_manager
 from mpmath import hyper
+from pickle import NONE
 
 warnings.filterwarnings("ignore", message="Initial guess is not within the specified bounds")
 import logging
@@ -468,6 +469,10 @@ class PolyUQ(object):
         self.S_point = None
         self.S_conf = None
         self.S_meth = None
+        
+        self.stoch_weights = None
+        self.stoch_stats = None
+        self.stoch_mass = None
         
     @property
     def all_vars(self):
@@ -2029,9 +2034,11 @@ class PolyUQ(object):
                         focals = np.vstack([focals[ind,:] for focals, ind in zip(numeric_focals, hypercube)])
                     else:
                         focals = np.empty((0,2))
+                    # TODO: reduce number of optimization variables if focal set is a singleton (see estimate_imp)
                     # vars_opt = focals[:,0]!=focals[:,1]# focals are not a singleton
                     # n_vars_opt = np.sum(vars_opt)
-                    print(focals, vars_inc)
+                    
+                    # print(focals, vars_inc)
                     bounds = focals
                     # bounds = [focs[ind] for focs, ind in zip(numeric_focals, inc_hyc_foc_inds[i_inc_hyc])]
                     init = np.mean(bounds, axis=1, keepdims=True)
