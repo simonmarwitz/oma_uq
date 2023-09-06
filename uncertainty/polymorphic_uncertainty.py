@@ -287,7 +287,11 @@ class MassFunction(UncertainVariable):
                 numeric_focals[i, :] = (incvar + lbound, incvar + ubound)
             else:    
                 numeric_focals[i, :] = (lbound, ubound)
-                
+            
+            if numeric_focals[i,0]>numeric_focals[i,1]:
+                logger.warning(f"Focal set {i} of variable {self.name} is not in valid order. Resetting to average singleton.")
+                numeric_focals[i,:] = np.mean(numeric_focals[i,:])
+            
         return numeric_focals
     
     @property
@@ -1578,295 +1582,317 @@ class PolyUQ(object):
         else:
             iter_ale = range(kwargs.pop('start_ale',0), kwargs.pop('end_ale',N_mcs_ale))
             
-        pbar = simplePbar(n_imp_hyc * len(iter_ale))
-        for n_ale in iter_ale:
-            # each supplementary aleatory sample defines boundaries on imprecise variables
-            #    do interval optimization using the pre-computed samples within these boundaries
-            #    (pre-computed epistemic samples may be the same for each aleatory sample while only imprecise input boundaries differ)
-            if logger.isEnabledFor(logging.DEBUG): logger.debug(f'At sample {n_ale} out of {N_mcs_ale}')
+        # pbar = simplePbar(n_imp_hyc * len(iter_ale))
+        if 'RAY_JOB_ID' in os.environ:
+            force_tty=False
+        else:
+            force_tty=True
             
-            if loop_ale:
-                this_out = out_samp[n_ale, :N_mcs_imp]
-            else:
-                this_out = out_samp[0, :N_mcs_imp]
+        from alive_progress import alive_bar
+        with  alive_bar(n_imp_hyc * len(iter_ale),force_tty=force_tty) as pbar:
+            for n_ale in iter_ale:
+                # each supplementary aleatory sample defines boundaries on imprecise variables
+                #    do interval optimization using the pre-computed samples within these boundaries
+                #    (pre-computed epistemic samples may be the same for each aleatory sample while only imprecise input boundaries differ)
+                if logger.isEnabledFor(logging.DEBUG): logger.debug(f'At sample {n_ale} out of {N_mcs_ale}')
                 
-            this_inp_suppl = inp_suppl_ale.iloc[n_ale]
-            this_inp_prim = inp_samp_prim.iloc[n_ale]
-            #
-            # # freeze the aleatory variables
-            # # to fix numeric focals of imprecise variables
-            for var in vars_ale:
-                if not var.primary:
-                    var.freeze(this_inp_suppl[var.name])
-                    if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{var}, {this_inp_suppl[var.name]}')
+                if loop_ale:
+                    this_out = out_samp[n_ale, :N_mcs_imp]
                 else:
-                    var.freeze(this_inp_prim[var.name])
-                    if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{var}, {this_inp_prim[var.name]}')
+                    this_out = out_samp[0, :N_mcs_imp]
                     
-            # # assemble arg_vars for verification
-            # arg_vars = kwargs.get('arg_vars', {})
-            # arg_vals_l = {key:None for key,_ in arg_vars.items()}
-            # arg_vals_h = {key:None for key,_ in arg_vars.items()}
-            # for var in vars_ale:
-            #     if var.primary:
-            #         var.freeze(this_inp_prim[var.name])
-            #         logger.debug(f'{var}, {this_inp_prim[var.name]}')
-            #         for arg,var_ in arg_vars.items():
-            #             if var_ == var:
-            #                 arg_vals_l[arg] = this_inp_prim[var.name]
-            #                 arg_vals_h[arg] = this_inp_prim[var.name]
-            #                 break
-            #         else:
-            #             pass
-            
-            out_max = np.max(this_out)
-            out_min = np.min(this_out)
-            out_range = out_max - out_min
-            
-            x_out_max = x_samp[np.argmax(this_out),:]
-            x_out_min = x_samp[np.argmin(this_out),:]
-            
-            if plot_res:
-                df = inp_samp_prim[[var.name for var in vars_imp]].iloc[:N_mcs_imp,:]
-                df[self.out_name] = this_out
-                grid = plot_grid(df, self.out_name)
-            
-            now= time.time()
-            interp =  interp_fun(scale(x_samp),  this_out, **kwargs)
-            # if isinstance(interp, scipy.interpolate.NearestNDInterpolator):
-            #     interp.neighbor_dist = neighbor_dist
-            #     print(interp.neighbor_dist)
-            # print(type(interp))
-            if logger.isEnabledFor(logging.DEBUG): logger.debug(f'Took {time.time()-now:1.2f} s to build interpolator of type {type(interp)}.')
-            
-            if intp_err_warn is not None:
-                now=time.time()
-                # fit interpolator and estimate interpolator error 
-                # by k-runs of leave-one-out cross validation
-                # or k-fold cross validation, depending on the sample size 
-                # finally use all samples for the interpolator
-                # k = np.arange(N_mcs) #loo 
-                # k = np.random.randint(0, N_mcs, int(N_mcs//10)) # 10 % num sample runs of loo 
-                k = np.random.randint(0, N_mcs_imp, min(N_mcs_imp,100)) # 100 sample runs of loo 
-                val_errs = []
-                ind = np.ones(N_mcs_imp, dtype=bool)
-                if 1<N_mcs_imp<10*len(k): # do loo
-                    for k_i in k:
-                        ind[k_i] = False
-                        interp_loo =  interp_fun(scale(x_samp[ind,:]),  this_out[ind], **kwargs)
-                        err = interp_loo(scale(x_samp[~ind,:])) - this_out[~ind]
-                        val_errs.append(err)
-                        ind[k_i] = True
-                    
-                    intp_err = np.sqrt(np.nanmean(np.power(val_errs, 2))) / out_range
-                    if intp_err*100 > intp_err_warn:
-                        logger.warning(f'RMSE of interpolator using {len(k)} runs of leave-one-out cross-validation: {intp_err*100:1.3f} percent')
-                elif 1<N_mcs_imp: # do lko
-                    ind[k]=False
-                    interp_lko =  interp_fun(scale(x_samp[ind,:]),  this_out[ind], **kwargs)
-                    val_errs = interp_lko(scale(x_samp[~ind,:])) - this_out[~ind]
-                    
-                    intp_err = np.sqrt(np.nanmean(np.power(val_errs, 2))) / out_range
-                    if intp_err*100 > intp_err_warn:
-                        logger.warning(f'RMSE of interpolator using leave-{len(k)}-out cross-validation: {intp_err*100:1.3f} percent')
-                else:
-                    intp_err = np.nan
-                intp_errors[n_ale] = intp_err
-            
-                if logger.isEnabledFor(logging.DEBUG): logger.debug(f'Took {time.time()-now:1.2f} s to cross-validate interpolator.')
-            
-            now=time.time()
-            numeric_focals = [var.numeric_focals for var in vars_imp] # no-imp => []
-            if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{numeric_focals}, {vars_imp}, {imp_hyc_foc_inds}')
-            # palette = sns.color_palette(n_colors=n_imp_hyc)
-            for i_hyc, hypercube in enumerate(imp_hyc_foc_inds):
-                # get focal sets / intervals
-                if hypercube:
-                    focals = np.vstack([focals[ind,:] for focals, ind in zip(numeric_focals, hypercube)])
-                else:
-                    focals = np.empty((0,2))
-                vars_opt = focals[:,0]!=focals[:,1]# focals are not a singleton
-                n_vars_opt = np.sum(vars_opt)
-                    
-                    
-                if plot_intp:
-                    engine = scipy.stats.qmc.Halton(n_vars_imp)
-                    inputs_hyc = engine.random(3**n_vars_imp)
-                    for i_var in range(n_vars_imp):
-                        minvar, maxvar = focals[i_var,:]
-                        inputs_hyc[:, i_var] *= maxvar - minvar
-                        inputs_hyc[:, i_var] += minvar
-                        
-                    outputs_hyc = interp(scale(inputs_hyc))
-                    # maxout_hyc = np.max(outputs_hyc)
-                    # minout_hyc = np.min(outputs_hyc)
-                    df_hyc = pd.DataFrame(inputs_hyc, columns = [var.name for var in vars_imp])
-                    df_hyc[self.out_name] = outputs_hyc
-                    plot_hyc_grid(df_hyc, grid, self.out_name, 
-                                  #maxx, minx, 
-                                  #maxout_hyc, minout_hyc
-                                  )
-                
-                # transform boundaries to unit cube for penalization
-                unit_bounds = np.empty_like(focals)
-                for lu in range(2):
-                    unit_bounds[:,lu] = scale(focals[:,lu])
-                    
-                # hyc_vol_frac = np.product(unit_bounds[:,1] - unit_bounds[:,0])
-                # initialize memory for optimizing x in wrapper interval_range
-                temp_x = np.copy(np.mean(unit_bounds, axis=1))[np.newaxis,:]
-                if isinstance(interp, scipy.interpolate.NearestNDInterpolator):
-                    temp_dists = np.empty((1,n_vars_imp))
-                else:
-                    temp_dists = None
-                # interpolator needs input of shape (S, n_vars_imp)
-                # optimizer needs input of shape (n_vars_opt,) (minimize) or (S,2 * n_vars_opt) (global)
-                # init is shape (n_vars_imp,1) and so is temp_x 
-                # focals is shape (n_vars_imp, 2) and so is focals and so is unit_bounds
-                
-                    
-                    
-                if opt_meth=='Nelder-Mead':
-                    options = kwargs.get('options',{})
-                    options['adaptive'] = True
-                else:
-                    options = kwargs.get('options',{})
-                
-                
-                if not n_vars_opt:
-                    if n_ale == iter_ale[0]:
-                        logger.warning(f"There are no free variables for interval optimization, hypercube {i_hyc} might be bounded by singletons.")
-                    unit_x_low = unit_bounds[:,0]
-                    unit_x_up = unit_bounds[:,1]
-                    n_vars_opt = n_vars_imp
-                    vars_opt = np.ones((n_vars_opt,), dtype=bool)
-                    assert np.all(unit_x_low==unit_x_up)
-                elif n_imp_hyc == 1:
-                    if n_ale == iter_ale[0]:
-                        logger.warning("There are no imprecise variables.")
-                    unit_x_low = unit_bounds[:,0]
-                    unit_x_up = unit_bounds[:,1]
-                    n_vars_opt = n_vars_imp
-                    vars_opt = np.ones((n_vars_opt,), dtype=bool)
-                    assert np.all(unit_x_low==unit_x_up)
-                    
-                elif isinstance(opt_meth, str) and opt_meth!='genetic':
-                    
-                    resl = scipy.optimize.minimize(interval_range, 
-                                np.concatenate([x_out_min[vars_opt], x_out_max[vars_opt]]),  
-                                method=opt_meth, 
-                                args=(interp,temp_x,unit_bounds,temp_dists, vars_opt, n_vars_opt),
-                                bounds=np.vstack([unit_bounds[vars_opt], unit_bounds[vars_opt]]), # (2 * n_opt_vars, 2)
-                                options=options)
-                    unit_x_low = resl.x[:n_vars_opt]
-                    unit_x_up = resl.x[n_vars_opt:]
-
-                    if not resl.success:
-                        logger.warning(f'interval optimization failed on hypercube {i_hyc} of sample {n_ale} with message: {resl.message}')
-                    
-                elif opt_meth=='genetic':
-                    popsize = 15
-                    S = popsize * 2 * n_vars_opt
-                    temp_x_vec = np.repeat(temp_x, S, axis=0) # (S, 2 * n_vars)
-                    temp_dists_vec = np.repeat(temp_dists, S, axis=0) # (S, 2 * n_vars)
-                    init = scipy.stats.qmc.Halton(2 * n_vars_opt).random(S) # (S, 2 * n_vars_opt)
-
-                    resl = scipy.optimize.differential_evolution(interval_range, 
-                                np.vstack([unit_bounds[vars_opt,:], unit_bounds[vars_opt,:]]), # (2 * n_vars_opt, 2)
-                                args=(interp,temp_x_vec,unit_bounds,temp_dists_vec, vars_opt, n_vars_opt),
-                                polish=False,
-                                init=init,
-                                vectorized=True, 
-                                updating='deferred')
-                    
-                    unit_x_low = resl.x[:n_vars_opt]
-                    unit_x_up = resl.x[n_vars_opt:]
-                else:
-                    logger.warning('Attempting Brute Force Interval optimization.')
-                    unit_x_intv = scipy.optimize.brute(interval_range, 
-                                np.vstack([unit_bounds[vars_opt,:], unit_bounds[vars_opt,:]]),
-                                args=(interp,temp_x,unit_bounds,temp_dists, vars_opt, n_vars_opt),Ns=10)
-                    unit_x_low = unit_x_intv[:n_vars_opt]
-                    unit_x_up = unit_x_intv[n_vars_opt:]
-                
-                temp_x[:,vars_opt] = unit_x_low
-                out_of_bounds = np.logical_or((temp_x - unit_bounds[:,0]) <-1e-8,
-                                              (temp_x - unit_bounds[:,1]) > 1e-8)
-                if np.any(out_of_bounds):
-                    logger.warning(f'Minimum out of bounds at sample {n_ale} hypercube {i_hyc} for variable nr {np.where(out_of_bounds)[1]}')
-                
-                out_low = interp(temp_x)
-                if out_low < out_min:
-                    err = np.abs(out_min - out_low)[0]
-                    intp_undershot[0] += 1
-                    intp_undershot[1] += err
-                    out_low = out_min
-                    if err / out_range * 100 > extrp_warn:
-                        logger.warning(f'Extrapolation by {err/out_range*100:1.3f} percent (interpolation domain min) at sample {n_ale} hypercube {i_hyc}.')
-                    
-                if isinstance(interp, scipy.interpolate.NearestNDInterpolator):
-                    i, _ = interp.neighbor_dist(temp_x)
-                    x_low = x_samp[i,:]
-                else:
-                    x_low = unscale(temp_x)
-                
-                temp_x[:,vars_opt] = unit_x_up
-                out_of_bounds = np.logical_or((temp_x - unit_bounds[:,0]) <-1e-8,
-                                              (temp_x - unit_bounds[:,1]) > 1e-8)
-                if np.any(out_of_bounds):
-                    logger.warning(f'Maximum out of bounds at sample {n_ale} hypercube {i_hyc} for variable nr {np.where(out_of_bounds)[1]}')
-                    
-                out_up = interp(temp_x)
-                if out_up > out_max:
-                    err = np.abs((out_up - out_max))[0]
-                    intp_exceed[0] += 1
-                    intp_exceed[1] += err
-                    out_up = out_max
-                    if err / out_range * 100 > extrp_warn:
-                        logger.warning(f'Extrapolation by {err/out_range*100:1.3f} percent (interpolation domain max) at sample {n_ale} hypercube {i_hyc}.')
-                    
-                if isinstance(interp, scipy.interpolate.NearestNDInterpolator):
-                    i, _ = interp.neighbor_dist(temp_x)
-                    x_up = x_samp[i,:]
-                else:
-                    x_up = unscale(temp_x)
-                    
-                if plot_res:
-                    plot_opt_res_grid(grid, vars_opt, 
-                                      x_low, x_up, 
-                                      focals, 
-                                      self.out_valid[1], self.out_valid[0], 
-                                      out_low, out_up)
-                    
-                imp_foc[n_ale, i_hyc, :] = out_low, out_up
-                
-                # assemble validation sample points (for linear or rbf interpolators)
-                if not isinstance(interp, scipy.interpolate.NearestNDInterpolator):
-                    # val_samp_prim axis 3 is ordered in as all_vars_prim 
-                    # [var for var in vars_ale if var.primary] + list(vars_imp)
-                    for i,var in enumerate([var for var in vars_ale if var.primary]):
-                        assert var.value is not None 
-                        val_samp_prim[n_ale, i_hyc, i, :] = var.value
+                this_inp_suppl = inp_suppl_ale.iloc[n_ale]
+                this_inp_prim = inp_samp_prim.iloc[n_ale]
+                #
+                # # freeze the aleatory variables
+                # # to fix numeric focals of imprecise variables
+                for var in vars_ale:
+                    if not var.primary:
+                        var.freeze(this_inp_suppl[var.name])
+                        if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{var}, {this_inp_suppl[var.name]}')
                     else:
-                        # no primary aleatory variables
-                        i = -1
-                    i += 1
-                    for j, b in enumerate(vars_opt):
-                        # if b:
-                        val_samp_prim[n_ale, i_hyc, j + i, :] = x_low[0,j], x_up[0,j]
-                        # else:
-                        #     val_samp_prim[n_ale, i_hyc, j + i, 0] = focals[j,0]
+                        var.freeze(this_inp_prim[var.name])
+                        if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{var}, {this_inp_prim[var.name]}')
+                        
+                # # assemble arg_vars for verification
+                # arg_vars = kwargs.get('arg_vars', {})
+                # arg_vals_l = {key:None for key,_ in arg_vars.items()}
+                # arg_vals_h = {key:None for key,_ in arg_vars.items()}
+                # for var in vars_ale:
+                #     if var.primary:
+                #         var.freeze(this_inp_prim[var.name])
+                #         logger.debug(f'{var}, {this_inp_prim[var.name]}')
+                #         for arg,var_ in arg_vars.items():
+                #             if var_ == var:
+                #                 arg_vals_l[arg] = this_inp_prim[var.name]
+                #                 arg_vals_h[arg] = this_inp_prim[var.name]
+                #                 break
+                #         else:
+                #             pass
                 
-                if print_res_ranges:
-                    bl=focals[vars_opt,0]
-                    bh=focals[vars_opt,1]
-                    opt_var=0
-                    for focal, var, b in zip(focals, vars_imp, vars_opt):
-                        if not b:
-                            continue
-                        pl=int((unit_x_low[opt_var]-bl[opt_var])/(bh[opt_var]-bl[opt_var])*100)
-                        ph=int((unit_x_up[opt_var]-bl[opt_var])/(bh[opt_var]-bl[opt_var])*100)
-                        s=f'{var.name[:6]}\t{bl[opt_var]:1.2g}\t'
+                out_max = np.max(this_out)
+                out_min = np.min(this_out)
+                out_range = out_max - out_min
+                
+                x_out_max = x_samp[np.argmax(this_out),:]
+                x_out_min = x_samp[np.argmin(this_out),:]
+                
+                if plot_res:
+                    df = inp_samp_prim[[var.name for var in vars_imp]].iloc[:N_mcs_imp,:]
+                    df[self.out_name] = this_out
+                    grid = plot_grid(df, self.out_name)
+                
+                now= time.time()
+                interp =  interp_fun(scale(x_samp),  this_out, **kwargs)
+                # if isinstance(interp, scipy.interpolate.NearestNDInterpolator):
+                #     interp.neighbor_dist = neighbor_dist
+                #     print(interp.neighbor_dist)
+                # print(type(interp))
+                if logger.isEnabledFor(logging.DEBUG): logger.debug(f'Took {time.time()-now:1.2f} s to build interpolator of type {type(interp)}.')
+                
+                if intp_err_warn is not None:
+                    now=time.time()
+                    # fit interpolator and estimate interpolator error 
+                    # by k-runs of leave-one-out cross validation
+                    # or k-fold cross validation, depending on the sample size 
+                    # finally use all samples for the interpolator
+                    # k = np.arange(N_mcs) #loo 
+                    # k = np.random.randint(0, N_mcs, int(N_mcs//10)) # 10 % num sample runs of loo 
+                    k = np.random.randint(0, N_mcs_imp, min(N_mcs_imp,100)) # 100 sample runs of loo 
+                    val_errs = []
+                    ind = np.ones(N_mcs_imp, dtype=bool)
+                    if 1<N_mcs_imp<10*len(k): # do loo
+                        for k_i in k:
+                            ind[k_i] = False
+                            interp_loo =  interp_fun(scale(x_samp[ind,:]),  this_out[ind], **kwargs)
+                            err = interp_loo(scale(x_samp[~ind,:])) - this_out[~ind]
+                            val_errs.append(err)
+                            ind[k_i] = True
+                        
+                        intp_err = np.sqrt(np.nanmean(np.power(val_errs, 2))) / out_range
+                        if intp_err*100 > intp_err_warn:
+                            logger.warning(f'RMSE of interpolator using {len(k)} runs of leave-one-out cross-validation: {intp_err*100:1.3f} percent')
+                    elif 1<N_mcs_imp: # do lko
+                        ind[k]=False
+                        interp_lko =  interp_fun(scale(x_samp[ind,:]),  this_out[ind], **kwargs)
+                        val_errs = interp_lko(scale(x_samp[~ind,:])) - this_out[~ind]
+                        
+                        intp_err = np.sqrt(np.nanmean(np.power(val_errs, 2))) / out_range
+                        if intp_err*100 > intp_err_warn:
+                            logger.warning(f'RMSE of interpolator using leave-{len(k)}-out cross-validation: {intp_err*100:1.3f} percent')
+                    else:
+                        intp_err = np.nan
+                    intp_errors[n_ale] = intp_err
+                
+                    if logger.isEnabledFor(logging.DEBUG): logger.debug(f'Took {time.time()-now:1.2f} s to cross-validate interpolator.')
+                
+                now=time.time()
+                numeric_focals = [var.numeric_focals for var in vars_imp] # no-imp => []
+                if logger.isEnabledFor(logging.DEBUG): logger.debug(f'{numeric_focals}, {vars_imp}, {imp_hyc_foc_inds}')
+                # palette = sns.color_palette(n_colors=n_imp_hyc)
+                for i_hyc, hypercube in enumerate(imp_hyc_foc_inds):
+                    # get focal sets / intervals
+                    if hypercube:
+                        focals = np.vstack([focals[ind,:] for focals, ind in zip(numeric_focals, hypercube)])
+                    else:
+                        focals = np.empty((0,2))
+                    vars_opt = focals[:,0]!=focals[:,1]# focals are not a singleton
+                    n_vars_opt = np.sum(vars_opt)
+                        
+                        
+                    if plot_intp:
+                        engine = scipy.stats.qmc.Halton(n_vars_imp)
+                        inputs_hyc = engine.random(3**n_vars_imp)
+                        for i_var in range(n_vars_imp):
+                            minvar, maxvar = focals[i_var,:]
+                            inputs_hyc[:, i_var] *= maxvar - minvar
+                            inputs_hyc[:, i_var] += minvar
+                            
+                        outputs_hyc = interp(scale(inputs_hyc))
+                        # maxout_hyc = np.max(outputs_hyc)
+                        # minout_hyc = np.min(outputs_hyc)
+                        df_hyc = pd.DataFrame(inputs_hyc, columns = [var.name for var in vars_imp])
+                        df_hyc[self.out_name] = outputs_hyc
+                        plot_hyc_grid(df_hyc, grid, self.out_name, 
+                                      #maxx, minx, 
+                                      #maxout_hyc, minout_hyc
+                                      )
+                    
+                    # transform boundaries to unit cube for penalization
+                    unit_bounds = np.empty_like(focals)
+                    for lu in range(2):
+                        unit_bounds[:,lu] = scale(focals[:,lu])
+                        
+                    # hyc_vol_frac = np.product(unit_bounds[:,1] - unit_bounds[:,0])
+                    # initialize memory for optimizing x in wrapper interval_range
+                    temp_x = np.copy(np.mean(unit_bounds, axis=1))[np.newaxis,:]
+                    if isinstance(interp, scipy.interpolate.NearestNDInterpolator):
+                        temp_dists = np.empty((1,n_vars_imp))
+                    else:
+                        temp_dists = None
+                    # interpolator needs input of shape (S, n_vars_imp)
+                    # optimizer needs input of shape (n_vars_opt,) (minimize) or (S,2 * n_vars_opt) (global)
+                    # init is shape (n_vars_imp,1) and so is temp_x 
+                    # focals is shape (n_vars_imp, 2) and so is focals and so is unit_bounds
+                    
+                        
+                        
+                    if opt_meth=='Nelder-Mead':
+                        options = kwargs.get('options',{})
+                        options['adaptive'] = True
+                    else:
+                        options = kwargs.get('options',{})
+                    
+                    
+                    if not n_vars_opt:
+                        if n_ale == iter_ale[0]:
+                            logger.warning(f"There are no free variables for interval optimization, hypercube {i_hyc} might be bounded by singletons.")
+                        unit_x_low = unit_bounds[:,0]
+                        unit_x_up = unit_bounds[:,1]
+                        n_vars_opt = n_vars_imp
+                        vars_opt = np.ones((n_vars_opt,), dtype=bool)
+                        assert np.all(unit_x_low==unit_x_up)
+                    elif n_imp_hyc == 1:
+                        if n_ale == iter_ale[0]:
+                            logger.warning("There are no imprecise variables.")
+                        unit_x_low = unit_bounds[:,0]
+                        unit_x_up = unit_bounds[:,1]
+                        n_vars_opt = n_vars_imp
+                        vars_opt = np.ones((n_vars_opt,), dtype=bool)
+                        assert np.all(unit_x_low==unit_x_up)
+                        
+                    elif isinstance(opt_meth, str) and opt_meth!='genetic':
+                        init = np.concatenate([np.mean(unit_bounds[vars_opt,:],axis=1),np.mean(unit_bounds[vars_opt,:],axis=1)]) #center of hypercube
+                        resl = scipy.optimize.minimize(interval_range, 
+                                    # np.concatenate([scale(x_out_min[vars_opt]), scale(x_out_max[vars_opt])]),
+                                    init,
+                                    method=opt_meth, 
+                                    args=(interp,temp_x,unit_bounds,temp_dists, vars_opt, n_vars_opt),
+                                    bounds=np.vstack([unit_bounds[vars_opt], unit_bounds[vars_opt]]), # (2 * n_opt_vars, 2)
+                                    options=options)
+                        unit_x_low = resl.x[:n_vars_opt]
+                        unit_x_up = resl.x[n_vars_opt:]
+    
+                        if not resl.success:
+                            logger.warning(f'interval optimization failed on hypercube {i_hyc} of sample {n_ale} with message: {resl.message}')
+                        
+                    elif opt_meth=='genetic':
+                        popsize = 15
+                        S = popsize * 2 * n_vars_opt
+                        temp_x_vec = np.repeat(temp_x, S, axis=0) # (S, 2 * n_vars)
+                        temp_dists_vec = np.repeat(temp_dists, S, axis=0) # (S, 2 * n_vars)
+                        init = scipy.stats.qmc.Halton(2 * n_vars_opt).random(S) # (S, 2 * n_vars_opt)
+    
+                        resl = scipy.optimize.differential_evolution(interval_range, 
+                                    np.vstack([unit_bounds[vars_opt,:], unit_bounds[vars_opt,:]]), # (2 * n_vars_opt, 2)
+                                    args=(interp,temp_x_vec,unit_bounds,temp_dists_vec, vars_opt, n_vars_opt),
+                                    polish=False,
+                                    init=init, # random points in unit hypercube, might be out of bounds
+                                    vectorized=True, 
+                                    updating='deferred')
+                        
+                        unit_x_low = resl.x[:n_vars_opt]
+                        unit_x_up = resl.x[n_vars_opt:]
+                    else:
+                        logger.warning('Attempting Brute Force Interval optimization.')
+                        unit_x_intv = scipy.optimize.brute(interval_range, 
+                                    np.vstack([unit_bounds[vars_opt,:], unit_bounds[vars_opt,:]]),
+                                    args=(interp,temp_x,unit_bounds,temp_dists, vars_opt, n_vars_opt),Ns=10)
+                        unit_x_low = unit_x_intv[:n_vars_opt]
+                        unit_x_up = unit_x_intv[n_vars_opt:]
+                    
+                    temp_x[:,vars_opt] = unit_x_low
+                    out_of_bounds = np.logical_or((temp_x - unit_bounds[:,0]) <-1e-8,
+                                                  (temp_x - unit_bounds[:,1]) > 1e-8)
+                    if np.any(out_of_bounds):
+                        logger.warning(f'Minimum out of bounds at sample {n_ale} hypercube {i_hyc} for variable nr {np.where(out_of_bounds)[1]}')
+                    
+                    out_low = interp(temp_x)
+                    if out_low < out_min:
+                        err = np.abs(out_min - out_low)[0]
+                        intp_undershot[0] += 1
+                        intp_undershot[1] += err
+                        out_low = out_min
+                        if err / out_range * 100 > extrp_warn:
+                            logger.warning(f'Extrapolation by {err/out_range*100:1.3f} percent (interpolation domain min) at sample {n_ale} hypercube {i_hyc}.')
+                        
+                    if isinstance(interp, scipy.interpolate.NearestNDInterpolator):
+                        i, _ = interp.neighbor_dist(temp_x)
+                        x_low = x_samp[i,:]
+                    else:
+                        x_low = unscale(temp_x)
+                    
+                    temp_x[:,vars_opt] = unit_x_up
+                    out_of_bounds = np.logical_or((temp_x - unit_bounds[:,0]) <-1e-8,
+                                                  (temp_x - unit_bounds[:,1]) > 1e-8)
+                    if np.any(out_of_bounds):
+                        logger.warning(f'Maximum out of bounds at sample {n_ale} hypercube {i_hyc} for variable nr {np.where(out_of_bounds)[1]}')
+                        
+                    out_up = interp(temp_x)
+                    if out_up > out_max:
+                        err = np.abs((out_up - out_max))[0]
+                        intp_exceed[0] += 1
+                        intp_exceed[1] += err
+                        out_up = out_max
+                        if err / out_range * 100 > extrp_warn:
+                            logger.warning(f'Extrapolation by {err/out_range*100:1.3f} percent (interpolation domain max) at sample {n_ale} hypercube {i_hyc}.')
+                        
+                    if isinstance(interp, scipy.interpolate.NearestNDInterpolator):
+                        i, _ = interp.neighbor_dist(temp_x)
+                        x_up = x_samp[i,:]
+                    else:
+                        x_up = unscale(temp_x)
+                        
+                    if plot_res:
+                        plot_opt_res_grid(grid, vars_opt, 
+                                          x_low, x_up, 
+                                          focals, 
+                                          self.out_valid[1], self.out_valid[0], 
+                                          out_low, out_up)
+                        
+                    imp_foc[n_ale, i_hyc, :] = out_low, out_up
+                    
+                    # assemble validation sample points (for linear or rbf interpolators)
+                    if not isinstance(interp, scipy.interpolate.NearestNDInterpolator):
+                        # val_samp_prim axis 3 is ordered in as all_vars_prim 
+                        # [var for var in vars_ale if var.primary] + list(vars_imp)
+                        for i,var in enumerate([var for var in vars_ale if var.primary]):
+                            assert var.value is not None 
+                            val_samp_prim[n_ale, i_hyc, i, :] = var.value
+                        else:
+                            # no primary aleatory variables
+                            i = -1
+                        i += 1
+                        for j, b in enumerate(vars_opt):
+                            # if b:
+                            val_samp_prim[n_ale, i_hyc, j + i, :] = x_low[0,j], x_up[0,j]
+                            # else:
+                            #     val_samp_prim[n_ale, i_hyc, j + i, 0] = focals[j,0]
+                    
+                    if print_res_ranges:
+                        bl=focals[vars_opt,0]
+                        bh=focals[vars_opt,1]
+                        opt_var=0
+                        for focal, var, b in zip(focals, vars_imp, vars_opt):
+                            if not b:
+                                continue
+                            pl=int((unit_x_low[opt_var]-bl[opt_var])/(bh[opt_var]-bl[opt_var])*100)
+                            ph=int((unit_x_up[opt_var]-bl[opt_var])/(bh[opt_var]-bl[opt_var])*100)
+                            s=f'{var.name[:6]}\t{bl[opt_var]:1.2g}\t'
+                            for i in range(100):
+                                if i==pl and i==ph: s+='+'
+                                elif i==pl: s+='<'
+                                elif i==ph: s+='>'
+                                elif i==0: s+='|'
+                                elif i==99: s+='|'
+                                else: s+='.'
+                            s+=f'{bh[opt_var]:1.2g}'
+                            logger.info(s)
+                            opt_var+=1
+                            
+                        pl=int((out_low-out_min)/(out_max-out_min)*100)
+                        ph=int((out_up-out_min)/(out_max-out_min)*100)
+                        s=f'out \t{out_min:1.2g}\t'
                         for i in range(100):
                             if i==pl and i==ph: s+='+'
                             elif i==pl: s+='<'
@@ -1874,59 +1900,46 @@ class PolyUQ(object):
                             elif i==0: s+='|'
                             elif i==99: s+='|'
                             else: s+='.'
-                        s+=f'{bh[opt_var]:1.2g}'
+                        s+=f'{out_max:1.2g}'
                         logger.info(s)
-                        opt_var+=1
-                        
-                    pl=int((out_low-out_min)/(out_max-out_min)*100)
-                    ph=int((out_up-out_min)/(out_max-out_min)*100)
-                    s=f'out \t{out_min:1.2g}\t'
-                    for i in range(100):
-                        if i==pl and i==ph: s+='+'
-                        elif i==pl: s+='<'
-                        elif i==ph: s+='>'
-                        elif i==0: s+='|'
-                        elif i==99: s+='|'
-                        else: s+='.'
-                    s+=f'{out_max:1.2g}'
-                    logger.info(s)
-                
-                # arg_vars = kwargs.get('arg_vars', None)
-                # mapping_function = kwargs.get('mapping_function', None)
-                # if arg_vars is not None and mapping_function is not None:
-                #
-                #     opt_var=0
-                #     for focal, var, b in zip(focals, vars_imp, vars_opt):
-                #         for arg,var_ in arg_vars.items():
-                #             if var_ == var:
-                #                 if b:
-                #                     arg_vals_l[arg] = unit_x_low[opt_var]
-                #                     arg_vals_h[arg] = unit_x_up[opt_var]
-                #                     opt_var+=1
-                #                 else:
-                #                     arg_vals_l[arg] = focal[0]
-                #                     arg_vals_h[arg] = focal[1]
-                #                 break
-                #         else:
-                #             print(f'could not find {var} in {arg_vars}')
-                #
-                #     fmin_true = mapping_function(**arg_vals_l, working_dir='/dev/shm/womo1998',result_dir='/dev/shm/womo1998', skip_existing=False)
-                #     fmax_true = mapping_function(**arg_vals_h, working_dir='/dev/shm/womo1998',result_dir='/dev/shm/womo1998', skip_existing=False)
-                #     logger.debug(f'Approximated: /t {out_low:1.3f}...{out_up:1.3f}')
-                #     logger.debug(f'True: /t {fmin_true:1.3f}...{fmax_true:1.3f}')
-                #
-                #     imp_foc[n_ale, i_hyc, :] = fmin_true, fmax_true
-                
-                next(pbar)
-                if plot_res:
-                    from IPython import display
-                    display.display(plt.gcf())
-                    display.clear_output(wait=True)
-                    time.sleep(1)
-                    input("Hit any key to continue...")
                     
-            if logger.isEnabledFor(logging.DEBUG): logger.debug(f'Took {time.time()-now:1.2f} s for interval optimization of all {n_imp_hyc} hypercubes.')
-            if logger.isEnabledFor(logging.DEBUG): logger.debug(imp_foc[n_ale, :, :])
+                    # arg_vars = kwargs.get('arg_vars', None)
+                    # mapping_function = kwargs.get('mapping_function', None)
+                    # if arg_vars is not None and mapping_function is not None:
+                    #
+                    #     opt_var=0
+                    #     for focal, var, b in zip(focals, vars_imp, vars_opt):
+                    #         for arg,var_ in arg_vars.items():
+                    #             if var_ == var:
+                    #                 if b:
+                    #                     arg_vals_l[arg] = unit_x_low[opt_var]
+                    #                     arg_vals_h[arg] = unit_x_up[opt_var]
+                    #                     opt_var+=1
+                    #                 else:
+                    #                     arg_vals_l[arg] = focal[0]
+                    #                     arg_vals_h[arg] = focal[1]
+                    #                 break
+                    #         else:
+                    #             print(f'could not find {var} in {arg_vars}')
+                    #
+                    #     fmin_true = mapping_function(**arg_vals_l, working_dir='/dev/shm/womo1998',result_dir='/dev/shm/womo1998', skip_existing=False)
+                    #     fmax_true = mapping_function(**arg_vals_h, working_dir='/dev/shm/womo1998',result_dir='/dev/shm/womo1998', skip_existing=False)
+                    #     logger.debug(f'Approximated: /t {out_low:1.3f}...{out_up:1.3f}')
+                    #     logger.debug(f'True: /t {fmin_true:1.3f}...{fmax_true:1.3f}')
+                    #
+                    #     imp_foc[n_ale, i_hyc, :] = fmin_true, fmax_true
+                    
+                    # next(pbar)
+                    pbar()
+                    if plot_res:
+                        from IPython import display
+                        display.display(plt.gcf())
+                        display.clear_output(wait=True)
+                        time.sleep(1)
+                        input("Hit any key to continue...")
+                        
+                if logger.isEnabledFor(logging.DEBUG): logger.debug(f'Took {time.time()-now:1.2f} s for interval optimization of all {n_imp_hyc} hypercubes.')
+                if logger.isEnabledFor(logging.DEBUG): logger.debug(imp_foc[n_ale, :, :])
         
         self.imp_foc = imp_foc
         self.val_samp_prim = val_samp_prim
