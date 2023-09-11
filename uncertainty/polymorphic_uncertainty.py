@@ -1584,14 +1584,17 @@ class PolyUQ(object):
             
         # pbar = simplePbar(n_imp_hyc * len(iter_ale))
         if 'RAY_JOB_ID' in os.environ:
-            force_tty=True
-            refresh_secs = 240 # every four minutes
+            bar_kwargs={
+                'force_tty':True,
+                'refresh_secs':240, # every four minutes
+                'bar':None,
+                'spinner':None,
+                'enrich_print':False}
         else:
-            force_tty=True
-            refresh_secs = 0
+            bar_kwargs={'force_tty':True}
             
         from alive_progress import alive_bar
-        with  alive_bar(n_imp_hyc * len(iter_ale),force_tty=force_tty, refresh_secs=refresh_secs) as pbar:
+        with  alive_bar(n_imp_hyc * len(iter_ale),**bar_kwargs) as pbar:
             for n_ale in iter_ale:
                 # each supplementary aleatory sample defines boundaries on imprecise variables
                 #    do interval optimization using the pre-computed samples within these boundaries
