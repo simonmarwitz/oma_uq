@@ -2709,6 +2709,7 @@ class PolyUQ(object):
             self.val_samp_prim = validate_array(in_dict.get('self.val_samp_prim'))
             self.intp_errors = validate_array(in_dict.get('self.intp_errors'))
             self.intp_exceed = validate_array(in_dict.get('self.intp_exceed'))
+            self.intp_undershot = validate_array(in_dict.get('self.intp_undershot'))
             
         if differential is None or differential=='stoch':
             self.stoch_mass = validate_array(in_dict.get('self.stoch_mass'))
