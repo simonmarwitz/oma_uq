@@ -4,7 +4,7 @@ import pandas as pd
 import scipy.stats
 import scipy.stats.qmc
 import scipy.optimize
-import scipy.interpolate
+# import scipy.interpolate
 import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -17,14 +17,14 @@ import time
 import sys
 import warnings
 from uncertainty import data_manager
-from mpmath import hyper
-from pickle import NONE
 
 warnings.filterwarnings("ignore", message="Initial guess is not within the specified bounds")
 import logging
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.setLevel(level=logging.INFO)
+
+from alive_progress import alive_bar
 
 '''
 TODO:
@@ -1593,7 +1593,6 @@ class PolyUQ(object):
         else:
             bar_kwargs={'force_tty':True}
             
-        from alive_progress import alive_bar
         with  alive_bar(n_imp_hyc * len(iter_ale),**bar_kwargs) as pbar:
             for n_ale in iter_ale:
                 # each supplementary aleatory sample defines boundaries on imprecise variables
@@ -2042,9 +2041,19 @@ class PolyUQ(object):
         # compute belief functions for each statistic
         focals_stats = np.full((n_stat, n_hyc, 2), np.nan)
         hyc_mass = np.empty((n_hyc,))
-        
-        if True:#vars_inc:
-            pbar = simplePbar(n_imp_hyc * n_inc_hyc*n_stat)
+                # pbar = simplePbar(n_imp_hyc * len(iter_ale))
+        if 'RAY_JOB_ID' in os.environ:
+            bar_kwargs={
+                'force_tty':True,
+                'refresh_secs':240, # every four minutes
+                'bar':None,
+                'spinner':None,
+                'enrich_print':False}
+        else:
+            bar_kwargs={'force_tty':True}
+            
+        with  alive_bar(n_imp_hyc * n_inc_hyc*n_stat, **bar_kwargs) as pbar:
+            # pbar = simplePbar(n_imp_hyc * n_inc_hyc*n_stat)
             for i_imp_hyc in range(n_imp_hyc):
                 for i_inc_hyc, hypercube in enumerate(inc_hyc_foc_inds):
                     i_hyc = i_imp_hyc * n_inc_hyc + i_inc_hyc
@@ -2109,7 +2118,8 @@ class PolyUQ(object):
                         #     focals_stats[i_stat, i_hyc, 0] = min( resll.fun,  reslu.fun)
                         #     focals_stats[i_stat, i_hyc, 1] = max(-resul.fun, -resuu.fun)
                         
-                        next(pbar)
+                        # next(pbar)
+                        pbar()
                     
                     # plt.figure()
                     # cm = 0
@@ -2125,20 +2135,20 @@ class PolyUQ(object):
                     logger.debug(f'Took {time.time()-now:1.2f} s for interval optimization of {n_stat} statistics on hypercube {i_hyc}.')
                 # break        
                 hyc_mass[i_imp_hyc * n_inc_hyc: (i_imp_hyc + 1 ) * n_inc_hyc ] = inc_hyc_mass * imp_hyc_mass[i_imp_hyc] 
-        else: #no incompleteness
-            '''
-            No incompleteness means: 
-                - no interval optimization needed
-                - just apply the statistic to each imp_foc and put in focals_stats twice
-            '''
-            raise NotImplementedError('Needs implementation, copy relevant code from above')
-            # with HiddenPrints():
-            #     p_weights = self.probabilities_imp() 
-            # for i_imp_hyc in range(n_imp_hyc):
-            #     for high_low in range(2):
-            #         stat = stat_fun(imp_foc[:, i_imp_hyc, high_low], p_weights[:, i_imp_hyc], None, **stat_fun_kwargs)
-            #         focals_stats[:, i_imp_hyc, high_low] = stat
-            # hyc_mass = imp_hyc_mass
+        # else: #no incompleteness
+        #     '''
+        #     No incompleteness means: 
+        #         - no interval optimization needed
+        #         - just apply the statistic to each imp_foc and put in focals_stats twice
+        #     '''
+        #     raise NotImplementedError('Needs implementation, copy relevant code from above')
+        #     # with HiddenPrints():
+        #     #     p_weights = self.probabilities_imp() 
+        #     # for i_imp_hyc in range(n_imp_hyc):
+        #     #     for high_low in range(2):
+        #     #         stat = stat_fun(imp_foc[:, i_imp_hyc, high_low], p_weights[:, i_imp_hyc], None, **stat_fun_kwargs)
+        #     #         focals_stats[:, i_imp_hyc, high_low] = stat
+        #     # hyc_mass = imp_hyc_mass
         
         self.focals_stats = focals_stats
         self.focals_mass = hyc_mass
