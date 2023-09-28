@@ -131,6 +131,7 @@ class RandomVariable(UncertainVariable):
             else:
                 raise TypeError(f"Random variable {self} is neither discrete nor continuous but {type(rv)}.")
             
+            logger.debug(f'RandomVariable {self.name} with parameter set {params} has support {this_supp}')
             supp[0] = min(supp[0], this_supp[0])
             supp[1] = max(supp[1], this_supp[1])
         if np.isnan(supp).any():
@@ -333,7 +334,8 @@ class MassFunction(UncertainVariable):
             
             supp[0] = min(supp[0], lbound)
             supp[1] = max(supp[1], ubound)
-
+        
+            logger.debug(f'MassFunction {self.name} has support {supp}')
         if np.isnan(supp).any():
             raise RuntimeError(f"Variable {self} has invalid support. Check your definitions")
         return supp
@@ -1248,12 +1250,15 @@ class PolyUQ(object):
         all_hyp_vars = set(chain(*hyc_hyp_vars))
         # assemble probability weights from primary aleatory variables 
         for var in vars_ale:
+            logger.debug(var)
             if var in all_hyp_vars and var.primary:
                 logger.info(f'Variable {var.name} is primary and a hyper variable. Ignoring primary state for probability weights.')
                 continue
             if var.primary:
                 # assign weight to to all hypercubes
                 # sampling pdf for each value (uniform) = 1 / np.diff(var_supp) 
+                logger.debug(var.prob_dens(inp_samp_prim[var.name])[270])
+                # logger.debug(np.diff(var_supp[var.name])[270])
                 p_weights *= np.repeat(var.prob_dens(inp_samp_prim[var.name])[:,np.newaxis]*np.diff(var_supp[var.name]), n_imp_hyc, axis=1)
             
         # probabilities are computed for pre-computed stochastic samples as the product of PDFs of the underlying RVs
@@ -1264,18 +1269,26 @@ class PolyUQ(object):
         for i_weight, i_imp_hyc in enumerate(it_imp):
             hyp_vars = hyc_hyp_vars[i_imp_hyc]
             for hyp_var in hyp_vars:
+                logger.debug(hyp_var)
                 if not isinstance(hyp_var, UncertainVariable): continue
                 # p_weights[:, i_imp_hyc] *= hyp_var.prob_dens(inp_suppl_ale[hyp_var.name])
                 if not hyp_var.name in hyp_dens: 
                     # caching probability densities if a variable is hypervariable of multiple variables
                     if hyp_var.primary:
                         hyp_dens[hyp_var.name] = hyp_var.prob_dens(inp_samp_prim[hyp_var.name])*np.diff(var_supp[hyp_var.name])
+                        logger.debug(hyp_var.prob_dens(inp_samp_prim[hyp_var.name])[270])
+                        # logger.debug(np.diff(var_supp[hyp_var.name])[270])
                     else:
                         hyp_dens[hyp_var.name] = hyp_var.prob_dens(inp_suppl_ale[hyp_var.name])*np.diff(var_supp[hyp_var.name])
+                        logger.debug(hyp_var.prob_dens(inp_suppl_ale[hyp_var.name])[270])
+                        # logger.debug(np.diff(var_supp[hyp_var.name])[270])
                 p_weights[:, i_weight] *= hyp_dens[hyp_var.name]
+            # logger.debug(hyp_dens[hyp_var.name][270])
+            logger.debug(p_weights[270, i_weight])
             # normalize
             # dividing by sum: Normalization constant 1/C
             p_weights[:, i_weight] /= np.sum(p_weights[:, i_weight]) 
+            logger.debug(p_weights[270, i_weight])
         
         if i_imp is None:
             return p_weights
@@ -1583,7 +1596,7 @@ class PolyUQ(object):
             iter_ale = range(kwargs.pop('start_ale',0), kwargs.pop('end_ale',N_mcs_ale))
             
         # pbar = simplePbar(n_imp_hyc * len(iter_ale))
-        if 'RAY_JOB_ID' in os.environ:
+        if 'RAY_JOB_ID' in os.environ or plot_res:
             bar_kwargs={
                 'force_tty':True,
                 'refresh_secs':240, # every four minutes
@@ -1857,7 +1870,8 @@ class PolyUQ(object):
                     imp_foc[n_ale, i_hyc, :] = out_low, out_up
                     
                     # assemble validation sample points (for linear or rbf interpolators)
-                    if not isinstance(interp, scipy.interpolate.NearestNDInterpolator):
+                    # if not isinstance(interp, scipy.interpolate.NearestNDInterpolator):
+                    if True:
                         # val_samp_prim axis 3 is ordered in as all_vars_prim 
                         # [var for var in vars_ale if var.primary] + list(vars_imp)
                         for i,var in enumerate([var for var in vars_ale if var.primary]):
@@ -1981,7 +1995,7 @@ class PolyUQ(object):
                 stat_vals[bound] = stat_fun(imp_foc[sort_ind[:,bound],i_imp_hyc, bound], p_weights[sort_ind[:,bound]], i_stat,  min_max, **stat_fun_kwargs) # min
             # # high boundary
             # stat_vals[1] = stat_fun(samp[:, 1], p_weights[sort_ind[:,1]], i_stat,  min_max, **stat_fun_kwargs) # min
-            
+            logger.debug(stat_vals)
             return stat_vals
         
         def interval_range(x, stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_opt, n_vars_opt, stat_fun_kwargs, ):
