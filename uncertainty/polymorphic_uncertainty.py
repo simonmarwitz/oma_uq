@@ -303,6 +303,8 @@ class MassFunction(UncertainVariable):
             return ()
         
     def support(self, *args, **kwargs):
+        
+        
         incremental = self.incremental
         focals = self._focals
         supp = [np.infty, -np.infty]
@@ -310,30 +312,58 @@ class MassFunction(UncertainVariable):
             
             if isinstance(lbound, UncertainVariable):
                 lsupp = lbound.support(*args, **kwargs) 
+            elif np.isnan(lbound):
+                lsupp = (0, 0)
             else:
                 lsupp = (lbound, lbound)
                 
             if isinstance(ubound, UncertainVariable):
-                ubound = ubound.support(*args, **kwargs)[1]
-            elif np.isnan(ubound):  # crisp set / interval / singleton
-                ubound = lsupp[1]
+                usupp = ubound.support(*args, **kwargs)
+            elif np.isnan(ubound):
+                usupp = (0, 0)
+            else:
+                usupp = (ubound, ubound)
                 
             if isinstance(incvar, UncertainVariable):
                 incsupp = incvar.support(*args, **kwargs)
+            elif np.isnan(incvar):
+                incsupp = (0, 0)
             else:
                 incsupp = (incvar, incvar)
-    
-            if incremental and isinstance(incvar, UncertainVariable):
-                lbound = incsupp[0] + lsupp[0]
-                ubound += incsupp[1]
-            elif incremental:
-                lbound = lsupp[0]
-                ubound += lsupp[1]
-            else:    
-                lbound = lsupp[0]
+                
+            this_supp = [incsupp[0] + lsupp[0], incsupp[1] + usupp[1]]
+            if incsupp[0] + usupp[0] < incsupp[0] + lsupp[0]:
+                logger.warning(f'{self}: Upper boundary {incvar}+{ubound} may subceed lower boundary {incvar}+{lbound}')
+            if incsupp[1] + lsupp[1] > incsupp[1] + usupp[1]:
+                logger.warning(f'{self}: Lower boundary {incvar}+{lbound} may exceed upper boundary {incvar}+{ubound}')
+            if this_supp[1] < this_supp[0]:
+                raise RuntimeError(f'{self}: Lower boundary exceeds upper boundary')
+                
+            #
+            # if isinstance(ubound, UncertainVariable):
+            #     ubound = ubound.support(*args, **kwargs)[1]
+            # elif np.isnan(ubound):  # crisp set / interval / singleton
+            #     if incremental:
+            #         ubound = 0
+            #     else:
+            #         ubound = lsupp[1]
+            #
+            # if isinstance(incvar, UncertainVariable):
+            #     incsupp = incvar.support(*args, **kwargs)
+            # else:
+            #     incsupp = (incvar, incvar)
+            #
+            # if incremental and isinstance(incvar, UncertainVariable):
+            #     lbound = incsupp[0] + lsupp[0]
+            #     ubound += incsupp[1]
+            # elif incremental:
+            #     lbound = lsupp[0]
+            #     ubound += lsupp[1]
+            # else:    
+            #     lbound = lsupp[0]
             
-            supp[0] = min(supp[0], lbound)
-            supp[1] = max(supp[1], ubound)
+            supp[0] = min(supp[0], this_supp[0])
+            supp[1] = max(supp[1], this_supp[1])
         
             logger.debug(f'MassFunction {self.name} has support {supp}')
         if np.isnan(supp).any():
@@ -3387,4 +3417,12 @@ def test_to_dm():
     
 
 if __name__ == '__main__':
+    example_num = 4
+    N_mcs = 1000000
+    run_num=1
+    
+    _, dim_ex, vars_ale, vars_epi, = [example_a, example_b, example_c, example_d, example_e][example_num]()
+    
+    poly_uq = PolyUQ(vars_ale, vars_epi, dim_ex=dim_ex)
+    poly_uq.sample_qmc(10, 10, percentiles=(0.000001, 0.999999), check_discr=False)
     pass
