@@ -27,6 +27,8 @@ def get_pcd(purpose='print'):
         print_context_dict['figure.figsize'] = (5.53/2,2.96)
     elif purpose=='beamer_half':
         print_context_dict['figure.figsize'] = (5.53/2,2.96)
+    elif purpose=='BB15':
+        print_context_dict['figure.figsize'] = (130/25.4, 130 / 25.4 / 1.618)
         
     # figsize=(5.53,2.96)#beamer 16:9
     # figsize=(3.69,2.96)#beamer 16:9
