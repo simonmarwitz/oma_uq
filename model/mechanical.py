@@ -653,7 +653,7 @@ class Mechanical(MechanicalDummy):
 
     @session_restore
     def voigt_kelvin(self, k="", d="", dof='UX',**kwargs):
-        print(k,d)
+        # print(k,d)
         ansys = self.ansys
 
         ansys.prep7()
@@ -826,6 +826,7 @@ class Mechanical(MechanicalDummy):
                 'rho'       : 7850,
                 'Iy'        : 0.0136045227118697,
                 'Iz'        : 0.0136045227118697,
+                'Iyz'       : 0,
 
                 'ky_nl'     : 117476.186062221,
                 'kz_nl'     : 135649.815292788,
@@ -918,7 +919,7 @@ class Mechanical(MechanicalDummy):
                      self.voigt_kelvin(struct_parms['kz_tmd'], struct_parms['dz_tmd'], 'UZ')]
         wire_elems = [self.voigt_kelvin(struct_parms['ky_nl'],dof='UY'), self.voigt_kelvin(struct_parms['kz_nl'], dof='UZ')]
         pipe = self.beam(struct_parms['E'],0.2,struct_parms['rho'],
-                         struct_parms['A'],struct_parms['Iy'],struct_parms['Iz'],0)
+                         struct_parms['A'],struct_parms['Iy'],struct_parms['Iz'],struct_parms['Iyz'])
         
         
         ansys.type(pipe[0])

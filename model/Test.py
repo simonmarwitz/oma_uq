@@ -1,57 +1,29 @@
-'''
-Created on Jun 4, 2021
-
-@author: womo1998
-'''
-import time
 import numpy as np
-import matplotlib
-from mpldatacursor import datacursor
-matplotlib.use('qt5Agg')
-import matplotlib.pyplot as plot
-# plot.ioff()
-import os
-import glob
-import shutil
-
-import logging
-# global logger
-# LOG = logging.getLogger('')
-logging.basicConfig(level=logging.INFO)
-
-# import scipy.stats
-# import scipy.optimize
-# import scipy.signal
-import scipy.io
-# import scipy.integrate
-import uuid
-import warnings
-# import simpleflock
-
-import pyansys
-
-
-import numpy as np
-import scipy.signal
 import matplotlib.pyplot as plt
-import os
-import logging
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.animation import FuncAnimation
 
-import functools
-from contextlib import contextmanager
+fig, ax = plt.subplots(subplot_kw=dict(projection="3d"))
 
-from core import *
+def get_arrow(theta):
+    x = np.cos(theta)
+    y = np.sin(theta)
+    z = 0
+    u = np.sin(2*theta)
+    v = np.sin(3*theta)
+    w = np.cos(3*theta)
+    return x,y,z,u,v,w
 
-def main():
-    print('Hello World')
-    
-if __name__ == '__main__':
-    # N=8192
-    # dec_fact=4
-    # numtap_fact=41
-    # nyq_rat=2.5
-    # system_signal_decimate(N,dec_fact, numtap_fact,nyq_rat, True)
-    # plt.show()
-    # uq_dec_noise()
-    main()
-    
+quiver = ax.quiver(*get_arrow(0))
+
+ax.set_xlim(-2, 2)
+ax.set_ylim(-2, 2)
+ax.set_zlim(-2, 2)
+
+def update(theta):
+    global quiver
+    quiver.remove()
+    quiver = ax.quiver(*get_arrow(theta))
+
+ani = FuncAnimation(fig, update, frames=np.linspace(0,2*np.pi,200), interval=50)
+plt.show()
