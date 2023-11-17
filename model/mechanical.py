@@ -888,10 +888,11 @@ class Mechanical(MechanicalDummy):
         ansys.get("NKNL1", "NODE", "", "NUM", "MIN")
         ansys.get("NKNL2", "NODE", "", "NUM", "MAX")
         
-    
+        ansys.seltol(1e-6)
         ansys.nsel("S", "LOC", comp='x', vmin=x_tmd, vmax=x_tmd)
         ansys.get("NKTMD1", "NODE", "", "NUM", "MIN")
         ansys.get("NKTMD2", "NODE", "", "NUM", "MAX")
+        ansys.seltol('')
         
 
         if meas_locs is not None:
@@ -903,7 +904,7 @@ class Mechanical(MechanicalDummy):
                 n_node=nodes_coordinates[idx, 0]
                 ansys.nsel('A', item='NODE', comp='', vmin=n_node, vmax=n_node)
             
-            ansys.nsel('A', item='NODE',vmin='NKTMD2', vmax='NKTMD2')
+            # ansys.nsel('A', item='NODE',vmin='NKTMD2', vmax='NKTMD2')
             ansys.cm(cname='meas_nodes', entity='NODE') # and group into component assembly
         else:
             ansys.nsel(type='ALL')
@@ -927,7 +928,7 @@ class Mechanical(MechanicalDummy):
         ansys.real("")
         ansys.esys(0)
         ansys.secnum(1)
-        for i in range(1,Ldiv): # actually build ntn_cons beforehand end iterate over them
+        for i in range(1,Ldiv): # actually build ntn_cons beforehand and iterate over them
             ansys.e(i, i+1)
 
         ansys.type(tmd_elems[0][0])
@@ -2797,7 +2798,9 @@ class Mechanical(MechanicalDummy):
 
         return dt_fact, deltat, num_cycles, timesteps, mode_index
 
-    def transient(self, f=None, d=None, timint=1, deltat=None, timesteps=None, out_quant=['d', 'v', 'a'],
+    def transient(self, fy=None, fz=None, d=None, 
+                  timint=1, deltat=None, timesteps=None, 
+                  out_quant=['d', 'v', 'a'],
                   chunksize=10000, chunk_restart=False, **kwargs):
         ansys = self.ansys
 
@@ -2929,19 +2932,34 @@ class Mechanical(MechanicalDummy):
             if stepsize == 0:
                 break
             # print(chunknum, timesteps//chunksize, timesteps%chunksize, stepsize, chunksize, timesteps, (chunknum+1)*chunksize)
-            if f is not None:
+            if fy is not None:
                 table = np.zeros((stepsize + 1, self.num_nodes + 1))
                 table[1:, 0] = np.arange(chunknum * chunksize + 1, chunknum * chunksize + 1 + stepsize) * deltat
                 table[0, 1:] = np.arange(1, self.num_nodes + 1)
-                table[1:, 1:] = f[chunknum * chunksize:chunknum * chunksize + stepsize, :]
-
-                np.savetxt(f'{self.jobname}.csv', table)
+                table[1:, 1:] = fy[chunknum * chunksize:chunknum * chunksize + stepsize, :]
+                fname = os.path.join(ansys.directory, ansys.jobname + '_y.csv')
+                np.savetxt(fname, table)
 
                 with supress_logging(ansys):
                     ansys.starset(par='EXCITATION')
 
                 ansys.dim(par='EXCITATION', type='TABLE', imax=stepsize, jmax=self.num_nodes, kmax="", var1='TIME', var2='NODE')
-                ansys.tread(par='EXCITATION', fname=f'{self.jobname}', ext='csv')
+                ansys.tread(par='EXCITATION', fname=f'{ansys.jobname}_y', ext='csv')
+
+                ansys.f(node='ALL', lab='FY', value='%EXCITATION%')
+            if fz is not None:
+                table = np.zeros((stepsize + 1, self.num_nodes + 1))
+                table[1:, 0] = np.arange(chunknum * chunksize + 1, chunknum * chunksize + 1 + stepsize) * deltat
+                table[0, 1:] = np.arange(1, self.num_nodes + 1)
+                table[1:, 1:] = fz[chunknum * chunksize:chunknum * chunksize + stepsize, :]
+                fname = os.path.join(ansys.directory, ansys.jobname + '_z.csv')
+                np.savetxt(fname, table)
+
+                with supress_logging(ansys):
+                    ansys.starset(par='EXCITATION')
+
+                ansys.dim(par='EXCITATION', type='TABLE', imax=stepsize, jmax=self.num_nodes, kmax="", var1='TIME', var2='NODE')
+                ansys.tread(par='EXCITATION', fname=f'{ansys.jobname}_z', ext='csv')
 
                 ansys.f(node='ALL', lab='FZ', value='%EXCITATION%')
 
