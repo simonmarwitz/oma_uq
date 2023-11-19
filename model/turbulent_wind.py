@@ -57,8 +57,7 @@ def spectral_wind_field(x_grid, f_w, L, U_bar, sigma, C_uz=10, C_vz=7, C_wz=4, s
                 # S_ww_full_b[i - j, j,:] = S_ww[i,:]
             else:
                 delta_x = np.abs(x_grid[i] - x_grid[j])
-                print(delta_x)
-                
+                                
                 coh_u = np.exp(-2 * f_w * C_uz * delta_x / (U_bar[i] + U_bar[j])) 
                 r = np.sqrt(coh_u**2 * S_uu[i,:] * S_uu[j,:])
                 S_uu_full_b[i - j, j, :] = r #* np.exp(1j*phi)
@@ -192,7 +191,10 @@ def default_wind_field(category=2, zone=2, duration=36, fs_w=10, fs_m=100):
     
     # Compute basic wind parameters according to DIN EN 1994-1-4 and corresponding NA    
     # Werte nach Tab. NA.B.2
-    
+    vm_fact = [None, 1.18, 1.00, 0.77, 0.56][category]
+    v_m = vm_fact * v_b * (x_grid/10)**alpha
+    vm_min = [None, 0.97, 0.86, 0.73, 0.64][category]
+    v_m[x_grid<=z_min] = vm_min * v_b
     
     # v_m = 1*v_b*(x_grid/10)**0.16 # mittlere Windgeschwindigkeit (obere Formel ergaebe Faktor 1.0066803, daher die geringen Abweichungen)
     Iv_fact = [None, 0.14,0.19,0.28,0.43][category]

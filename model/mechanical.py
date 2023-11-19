@@ -2066,8 +2066,9 @@ class Mechanical(MechanicalDummy):
         num_modes = self.num_modes
         if isinstance(out_dofs, str):
             out_dofs = [out_dofs]
+        ndof = len(out_dofs)
         
-        dof_ind = ['ux', 'uy', 'uz'].index(inp_dof)
+        dof_ind = ['Fx', 'Fy', 'Fz'].index(inp_dof)
         
         self.modal(modal_matrices=True) 
         gen_mod_coeff = self.gen_mod_coeff
@@ -2089,7 +2090,6 @@ class Mechanical(MechanicalDummy):
         
         if use_meas_nodes:
             out_dofs = Mechanical.dofs_str_to_ind(out_dofs)
-            ndof = len(out_dofs)
             meas_nodes = self.meas_nodes
             n_nod = len(meas_nodes)
             _, _,mode_shapes_n = self.numerical_response_parameters(compensate=True, dofs=out_dofs)
