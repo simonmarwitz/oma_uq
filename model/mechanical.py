@@ -2084,8 +2084,10 @@ class Mechanical(MechanicalDummy):
         if fmax is None:
             fmax = np.max(omegans) / 2 / np.pi
         df = fmax / (N // 2 + 1)
-        omegas = np.linspace(0, fmax, N // 2 + 1, False) * 2 * np.pi
-        assert np.isclose(df * 2 * np.pi, (omegas[-1] - omegas[0]) / (N // 2 + 1 - 1))
+        # omegas = np.linspace(0, fmax, N // 2 + 1, False) * 2 * np.pi
+        # assert np.isclose(df * 2 * np.pi, (omegas[-1] - omegas[0]) / (N // 2 + 1 - 1))
+        omegas = np.fft.rfftfreq(N, 1 / (2 * fmax)) * 2 * np.pi
+        assert np.isclose(df * 2 * np.pi, (omegas[-1] - omegas[0]) / (N // 2 + 1))
         omegas = omegas[:, np.newaxis]
         
         if use_meas_nodes:

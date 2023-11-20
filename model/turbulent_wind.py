@@ -116,8 +116,8 @@ def spectral_wind_field(x_grid, f_w, L, U_bar, sigma, C_uz=10, C_vz=7, C_wz=4, s
     c_uj_b = np.fliplr(np.abs(S_uu_chol_b, where=S_uu_chol_b!=0) * np.sqrt(2* delta_omega) * np.exp(1j * phi_um[np.newaxis,:, :]))
     c_vj_b = np.fliplr(np.abs(S_vv_chol_b, where=S_vv_chol_b!=0) * np.sqrt(2* delta_omega) * np.exp(1j * phi_vm[np.newaxis,:, :]))
     for j in range(n_z):
-        c_uj[j] = np.trace(c_uj_b, offset=n_z - j - 1)
-        c_vj[j] = np.trace(c_vj_b, offset=n_z - j - 1)
+        c_uj[j,:] = np.trace(c_uj_b, offset=n_z - j - 1)
+        c_vj[j,:] = np.trace(c_vj_b, offset=n_z - j - 1)
     
     return c_uj, c_vj
 
