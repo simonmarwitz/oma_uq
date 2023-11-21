@@ -453,7 +453,7 @@ class MechanicalDummy(object):
             mech.kappas = validate_array(in_dict['self.kappas'])
             mech.mus = validate_array(in_dict['self.mus'])
             mech.etas = validate_array(in_dict['self.etas'])
-            mech.gen_mod_coeff = validate_array(in_dict.get('self.etas', gen_mod_coeff))
+            mech.gen_mod_coeff = validate_array(in_dict.get('self.etas', mech.gen_mod_coeff))
         
         if state[5]:
             mech.frequencies_comp = in_dict['self.frequencies_comp']
@@ -2049,7 +2049,7 @@ class Mechanical(MechanicalDummy):
         
         return omegas, frf
     
-    def frequency_response_non_classical(self, N, inp_node, inp_dof, 
+    def frequency_response_non_classical(self, N, inp_nodes, inp_dofs, 
                                          use_meas_nodes=True, out_dofs=['ux','uy','uz'], 
                                          fmax=None, out_quant='a', modes=None):
         '''
@@ -2063,12 +2063,17 @@ class Mechanical(MechanicalDummy):
         
         
         '''
+        nodes_coordinates = self.nodes_coordinates
+        
+        if not use_meas_nodes:
+            logger.warning('Argument use_meas_nodes is not supported (True by default)')
         num_modes = self.num_modes
         if isinstance(out_dofs, str):
             out_dofs = [out_dofs]
-        ndof = len(out_dofs)
+        n_out_dof = len(out_dofs)
+        n_inp_dof = len(inp_dofs)
         
-        dof_ind = ['Fx', 'Fy', 'Fz'].index(inp_dof)
+        # dof_ind = ['ux', 'uy', 'uz'].index(inp_dofs)
         
         self.modal(modal_matrices=True) 
         gen_mod_coeff = self.gen_mod_coeff
@@ -2088,80 +2093,56 @@ class Mechanical(MechanicalDummy):
         # assert np.isclose(df * 2 * np.pi, (omegas[-1] - omegas[0]) / (N // 2 + 1 - 1))
         omegas = np.fft.rfftfreq(N, 1 / (2 * fmax)) * 2 * np.pi
         assert np.isclose(df * 2 * np.pi, (omegas[-1] - omegas[0]) / (N // 2 + 1))
-        omegas = omegas[:, np.newaxis]
+        omegas = omegas[:, np.newaxis, np.newaxis]
         
-        if use_meas_nodes:
-            out_dofs = Mechanical.dofs_str_to_ind(out_dofs)
-            meas_nodes = self.meas_nodes
-            n_nod = len(meas_nodes)
-            _, _,mode_shapes_n = self.numerical_response_parameters(compensate=True, dofs=out_dofs)
+        # Assemble output mode shapes
+        out_dofs = Mechanical.dofs_str_to_ind(out_dofs)
+        meas_nodes = self.meas_nodes
+        n_nod = len(meas_nodes)
+        _, _,mode_shapes_out = self.numerical_response_parameters(compensate=True, dofs=out_dofs)
+    
+        dof_ref_out = np.empty((len(meas_nodes)*n_out_dof, 2))
+        for i in range(n_out_dof):
+            dof_ref_out[i*n_nod:(i+1)*n_nod,0] = meas_nodes
+            dof_ref_out[i*n_nod:(i+1)*n_nod,1] = out_dofs[i]
         
-            dof_ref_red = np.empty((len(meas_nodes)*ndof, 2))
-            for i in range(ndof):
-                dof_ref_red[i*n_nod:(i+1)*n_nod,0] = meas_nodes
-                dof_ref_red[i*n_nod:(i+1)*n_nod,1] = out_dofs[i]
-        else:
-            logger.warning('When use_meas_nodes=False, out_dofs is ignored. Returning full FRF.')
-            
-        #
-        # if use_meas_nodes:
-        #     if out_dofs is None:
-        #         out_dofs = ['ux', 'uy', 'uz']
-        #     out_dofs = Mechanical.dofs_str_to_ind(out_dofs)
-        #     ndof = len(out_dofs)
-        #     meas_nodes = self.meas_nodes
-        #
-        #     # build indices for mode_shapes_n and mode_shapes
-        #     meas_ind = []
-        #     mod_ind = []
-        #     dof_ref_red = []
-        #     for node in meas_nodes:
-        #         for dof_ind in out_dofs:
-        #             ind = np.where(np.logical_and(dof_ref[:,0]==node, dof_ref[:,1]==dof_ind))[0]
-        #             dof_ref_red.append([node, dof_ind])
-        #             if len(ind):
-        #                 meas_ind.append(ind[0])
-        #                 mod_ind.append(True)
-        #             else:
-        #                 mod_ind.append(False)
-        #     meas_ind = np.array(meas_ind)
-        #     mod_ind = np.array(mod_ind)
-        #     dof_ref_red = np.array(dof_ref_red)
-        #
-        #     mode_shapes_n = np.full((len(meas_nodes) * ndof, num_modes), 
-        #                             np.nan + 1j*np.nan, dtype=complex)
-        #     mode_shapes_n[mod_ind,:] = phi[meas_ind, :]
-        # else:
-        #     mode_shapes_n = phi
-        #     dof_ref_red = dof_ref
+        # Assemble input mode shapes
+        inp_dofs = Mechanical.dofs_str_to_ind(inp_dofs)
+        n_nod = len(inp_nodes)
+        _, _, mode_shapes_full = self.modal(damped=True, num_modes=num_modes)
+        
+        inp_indices = []
+        for inp_node in inp_nodes:
+            for i, (node, _, _, _) in enumerate(nodes_coordinates):
+                if node == inp_node:
+                    inp_indices.append(i)
+                    break
+            else:
+                raise RuntimeError(f'inp_node {inp_node} could not be found in nodes_coordinates')
+        
+        mode_shapes_inp = np.full((len(inp_nodes) * n_inp_dof, num_modes), np.nan, dtype=complex)
+        for mode in range(num_modes):
+            for i, dof in enumerate(inp_dofs):
+                mode_shapes_inp[len(inp_nodes) * i:len(inp_nodes) * (i + 1), mode] = mode_shapes_full[inp_indices, dof, mode]
+                
+        dof_ref_inp = np.empty((len(inp_nodes)*n_inp_dof, 2))
+        for i in range(n_inp_dof):
+            dof_ref_inp[i*n_nod:(i+1)*n_nod,0] = inp_nodes
+            dof_ref_inp[i*n_nod:(i+1)*n_nod,1] = inp_dofs[i]
 
-        inp_node_ind = np.logical_and(dof_ref_red[:,0] == inp_node, dof_ref_red[:,1] == dof_ind)        
-        frf = np.zeros((N // 2 + 1, dof_ref_red.shape[0]), dtype=complex)
+        # inp_node_ind = np.logical_and(dof_ref_out[:,0] == inp_nodes, dof_ref_out[:,1] == dof_ind)        
+        frf = np.zeros((N // 2 + 1, dof_ref_inp.shape[0], dof_ref_out.shape[0]), dtype=complex)
         
         if modes is None:
             modes = range(num_modes)
         
         for mode in modes:
-            '''
-            We can get lamda and msh from anys modal .rst file (user ordering)
-            we can get msh, k, m and c from ansys binary file (solver ordering) 
-                but we will miss dof_ref for this
-            we can get k, m and c from from .full file (solver ordering?)
-            
-            ideally we would use lamda and msh from ansys modal and combine it with k, m and c from somewhere else
-            maybe we can use msh from ansys binary for computation of a_n
-            and msh from ansys modal for the input and output scaling
-            
-            check, that both msh are equivalent, just differently ordered....
-            
-            msh from ansys binary and msh from ansys modal rst are equivalent!
-            
-            '''
             
             
             lambda_n = lamda[mode]
             # lambda_n.real *= 2 * np.pi
-            mode_shape_n = mode_shapes_n[:, mode:mode + 1] # complex vector (num_nodes,)
+            mode_shape_out = mode_shapes_out[np.newaxis, :, mode] # complex vector (num_nodes,)
+            mode_shape_inp = mode_shapes_inp[:, np.newaxis, mode] # complex vector (num_nodes,)
             # mode_shape = phi[:, mode:mode + 1] # complex vector (num_nodes,)
             #
             # a_n = 2 * lambda_n * mode_shape.T @ m_ @ mode_shape 
@@ -2169,10 +2150,11 @@ class Mechanical(MechanicalDummy):
             # mode_shape = np.squeeze(mode_shape)
         
             a_n = gen_mod_coeff[mode]
+            in_out = (mode_shape_inp * mode_shape_out) / a_n
             
-            this_frf  = 1 / (1j * omegas -         lambda_n)  *         mode_shape_n[inp_node_ind] * mode_shape_n.T / a_n        
-            this_frf += 1 / (1j * omegas - np.conj(lambda_n)) * np.conj(mode_shape_n[inp_node_ind] * mode_shape_n.T / a_n)
-            frf += this_frf
+            frf += (1 / (1j * omegas -         lambda_n))  *         in_out[np.newaxis,:,:]
+            frf += (1 / (1j * omegas - np.conj(lambda_n))) * np.conj(in_out[np.newaxis,:,:])
+            # frf += this_frf
             
         if out_quant == 'a':
             frf *=   -omegas**2
@@ -2188,7 +2170,7 @@ class Mechanical(MechanicalDummy):
         
         self.state[8] = True
         
-        return omegas, frf, dof_ref_red
+        return omegas, frf, dof_ref_out, dof_ref_inp
     
     def modal_ext(self, damped=True, num_modes=None):  # Modal Analysis
         ansys = self.ansys
@@ -2943,12 +2925,12 @@ class Mechanical(MechanicalDummy):
                 np.savetxt(fname, table)
 
                 with supress_logging(ansys):
-                    ansys.starset(par='EXCITATION')
+                    ansys.starset(par='EXCITATIONY')
 
-                ansys.dim(par='EXCITATION', type='TABLE', imax=stepsize, jmax=self.num_nodes, kmax="", var1='TIME', var2='NODE')
-                ansys.tread(par='EXCITATION', fname=f'{ansys.jobname}_y', ext='csv')
+                ansys.dim(par='EXCITATIONY', type='TABLE', imax=stepsize, jmax=self.num_nodes, kmax="", var1='TIME', var2='NODE')
+                ansys.tread(par='EXCITATIONY', fname=f'{ansys.jobname}_y', ext='csv')
 
-                ansys.f(node='ALL', lab='FY', value='%EXCITATION%')
+                ansys.f(node='ALL', lab='FY', value='%EXCITATIONY%')
             if fz is not None:
                 table = np.zeros((stepsize + 1, self.num_nodes + 1))
                 table[1:, 0] = np.arange(chunknum * chunksize + 1, chunknum * chunksize + 1 + stepsize) * deltat
@@ -2958,12 +2940,12 @@ class Mechanical(MechanicalDummy):
                 np.savetxt(fname, table)
 
                 with supress_logging(ansys):
-                    ansys.starset(par='EXCITATION')
+                    ansys.starset(par='EXCITATIONZ')
 
-                ansys.dim(par='EXCITATION', type='TABLE', imax=stepsize, jmax=self.num_nodes, kmax="", var1='TIME', var2='NODE')
-                ansys.tread(par='EXCITATION', fname=f'{ansys.jobname}_z', ext='csv')
+                ansys.dim(par='EXCITATIONZ', type='TABLE', imax=stepsize, jmax=self.num_nodes, kmax="", var1='TIME', var2='NODE')
+                ansys.tread(par='EXCITATIONZ', fname=f'{ansys.jobname}_z', ext='csv')
 
-                ansys.f(node='ALL', lab='FZ', value='%EXCITATION%')
+                ansys.f(node='ALL', lab='FZ', value='%EXCITATIONZ%')
 
             # continue
 #             ansys.set_log_level('INFO')
@@ -3079,8 +3061,9 @@ class Mechanical(MechanicalDummy):
                 logger.warning(f'Disk is almost full {freedisk} GB. Blocking 30 s.')
                 time.sleep(30)
                 freedisk=shutil.disk_usage(ansys.directory).free/(1024**3)
-                
-            logger.info(f'{chunknum * chunksize + chunksize} of {timesteps} timesteps in {t_start-t_end:.3f} s (Remaining ~{(timesteps-chunknum*chunksize)/chunksize * (t_start-t_end):.3f} s; Disk free: {freedisk:.2f} GB)')
+            elapsed = t_start-t_end
+            remaining = (timesteps-chunknum*chunksize)/chunksize * elapsed
+            logger.info(f'{chunknum * chunksize + chunksize} of {timesteps} timesteps in {elapsed//60:1.0f}m{elapsed%60:1.0f}s (Remaining ~{remaining//60:1.0f}m{remaining%60:1.0f}s; Disk free: {freedisk:.2f} GB)')
             
         ansys.set_log_level("WARNING")
         ansys.finish()
