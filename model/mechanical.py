@@ -2093,7 +2093,7 @@ class Mechanical(MechanicalDummy):
         # assert np.isclose(df * 2 * np.pi, (omegas[-1] - omegas[0]) / (N // 2 + 1 - 1))
         omegas = np.fft.rfftfreq(N, 1 / (2 * fmax)) * 2 * np.pi
         assert np.isclose(df * 2 * np.pi, (omegas[-1] - omegas[0]) / (N // 2 + 1))
-        omegas = omegas[:, np.newaxis, np.newaxis]
+        # omegas = omegas[:, np.newaxis, np.newaxis]
         
         # Assemble output mode shapes
         out_dofs = Mechanical.dofs_str_to_ind(out_dofs)
@@ -2136,7 +2136,14 @@ class Mechanical(MechanicalDummy):
         if modes is None:
             modes = range(num_modes)
         
+        in_out = np.empty((dof_ref_inp.shape[0], dof_ref_out.shape[0]), dtype=complex)
+        in_out_conj = np.empty((dof_ref_inp.shape[0], dof_ref_out.shape[0]), dtype=complex)
+        omega_scale = np.empty((N // 2 + 1,), dtype=complex)
+        omega_scale_conj = np.empty((N // 2 + 1,), dtype=complex)
+        
+        # now = time.time()
         for mode in modes:
+            # print(mode)
             
             
             lambda_n = lamda[mode]
@@ -2150,16 +2157,34 @@ class Mechanical(MechanicalDummy):
             # mode_shape = np.squeeze(mode_shape)
         
             a_n = gen_mod_coeff[mode]
-            in_out = (mode_shape_inp * mode_shape_out) / a_n
+            in_out[:,:] = (mode_shape_inp * mode_shape_out) / a_n
+            in_out_conj[:,:] = np.conj(in_out)
+            # then = time.time()
+            # print(f'in_out generation took {then -now:1.2f} s')
+            # now = then
             
-            frf += (1 / (1j * omegas -         lambda_n))  *         in_out[np.newaxis,:,:]
-            frf += (1 / (1j * omegas - np.conj(lambda_n))) * np.conj(in_out[np.newaxis,:,:])
+            omega_scale[:]      = (1 / (1j * omegas -         lambda_n ))
+            omega_scale_conj[:] = (1 / (1j * omegas - np.conj(lambda_n)))
+            
+            # then = time.time()
+            # print(f'omega_scale generation took {then -now:1.2f} s')
+            # now = then
+            
+            for i in range(N // 2 + 1):
+                frf[i,:,:] += omega_scale[i]      *      in_out + omega_scale_conj[i] * in_out_conj
+                # frf[i,:,:] += omega_scale_conj[i] * in_out_conj
+            
+            # then = time.time()
+            # print(f'frf generation took {then -now:1.2f} s')
+            # now = then
+            # frf += (1 / (1j * omegas -         lambda_n))  *         in_out[np.newaxis,:,:]
+            # frf += (1 / (1j * omegas - np.conj(lambda_n))) * np.conj(in_out[np.newaxis,:,:])
             # frf += this_frf
             
         if out_quant == 'a':
-            frf *=   -omegas**2
+            frf *=   -omegas[:, np.newaxis, np.newaxis]**2
         elif out_quant == 'v':
-            frf *= 1j*omegas
+            frf *= 1j*omegas[:, np.newaxis, np.newaxis]
         elif out_quant == 'd':
             ...
         else:
