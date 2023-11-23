@@ -151,8 +151,33 @@ def force_wind_field(u_j, v_j, delta_x=1.0, b=1.85, cscd=1.0, cf=2.36124, rho=1.
     
     return F_uj, F_vj
 
+def terrain_parameters(category):
+    z_min = [None,2,4,8,16][category]
+    # z_0 = [None, 0.01,0.05,0.3,1.05][category] # Rauigkeitslänge
+    alpha = [None,0.12,0.16,0.22, 0.3][category]  # Profilexponent
+    vm_fact = [None, 1.18, 1.00, 0.77, 0.56][category]
+    vm_min = [None, 0.97, 0.86, 0.73, 0.64][category]
+    Iv_fact = [None, 0.14,0.19,0.28,0.43][category]
+    Iv_min = [None, 0.17, 0.22, 0.29, 0.37][category]
+    eps = [None, 0.13, 0.26, 0.37, 0.46][category] # Exponent \epsilon nach Tabelle NA.C.1
+    
+    return z_min, alpha, vm_fact, vm_min, Iv_fact, Iv_min, eps
 
-def default_wind_field(category=2, zone=2, duration=36, fs_w=10, fs_m=100):
+def basic_wind_parameters(x_grid, v_b, z_min, alpha, vm_fact, vm_min, Iv_fact, Iv_min, eps):
+    # Compute basic wind parameters according to DIN EN 1991-1-4 and corresponding NA    
+    # Werte nach Tab. NA.B.2
+    v_m = vm_fact * v_b * (x_grid/10)**alpha
+    v_m[x_grid<=z_min] = vm_min * v_b
+    I_v = Iv_fact*(x_grid/10)**(-alpha) # Turbulenzintensität [% der mittleren Windgeschwindigkeit] (? siehe unten)
+    I_v[x_grid<=z_min] = Iv_min
+    sigma_v = I_v * v_m # Standardabweichung der Turbulenz nach Gl. 4.7
+    L = (x_grid/300)**eps * 300 # Integrallängenmaß nach Gl. NA.C.2
+    L[x_grid<=z_min] = (z_min/300)**eps * 300
+    
+    return v_m, sigma_v, L
+    
+
+def default_wind_field(category=2, zone=2, duration=36, fs_w=10, fs_m=100, **kwargs):
     
     
     # 200 x 2**17 samples take 1min 42 (CPSD assembly) + 2min 20s (CPSD decomposition) + 1min 59s(Fourier coefficients assembly) + 1.4s (IFFT) = 6min 2s; 
@@ -182,38 +207,17 @@ def default_wind_field(category=2, zone=2, duration=36, fs_w=10, fs_m=100):
     f_w = np.fft.rfftfreq(N, 1/fs_w)[np.newaxis,:]
     
     # Geländekategorie I - IV
-    z_min = [None,2,4,8,16][category]
-    z_0 = [None, 0.01,0.05,0.3,1.05][category] # Rauigkeitslänge
-    alpha = [None,0.12,0.16,0.22, 0.3][category]  # Profilexponent
+    z_min, alpha, vm_fact, vm_min, Iv_fact, Iv_min, eps = terrain_parameters(category)
     
     # Windzone 1 - 4
-    v_b = [None, 22.5, 25.0, 27.5, 30][zone] # m/s Basiswindgeschwindigkeit (v_b = v_b0 in DE vgl. NA S. 5)
+    v_b = [kwargs.get('v_b', None), 22.5, 25.0, 27.5, 30][zone] # m/s Basiswindgeschwindigkeit (v_b = v_b0 in DE vgl. NA S. 5)
     
-    # Compute basic wind parameters according to DIN EN 1994-1-4 and corresponding NA    
-    # Werte nach Tab. NA.B.2
-    vm_fact = [None, 1.18, 1.00, 0.77, 0.56][category]
-    v_m = vm_fact * v_b * (x_grid/10)**alpha
-    vm_min = [None, 0.97, 0.86, 0.73, 0.64][category]
-    v_m[x_grid<=z_min] = vm_min * v_b
-    
-    # v_m = 1*v_b*(x_grid/10)**0.16 # mittlere Windgeschwindigkeit (obere Formel ergaebe Faktor 1.0066803, daher die geringen Abweichungen)
-    Iv_fact = [None, 0.14,0.19,0.28,0.43][category]
-    I_v = Iv_fact*(x_grid/10)**(-alpha) # Turbulenzintensität [% der mittleren Windgeschwindigkeit] (? siehe unten)
-    Iv_min = [None, 0.17, 0.22, 0.29, 0.37][category]
-    I_v[x_grid<=z_min] = Iv_min
-    
-    sigma_v = I_v * v_m # Standardabweichung der Turbulenz nach Gl. 4.7
-    
-    eps = [None, 0.13, 0.26, 0.37, 0.46][category] # Exponent \epsilon nach Tabelle NA.C.1
-    L = (x_grid/300)**eps * 300 # Integrallängenmaß nach Gl. NA.C.2
-    L[x_grid<=z_min] = (z_min/300)**eps * 300
+    v_m, sigma_v, L = basic_wind_parameters(x_grid, v_b, z_min, alpha, vm_fact, vm_min, Iv_fact, Iv_min, eps)
     
     C_uz = 10
     C_vz = 7
     C_wz = None
-    
     logger.info(f'Windfield properties: mean wind speed {v_b}, standard deviation of turbulence {np.mean(sigma_v)}, bandwidth {fs_w/2}, decay factors {[C_uz, C_vz, C_wz]}')
-
     c_uj, c_vj = spectral_wind_field(x_grid, f_w, 
                                      L, v_m, sigma_v, C_uz, C_vz, C_wz, 
                                      seed=None)
