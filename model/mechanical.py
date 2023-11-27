@@ -90,7 +90,7 @@ class MechanicalDummy(object):
         # initialize class variables
         # build_mdof
         self.nodes_coordinates = None
-        self.num_nodes = None
+        # self.num_nodes = None
         self.num_modes = None
         self.d_vals = None
         self.k_vals = None
@@ -136,9 +136,9 @@ class MechanicalDummy(object):
         self.frequencies = None
         self.mode_shapes = None
         self.num_modes = None
-        self.kappas = None
-        self.mus = None
-        self.etas = None
+        # self.kappas = None
+        # self.mus = None
+        # self.etas = None
         self.gen_mod_coeff = None
         
         #signal_parameters
@@ -213,7 +213,7 @@ class MechanicalDummy(object):
         nodes_coordinates = np.array(nodes_coordinates)
         
         self.struct_parms = struct_parms
-        self.num_nodes = len(nodes_coordinates)
+        # self.num_nodes = len(nodes_coordinates)
         self.nodes_coordinates = nodes_coordinates
         self.num_modes = num_modes
         
@@ -291,9 +291,9 @@ class MechanicalDummy(object):
             out_dict['self.frequencies'] = self.frequencies
             out_dict['self.mode_shapes'] = self.mode_shapes
             out_dict['self.num_modes'] = self.num_modes
-            out_dict['self.kappas'] = self.kappas
-            out_dict['self.mus'] = self.mus
-            out_dict['self.etas'] = self.etas
+            # out_dict['self.kappas'] = self.kappas
+            # out_dict['self.mus'] = self.mus
+            # out_dict['self.etas'] = self.etas
             out_dict['self.gen_mod_coeff'] = self.gen_mod_coeff
         
         if self.state[5]:
@@ -328,6 +328,8 @@ class MechanicalDummy(object):
         if self.state[8]:
             out_dict['self.omegas'] = self.omegas
             out_dict['self.frf'] = self.frf
+            out_dict['self.dof_ref_out'] = self.dof_ref_out
+            out_dict['self.dof_ref_inp'] = self.dof_ref_inp
             
         
         np.savez_compressed(os.path.join(save_dir, f'{self.jobname}_mechanical.npz'), **out_dict)
@@ -450,9 +452,9 @@ class MechanicalDummy(object):
             mech.frequencies = in_dict['self.frequencies']
             mech.mode_shapes = in_dict['self.mode_shapes']
             mech.num_modes = in_dict['self.num_modes']
-            mech.kappas = validate_array(in_dict['self.kappas'])
-            mech.mus = validate_array(in_dict['self.mus'])
-            mech.etas = validate_array(in_dict['self.etas'])
+            # mech.kappas = validate_array(in_dict['self.kappas'])
+            # mech.mus = validate_array(in_dict['self.mus'])
+            # mech.etas = validate_array(in_dict['self.etas'])
             mech.gen_mod_coeff = validate_array(in_dict.get('self.etas', mech.gen_mod_coeff))
         
         if state[5]:
@@ -489,6 +491,8 @@ class MechanicalDummy(object):
         if state[8]:
             mech.omegas= in_dict['self.omegas']
             mech.frf   = in_dict['self.frf']
+            mech.dof_ref_out = in_dict['self.dof_ref_out']
+            mech.dof_ref_inp = in_dict['self.dof_ref_inp']
 
         mech.state = state
         
@@ -545,6 +549,10 @@ class Mechanical(MechanicalDummy):
         
         super().__init__(jobname)
     
+    @property
+    def num_nodes(self):
+        return len(self.nodes_coordinates)
+    
     @staticmethod
     def start_ansys(working_dir=None, jid=None,):
         
@@ -566,7 +574,7 @@ class Mechanical(MechanicalDummy):
                 ansys = pyansys.launch_mapdl(
                     #exec_file='/usr/scratch4/app-soft/ansys/v202/ansys/bin/ansys202',
                     # exec_file='/vegas/apps/ansys/v201/ansys/bin/ansys201',
-                    exec_file='/usr/app-soft/ansys/v201/ansys/bin/ansys201',
+                    exec_file='/usr/app-soft1/ansys/v201/ansys/bin/ansys201',
                     run_location=working_dir, override=True, loglevel='ERROR',
                     nproc=1, log_apdl=False,
                     log_broadcast=False, jobname=jid,
@@ -961,7 +969,6 @@ class Mechanical(MechanicalDummy):
         ansys.finish()
         
         self.struct_parms = struct_parms
-        self.num_nodes = len(nodes_coordinates)
         self.nodes_coordinates = nodes_coordinates
         self.num_modes = num_modes
         
@@ -1955,103 +1962,103 @@ class Mechanical(MechanicalDummy):
 
         return time_values, response_time_history, f , modal_imp_energies, modal_amplitudes
 
-    def frequency_response(self, N, inp_node, dof, fmax=None, out_quant='a', modes=None):
-        '''
-        Returns the onesided FRF matrix of the linear(ized) system
-        at N//2 + 1 frequency lines for all nodes in meas_nodes
-        by default the accelerance with input force at the last node is returned
-        
-        Uses numerically computed modal parameters and discrete system matrices
-        The FRF may not be completely equivalent to analytical solutions
-        
-        inp_node is the ANSYS node number -> index is corresponding to
-            meas_nodes (if compensated) or
-            nodes_coordinates if not compensated
-            
-        dof is currently used for input and output,e.g. if input is in z direction, output cannot be in y direction
-        '''
-        
-        if not self.globdamp:
-            logger.warning('This method assumes proporional damping. \
-                System is non-proportionally damped. Results might be errorneous. \
-                Consider using self.frequency_response_non_classical')
-            
-        nodes_coordinates = self.nodes_coordinates
-        
-        for i, (node, x, y, z) in enumerate(nodes_coordinates):
-            if node == inp_node:
-                inp_node_ind = i
-                break
-        else:
-            raise RuntimeError(f'input node {inp_node} could not be found in nodes_coordinates')
-        
-        dof_ind = ['ux', 'uy', 'uz'].index(dof)
-        
-        # too complicated to get compensated (numerical damping, period elongation) modal_matrices, a marginal error will be accepted
-        # _, _, mode_shapes, kappas, mus, etas = self.modal(modal_matrices=True)
-        _, _, mode_shapes = self.modal()
-        frequencies, damping,mode_shapes_n = self.numerical_response_parameters(compensate=True, dofs=[dof_ind])
-        # we have to distinguish between input and output mode shapes
-        # output mode shapes are generally only for meas_nodes,
-        # while input mode shapes must be complete i.e. input node does not have to be in meas_nodes
-        
-        
-        if fmax is None:
-            fmax = np.max(frequencies)
-        
-        df = fmax / (N // 2 + 1)
-    
-        omegas = np.linspace(0, fmax, N // 2 + 1, False) * 2 * np.pi
-        assert np.isclose(df * 2 * np.pi, (omegas[-1] - omegas[0]) / (N // 2 + 1 - 1))
-        omegas = omegas[:, np.newaxis]
-        
-        num_modes = self.num_modes
-        num_meas_nodes = len(self.meas_nodes)
-        omegans = frequencies * 2 * np.pi
-        
-        frf = np.zeros((N // 2 + 1, num_meas_nodes), dtype=complex)
-        
-        if modes is None:
-            modes = range(num_modes)
-            
-        for mode in modes:
-            
-            omegan = omegans[mode]
-            zeta = damping[mode]
-            # kappa = kappas[mode]
-            kappa = omegan**2 # modeshapes are mass-normalized
-            # print(kappas[mode], mus[mode], etas[mode], omegans[mode], damping[mode])
-            # if mode<2:
-            #     zeta = zeta / 1
-            #     kappa = kappa / np.sqrt(2)
-            mode_shape = mode_shapes_n[:, mode]
-            modal_coordinate = mode_shapes[inp_node_ind, dof_ind, mode]
-            # TODO: extend 3D
-            
-            this_frf = 1 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
-            this_frf += 1 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * np.conj(modal_coordinate * mode_shape[np.newaxis, :])
-            
-            frf += this_frf / 2
-            
-        if out_quant == 'a':
-            frf *=   -omegas**2
-        elif out_quant == 'v':
-            frf *= 1j*omegas
-        elif out_quant == 'd':
-            ...
-        else:
-            logger.warning(f'This output quantity is invalid: {out_quant}')
-            
-        self.omegas = omegas
-        self.frf= frf
-        
-        self.state[8] = True
-        
-        return omegas, frf
+    # def frequency_response(self, N, inp_node, dof, fmax=None, out_quant='a', modes=None):
+    #     '''
+    #     Returns the onesided FRF matrix of the linear(ized) system
+    #     at N//2 + 1 frequency lines for all nodes in meas_nodes
+    #     by default the accelerance with input force at the last node is returned
+    #
+    #     Uses numerically computed modal parameters and discrete system matrices
+    #     The FRF may not be completely equivalent to analytical solutions
+    #
+    #     inp_node is the ANSYS node number -> index is corresponding to
+    #         meas_nodes (if compensated) or
+    #         nodes_coordinates if not compensated
+    #
+    #     dof is currently used for input and output,e.g. if input is in z direction, output cannot be in y direction
+    #     '''
+    #
+    #     if not self.globdamp:
+    #         logger.warning('This method assumes proporional damping. \
+    #             System is non-proportionally damped. Results might be errorneous. \
+    #             Consider using self.frequency_response_non_classical')
+    #
+    #     nodes_coordinates = self.nodes_coordinates
+    #
+    #     for i, (node, x, y, z) in enumerate(nodes_coordinates):
+    #         if node == inp_node:
+    #             inp_node_ind = i
+    #             break
+    #     else:
+    #         raise RuntimeError(f'input node {inp_node} could not be found in nodes_coordinates')
+    #
+    #     dof_ind = ['ux', 'uy', 'uz'].index(dof)
+    #
+    #     # too complicated to get compensated (numerical damping, period elongation) modal_matrices, a marginal error will be accepted
+    #     # _, _, mode_shapes, kappas, mus, etas = self.modal(modal_matrices=True)
+    #     _, _, mode_shapes = self.modal()
+    #     frequencies, damping,mode_shapes_n = self.numerical_response_parameters(compensate=True, dofs=[dof_ind])
+    #     # we have to distinguish between input and output mode shapes
+    #     # output mode shapes are generally only for meas_nodes,
+    #     # while input mode shapes must be complete i.e. input node does not have to be in meas_nodes
+    #
+    #
+    #     if fmax is None:
+    #         fmax = np.max(frequencies)
+    #
+    #     df = fmax / (N // 2 + 1)
+    #
+    #     omegas = np.linspace(0, fmax, N // 2 + 1, False) * 2 * np.pi
+    #     assert np.isclose(df * 2 * np.pi, (omegas[-1] - omegas[0]) / (N // 2 + 1 - 1))
+    #     omegas = omegas[:, np.newaxis]
+    #
+    #     num_modes = self.num_modes
+    #     num_meas_nodes = len(self.meas_nodes)
+    #     omegans = frequencies * 2 * np.pi
+    #
+    #     frf = np.zeros((N // 2 + 1, num_meas_nodes), dtype=complex)
+    #
+    #     if modes is None:
+    #         modes = range(num_modes)
+    #
+    #     for mode in modes:
+    #
+    #         omegan = omegans[mode]
+    #         zeta = damping[mode]
+    #         # kappa = kappas[mode]
+    #         kappa = omegan**2 # modeshapes are mass-normalized
+    #         # print(kappas[mode], mus[mode], etas[mode], omegans[mode], damping[mode])
+    #         # if mode<2:
+    #         #     zeta = zeta / 1
+    #         #     kappa = kappa / np.sqrt(2)
+    #         mode_shape = mode_shapes_n[:, mode]
+    #         modal_coordinate = mode_shapes[inp_node_ind, dof_ind, mode]
+    #         # TODO: extend 3D
+    #
+    #         this_frf = 1 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * modal_coordinate * mode_shape[np.newaxis, :]
+    #         this_frf += 1 / (kappa * (1 + 2 * 1j * zeta * omegas / omegan - (omegas / omegan)**2)) * np.conj(modal_coordinate * mode_shape[np.newaxis, :])
+    #
+    #         frf += this_frf / 2
+    #
+    #     if out_quant == 'a':
+    #         frf *=   -omegas**2
+    #     elif out_quant == 'v':
+    #         frf *= 1j*omegas
+    #     elif out_quant == 'd':
+    #         ...
+    #     else:
+    #         logger.warning(f'This output quantity is invalid: {out_quant}')
+    #
+    #     self.omegas = omegas
+    #     self.frf= frf
+    #
+    #     self.state[8] = True
+    #
+    #     return omegas, frf
     
     def frequency_response_non_classical(self, N, inp_nodes, inp_dofs, 
                                          use_meas_nodes=True, out_dofs=['ux','uy','uz'], 
-                                         fmax=None, out_quant='a', modes=None):
+                                         fmax=None, out_quant='a', modes=None, **kwargs):
         '''
         As in Brincker & Ventura: Introduction to Operational Modal Analysis, p. 99 ff
         
@@ -2067,24 +2074,15 @@ class Mechanical(MechanicalDummy):
         
         if not use_meas_nodes:
             logger.warning('Argument use_meas_nodes is not supported (True by default)')
-        num_modes = self.num_modes
+        num_modes = kwargs.pop('num_modes', self.num_modes)
         if isinstance(out_dofs, str):
             out_dofs = [out_dofs]
         n_out_dof = len(out_dofs)
         n_inp_dof = len(inp_dofs)
         
-        # dof_ind = ['ux', 'uy', 'uz'].index(inp_dofs)
-        
-        self.modal(modal_matrices=True) 
-        gen_mod_coeff = self.gen_mod_coeff
+        _, _, _, gen_mod_coef = self.modal(num_modes=num_modes, modal_matrices=True)
         lamda = self.lamda
-        # lamda.imag *= 2*np.pi
-        # _, m_, c_, lamda, phi, dof_ref = self.modal_ext()
         omegans = np.imag(lamda)# * 2 * np.pi
-        # print(omegans)
-        
-        logger.info('FRF computation for non-classical modes (non-proportional damping).')
-        
         
         if fmax is None:
             fmax = np.max(omegans) / 2 / np.pi
@@ -2129,7 +2127,9 @@ class Mechanical(MechanicalDummy):
         for i in range(n_inp_dof):
             dof_ref_inp[i*n_nod:(i+1)*n_nod,0] = inp_nodes
             dof_ref_inp[i*n_nod:(i+1)*n_nod,1] = inp_dofs[i]
-
+        
+        logger.info(f'FRF computation for non-classical modes with {N // 2 + 1} frequency lines in the frequency range up to {fmax} Hz and {num_modes} modes for {dof_ref_inp.shape[0]} input and {dof_ref_out.shape[0]} output nodes.')
+        
         # inp_node_ind = np.logical_and(dof_ref_out[:,0] == inp_nodes, dof_ref_out[:,1] == dof_ind)        
         frf = np.zeros((N // 2 + 1, dof_ref_inp.shape[0], dof_ref_out.shape[0]), dtype=complex)
         
@@ -2141,45 +2141,22 @@ class Mechanical(MechanicalDummy):
         omega_scale = np.empty((N // 2 + 1,), dtype=complex)
         omega_scale_conj = np.empty((N // 2 + 1,), dtype=complex)
         
-        # now = time.time()
         for mode in modes:
-            # print(mode)
-            
-            
             lambda_n = lamda[mode]
-            # lambda_n.real *= 2 * np.pi
+            
             mode_shape_out = mode_shapes_out[np.newaxis, :, mode] # complex vector (num_nodes,)
             mode_shape_inp = mode_shapes_inp[:, np.newaxis, mode] # complex vector (num_nodes,)
-            # mode_shape = phi[:, mode:mode + 1] # complex vector (num_nodes,)
-            #
-            # a_n = 2 * lambda_n * mode_shape.T @ m_ @ mode_shape 
-            # a_n += mode_shape.T @ c_ @ mode_shape
-            # mode_shape = np.squeeze(mode_shape)
         
-            a_n = gen_mod_coeff[mode]
+            a_n = gen_mod_coef[mode]
             in_out[:,:] = (mode_shape_inp * mode_shape_out) / a_n
             in_out_conj[:,:] = np.conj(in_out)
-            # then = time.time()
-            # print(f'in_out generation took {then -now:1.2f} s')
-            # now = then
             
             omega_scale[:]      = (1 / (1j * omegas -         lambda_n ))
             omega_scale_conj[:] = (1 / (1j * omegas - np.conj(lambda_n)))
             
-            # then = time.time()
-            # print(f'omega_scale generation took {then -now:1.2f} s')
-            # now = then
-            
             for i in range(N // 2 + 1):
+                # most expensive part
                 frf[i,:,:] += omega_scale[i]      *      in_out + omega_scale_conj[i] * in_out_conj
-                # frf[i,:,:] += omega_scale_conj[i] * in_out_conj
-            
-            # then = time.time()
-            # print(f'frf generation took {then -now:1.2f} s')
-            # now = then
-            # frf += (1 / (1j * omegas -         lambda_n))  *         in_out[np.newaxis,:,:]
-            # frf += (1 / (1j * omegas - np.conj(lambda_n))) * np.conj(in_out[np.newaxis,:,:])
-            # frf += this_frf
             
         if out_quant == 'a':
             frf *=   -omegas[:, np.newaxis, np.newaxis]**2
@@ -2192,6 +2169,8 @@ class Mechanical(MechanicalDummy):
             
         self.omegas = omegas
         self.frf= frf
+        self.dof_ref_out = dof_ref_out
+        self.dof_ref_inp = dof_ref_inp
         
         self.state[8] = True
         
@@ -2297,53 +2276,54 @@ class Mechanical(MechanicalDummy):
                 dof_inds.append(dof)
         return dof_inds
     
-    def ambient_ifrf(self, f_scale, deltat=None, dt_fact=None, timesteps=None, num_cycles=None, out_quant=['d', 'v', 'a'], dofs=['ux', 'uy', 'uz'], seed=None, **kwargs):
-        '''
-        a shortcut function for ambient using the linear frf and the
-        inverse FFT to generate the signal by orders of magnitude faster
-        non-linear effects, or non-white noise inputs are not possible
-        '''
-        num_nodes = self.num_nodes
-        
-        dt_fact, deltat, num_cycles, timesteps, _ = self.signal_parameters(dt_fact, deltat, num_cycles, timesteps)
-        
-        logger.info(f"Generating ambient response (IFFT/FRF-based) in frequency range [0 ... {self.frequencies[-1]:1.3f}], zeta range [{np.min(self.modal_damping):1.3f}-{np.max(self.modal_damping):1.3f}], number of modes {self.num_modes}")
-
-        logger.warning("WARNING: Gaussian Noise Generator has not been verified!!!!!!")
-        
-        meas_nodes = self.meas_nodes
-        input_nodes = [node for node, x, y, z in self.nodes_coordinates[-2:-1]]
-        
-        rng = np.random.default_rng(seed)
-        phase = rng.uniform(-np.pi, np.pi, (timesteps // 2 + 1, num_nodes))
-        Pomega = f_scale * np.ones_like(phase) * np.exp(1j * phase)
-        
-        response_time_history = [None, None, None]
-        
-        for quant_ind, quant in enumerate(['d', 'v', 'a']):
-            if quant in out_quant:
-                sig = np.zeros((timesteps, len(meas_nodes), 3))
-                # compute ifft for each combination of input and output node
-                # use linear superposition of output signals from each input node
-                
-                for inp_node_ind, inp_node in enumerate(input_nodes):
-                    for dof_ind, dof in enumerate(['ux', 'uy', 'uz']):  # use all dofs in order to comply with the output of a transient simulation
-                        if dof in dofs:
-                            _, this_frf = self.frequency_response(N=timesteps, inp_node=inp_node, dof=dof,
-                                                                  fmax=1 / deltat / 2, out_quant=quant, )
-                            for channel in range(this_frf.shape[1]):
-                                sig[:, channel, dof_ind] += np.fft.irfft(this_frf[:, channel] * Pomega[:, inp_node_ind])
-                response_time_history[quant_ind] = sig
-        
-        time_values = np.linspace(deltat, timesteps * deltat, timesteps) #  ansys also starts at deltat
-        
-        self.inp_hist_amb = None
-        self.t_vals_amb = time_values
-        self.resp_hist_amb = response_time_history
-
-        self.state[2] = True
-        
-        return time_values, response_time_history, None
+    
+    # def ambient_ifrf(self, f_scale, deltat=None, dt_fact=None, timesteps=None, num_cycles=None, out_quant=['d', 'v', 'a'], dofs=['ux', 'uy', 'uz'], seed=None, **kwargs):
+    #     '''
+    #     a shortcut function for ambient using the linear frf and the
+    #     inverse FFT to generate the signal by orders of magnitude faster
+    #     non-linear effects, or non-white noise inputs are not possible
+    #     '''
+    #     num_nodes = self.num_nodes
+    #
+    #     dt_fact, deltat, num_cycles, timesteps, _ = self.signal_parameters(dt_fact, deltat, num_cycles, timesteps)
+    #
+    #     logger.info(f"Generating ambient response (IFFT/FRF-based) in frequency range [0 ... {self.frequencies[-1]:1.3f}], zeta range [{np.min(self.modal_damping):1.3f}-{np.max(self.modal_damping):1.3f}], number of modes {self.num_modes}")
+    #
+    #     logger.warning("WARNING: Gaussian Noise Generator has not been verified!!!!!!")
+    #
+    #     meas_nodes = self.meas_nodes
+    #     input_nodes = [node for node, x, y, z in self.nodes_coordinates[-2:-1]]
+    #
+    #     rng = np.random.default_rng(seed)
+    #     phase = rng.uniform(-np.pi, np.pi, (timesteps // 2 + 1, num_nodes))
+    #     Pomega = f_scale * np.ones_like(phase) * np.exp(1j * phase)
+    #
+    #     response_time_history = [None, None, None]
+    #
+    #     for quant_ind, quant in enumerate(['d', 'v', 'a']):
+    #         if quant in out_quant:
+    #             sig = np.zeros((timesteps, len(meas_nodes), 3))
+    #             # compute ifft for each combination of input and output node
+    #             # use linear superposition of output signals from each input node
+    #
+    #             for inp_node_ind, inp_node in enumerate(input_nodes):
+    #                 for dof_ind, dof in enumerate(['ux', 'uy', 'uz']):  # use all dofs in order to comply with the output of a transient simulation
+    #                     if dof in dofs:
+    #                         _, this_frf = self.frequency_response(N=timesteps, inp_node=inp_node, dof=dof,
+    #                                                               fmax=1 / deltat / 2, out_quant=quant, )
+    #                         for channel in range(this_frf.shape[1]):
+    #                             sig[:, channel, dof_ind] += np.fft.irfft(this_frf[:, channel] * Pomega[:, inp_node_ind])
+    #             response_time_history[quant_ind] = sig
+    #
+    #     time_values = np.linspace(deltat, timesteps * deltat, timesteps) #  ansys also starts at deltat
+    #
+    #     self.inp_hist_amb = None
+    #     self.t_vals_amb = time_values
+    #     self.resp_hist_amb = response_time_history
+    #
+    #     self.state[2] = True
+    #
+    #     return time_values, response_time_history, None
     
     def static(self, fz=None, uz=None, use_meas_nodes=False):
         '''
@@ -2420,38 +2400,21 @@ class Mechanical(MechanicalDummy):
 
         # cached modal analysis results
         # TODO: the logic needs improvement: num_modes may have been different for both types of analyses
-        if damped and num_modes == self.num_modes and use_cache:
-            if self.damped_frequencies is not None:
+        if use_cache:
+            if damped and num_modes == self.num_modes:
                 frequencies = self.damped_frequencies
                 damping = self.modal_damping
                 mode_shapes = self.damped_mode_shapes
-                if modal_matrices:
-                    kappas = self.kappas
-                    mus =  self.mus
-                    etas = self.etas
-                    gen_mod_coeff = self.gen_mod_coeff
-                    if kappas is None or mus is None or etas is None:
-                        pass
-                    else:
-                        return frequencies, damping, mode_shapes, kappas,mus, etas, gen_mod_coeff
-                else:
-                    return frequencies, damping, mode_shapes
-        elif not damped and num_modes == self.num_modes and use_cache:
-            if self.frequencies is not None:
+            elif not damped and num_modes == self.num_modes:
                 frequencies = self.frequencies
                 mode_shapes = self.mode_shapes
                 damping = np.zeros_like(frequencies)
-                if modal_matrices:
-                    kappas = self.kappas
-                    mus =  self.mus
-                    etas = self.etas
-                    gen_mod_coeff = self.gen_mod_coeff
-                    if kappas is None or mus is None:
-                        pass
-                    else:
-                        return frequencies, damping, mode_shapes, kappas,mus, etas, gen_mod_coeff
-                else:
-                    return frequencies, damping, mode_shapes
+            
+            gen_mod_coeff = self.gen_mod_coeff
+            if modal_matrices and gen_mod_coeff is not None and frequencies is not None:
+                return frequencies, damping, mode_shapes, gen_mod_coeff
+            elif not modal_matrices and frequencies is not None:
+                return frequencies, damping, mode_shapes
 
         ansys.prep7()
         if self.coulomb_elements and reset_sliders:
@@ -2584,14 +2547,6 @@ class Mechanical(MechanicalDummy):
             #account for internal element nodes by reducing length
             mode_shapes = mode_shapes[nnum<=num_nodes, :3, :]
         
-        if damped:
-            self.damped_frequencies = frequencies
-            self.modal_damping = damping
-            self.damped_mode_shapes = mode_shapes
-        else:
-            self.frequencies = frequencies
-            self.mode_shapes = mode_shapes
-        self.num_modes = num_modes
         
         if modal_matrices:
             
@@ -2636,9 +2591,9 @@ class Mechanical(MechanicalDummy):
                 C = np.zeros_like(K)
         
             # compute modal matrices
-            kappas = np.zeros((num_modes))
-            mus = np.zeros((num_modes))
-            etas = np.zeros((num_modes))
+            # kappas = np.zeros((num_modes))
+            # mus = np.zeros((num_modes))
+            # etas = np.zeros((num_modes))
             # generalized complex modal coefficients (Brincker and Ventura, Eq. 5.112)
             gen_mod_coeff = np.zeros((num_modes), dtype=complex)
             
@@ -2655,9 +2610,9 @@ class Mechanical(MechanicalDummy):
                 if False:
                     msh_f /= msh_f[np.argmax(np.abs(msh_f))]
                 
-                kappas[mode]= (msh_f.T @ K @ msh_f.conj()).real
-                mus[mode]   = (msh_f.T @ M @ msh_f.conj()).real
-                etas[mode]  = (msh_f.T @ C @ msh_f.conj()).real
+                # kappas[mode]= (msh_f.T @ K @ msh_f.conj()).real
+                # mus[mode]   = (msh_f.T @ M @ msh_f.conj()).real
+                # etas[mode]  = (msh_f.T @ C @ msh_f.conj()).real
                 gen_mod_coeff[mode]  = msh_f.T @ M @ msh_f * 2 * lamda_n
                 gen_mod_coeff[mode] += msh_f.T @ C @ msh_f
             
@@ -2673,14 +2628,23 @@ class Mechanical(MechanicalDummy):
         
         self.state[4] = True
         
+        if damped:
+            self.damped_frequencies = frequencies
+            self.modal_damping = damping
+            self.damped_mode_shapes = mode_shapes
+        else:
+            self.frequencies = frequencies
+            self.mode_shapes = mode_shapes
+        self.num_modes = num_modes
+        
         if modal_matrices:
-            self.kappas = kappas
-            self.mus = mus
-            self.etas = etas
+            # self.kappas = kappas
+            # self.mus = mus
+            # self.etas = etas
             self.gen_mod_coeff = gen_mod_coeff
             # print(mode_shapes)
             # print(f'{frequencies} {damping} {np.sqrt(kappas/mus)/2/np.pi*np.sqrt(1-damping**2)} {etas/2/np.sqrt(mus*kappas)}')
-            return frequencies, damping, mode_shapes, kappas, mus, etas, gen_mod_coeff
+            return frequencies, damping, mode_shapes, gen_mod_coeff
         else:
             return frequencies, damping, mode_shapes
 
@@ -3265,6 +3229,147 @@ class Mechanical(MechanicalDummy):
 #
 #         return f
 
+    def transient_ifrf(self, fy=None, fz=None, 
+                       inp_domain='freq',
+                       inp_nodes=None,
+                       inp_dt=None, out_dt=None, 
+                       out_quant=['d', 'v', 'a'], **kwargs):
+        
+        '''
+        Compute the vibration response of the system self to arbitrary forcing in 
+        y and z direction in the frequency domain. The compliance FRF is computed 
+        for as many timesteps / frequency lines as are in the force vectors up to 
+        a frequency of half the sampling frequency 1/inp_dt. The sampling resolution
+        may be increased by zero-padding the response prior to inverse FFT. The 
+        computationally most expensive part is the assembly of the FRF, depending
+        on the number of input and output nodes. Once computed, the FRF will be re-
+        used if no parameters have changed, so the response to different force
+        time histories can be evaluated quickly. Note, that in comparison
+        with direct time stepping methods, Fourier transform methods suffer from 
+        wrap-around effects but reach steady-state instantly.
+        
+        Parameters:
+        -----------
+            fy, fz: np.ndarray (N, n_inp_nodes)
+                Lateral force in y / z direction in frequency or time domain (see 
+                argument "inp_domain") for all nodes in "inp_nodes". If given in 
+                time domain, a FFT is performed prior to further computations and 
+                the number of output timesteps is N_out = 2 * (N // 2) * inp_dt // out_dt. 
+                If given in frequency domain, the number of timesteps is
+                N_out = (N // 2 + 1) * inp_dt // out_dt.
+            inp_domain: str ['freq', 'time', 'rbf'], optional
+                Indicate wether force arrays represent frequency- or time-domain
+                data. Defaults to 'freq'
+            inp_nodes: np.ndarray((n_imp_nodes,), int), optional
+                The numbers of input nodes corresponding to the columns of fy / fz.
+                Defaults to all nodes (self.nodes_coordinates[:,0])
+            inp_dt: float
+                Sample spacing (inverse of the sampling rate) of the input force
+                time histories.
+            out_dt: float
+                Sample spacing (inverse of the sampling rate) of the output 
+                response time histories. 
+            out_quant: list of ['d','v','a']
+                Whether to compute displacements, velocities and/or accelerations.
+        
+        Other Parameters:
+        -----------------
+            **kwargs:
+                All other keyword arguments are passed on to self.frequency_response_non_classical 
+        
+        Returns:
+        --------
+            time_values: ndarray
+                Array holding the time instants of the computed responses.
+            [d, v, a]: list-of-ndarray(N_out, num_out_nodes, num_out_dofs
+                Response time histories (displacement, velocity, acceleration).
+                Note, that the ordering of out the output follows the order in 
+                self.dof_ref_out.
+        '''
+        
+        omegas = self.omegas
+        frf = self.frf
+        
+        meas_nodes = self.meas_nodes
+        
+        if inp_domain=='freq':
+            fy_freq = fy
+            fz_freq = fz
+        elif inp_domain=='time':
+            if fy is not None: fy_freq = np.fft.rfft(fy, axis=0)
+            else: fy_freq = None
+            if fz is not None: fz_freq = np.fft.rfft(fz, axis=0)
+            else: fz_freq = None
+        else:
+            raise ValueError(f"Argument 'inp_domain' must be one of ['freq', 'time'] but is {inp_domain}.")
+        
+        assert inp_dt is not None
+        
+        if out_dt is None:
+            out_dt = inp_dt
+        assert out_dt <= inp_dt
+        
+        if inp_nodes is None:
+            inp_nodes = self.nodes_coordinates[:,0]
+        num_nodes = len(inp_nodes)
+        
+        inp_dofs = []
+        out_dofs = kwargs.get('out_dofs', inp_dofs)
+        
+        if fy_freq is not None:
+            assert num_nodes == fy_freq.shape[1]
+            N = 2 * (fy_freq.shape[0] - 1)
+            inp_dofs.append('uy')
+        if fz_freq is not None:
+            assert num_nodes == fz_freq.shape[1]
+            N = 2 * (fz_freq.shape[0] - 1)
+            inp_dofs.append('uz')
+        
+        t_end = N * inp_dt
+        N_out = int(t_end / out_dt)
+        
+        load_frf = (omegas is not None and omegas[-1] == 1 / 2 / inp_dt * 2 * np.pi)
+        load_frf = (load_frf and frf is not None and np.all(frf.shape == (N // 2 + 1, len(inp_nodes)*len(inp_dofs), len(meas_nodes)*len(out_dofs))))
+        
+        if not load_frf:
+            omegas, frf, _, _ = self.frequency_response_non_classical(N,
+                                                      inp_nodes=inp_nodes, 
+                                                      inp_dofs=inp_dofs, 
+                                                      out_dofs=out_dofs, 
+                                                      fmax=1/2/inp_dt, out_quant='d', **kwargs)
+            
+        F_freq = np.hstack([fy_freq, fz_freq]) # n_lines, n_inp_nodes*n_inp_dofs
+        
+        d_freq = np.empty((N // 2 + 1, 2 * len(meas_nodes)), dtype=complex)
+        for i in range(N // 2 + 1):
+            np.dot(F_freq[i,:], frf[i,:,:], out=d_freq[i,:])
+        d_freq = d_freq.reshape((N // 2 + 1, len(meas_nodes), 2), order='F')
+        
+        if 'd' in out_quant:
+            d_freq_time = np.fft.irfft(d_freq, n=N_out, axis=0)
+        else:
+            d_freq_time = None
+        
+        if 'v' in out_quant:
+            v_freq_time = np.fft.irfft(d_freq * 1j * omegas[:, np.newaxis, np.newaxis], n=N_out, axis=0)
+        else:
+            v_freq_time = None
+            
+        if 'a' in out_quant:
+            a_freq_time = np.fft.irfft(d_freq *-1j * omegas[:, np.newaxis, np.newaxis]**2, n=N_out, axis=0)
+        else:
+            a_freq_time = None
+        
+        time_values = np.linspace(inp_dt, N_out * out_dt, N_out) #  ansys also starts at inp_dt
+        
+        self.time_values = time_values
+        self.d_freq = d_freq
+        self.d_freq_time = d_freq_time
+        self.v_freq_time = v_freq_time
+        self.a_freq_time = a_freq_time
+        
+        return time_values, [d_freq_time, v_freq_time, a_freq_time]
+    
     def export_ans_mats(self):
         ansys = self.ansys
         jid = self.jobname

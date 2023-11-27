@@ -11,8 +11,8 @@ def spectral_wind_field(x_grid, f_w, L, U_bar, sigma, C_uz=10, C_vz=7, C_wz=4, s
     
     n_z = x_grid.shape[0]
     
-    n_fw = f_w.shape[1]
-    delta_fw = f_w[0, 1] - f_w[0, 0]
+    n_fw = f_w.shape[0]
+    delta_fw = f_w[1, 0] - f_w[0, 0]
     
     logger.info(f'A windfield of {n_z} x {n_fw} samples will be sampled at {delta_fw * (2 * n_fw - 2)} Hz (duration {1 / delta_fw} s).')
     
@@ -21,23 +21,23 @@ def spectral_wind_field(x_grid, f_w, L, U_bar, sigma, C_uz=10, C_vz=7, C_wz=4, s
         seed = np.random.randint(np.iinfo(np.int32).max)
         logger.info(f'Random seed is: {seed}')
     rng = np.random.default_rng(seed)
-    phi_um = rng.random((n_z, n_fw)) * 2 * np.pi 
-    phi_vm = rng.random((n_z, n_fw)) * 2 * np.pi 
+    phi_um = rng.random((n_fw, n_z)) * 2 * np.pi 
+    phi_vm = rng.random((n_fw, n_z)) * 2 * np.pi 
     # phi_wm = np.random.random((n_z, n_fw)) * 2 * np.pi 
     
     # Compute basic wind parameters and auto spectral densitities according to [Clobes 2008]
 
     # transpose column vectors
-    U_bar = U_bar[:,np.newaxis]
-    sigma = sigma[:,np.newaxis]
+    U_bar = U_bar[np.newaxis,:]
+    sigma = sigma[np.newaxis,:]
     
-    L_ux = L[:,np.newaxis]
+    L_ux = L[np.newaxis,:]
     L_vx = 0.3 * L_ux
     
     # Normalized frequency
     f_n = f_w * L_ux / U_bar
     S_uu = 4 * f_n / (1 + 70.8 * f_n**2)**(5/6) / f_w * sigma**2
-    
+    # print(S_uu.shape)
     f_n = f_w * L_vx / U_bar
     S_vv = 4 * f_n * (1 + 755.2 * f_n**2) / (1 + 283.2 * f_n**2)**(11 / 6) / f_w * sigma**2
     
@@ -45,37 +45,39 @@ def spectral_wind_field(x_grid, f_w, L, U_bar, sigma, C_uz=10, C_vz=7, C_wz=4, s
     # S_ww = 2.15 * f_n / (1 + 11.16 * f_n**(5 / 3)) / f_w * sigma**2
     
     # CPSD assembly
-    S_uu_full_b = np.zeros((n_z, n_z, n_fw))
-    S_vv_full_b = np.zeros((n_z, n_z, n_fw))
+    S_uu_full_b = np.zeros((n_fw, n_z, n_z))
+    S_vv_full_b = np.zeros((n_fw, n_z, n_z))
     # S_ww_full_b = np.zeros((u + 1, n_z, n_fw))
     
     for i in range(n_z):
         for j in range(i + 1):
             if i==j: 
-                S_uu_full_b[i - j, j,:] = S_uu[i,:]
-                S_vv_full_b[i - j, j,:] = S_vv[i,:]
+                S_uu_full_b[:, i - j, j] = S_uu[:, i]
+                S_vv_full_b[:, i - j, j] = S_vv[:, i]
                 # S_ww_full_b[i - j, j,:] = S_ww[i,:]
             else:
                 delta_x = np.abs(x_grid[i] - x_grid[j])
                                 
-                coh_u = np.exp(-2 * f_w * C_uz * delta_x / (U_bar[i] + U_bar[j])) 
-                r = np.sqrt(coh_u**2 * S_uu[i,:] * S_uu[j,:])
-                S_uu_full_b[i - j, j, :] = r #* np.exp(1j*phi)
+                coh_u = np.exp(-2 * f_w[:,0] * C_uz * delta_x / (U_bar[0,i] + U_bar[0,j]))
+                # print(coh_u.shape)
+                r = np.sqrt(coh_u**2 * S_uu[:, i] * S_uu[:, j])
+                # print(r.shape)
+                S_uu_full_b[:, i - j, j] = r #* np.exp(1j*phi)
                 
-                coh_v = np.exp(-2 * f_w * C_vz * delta_x / (U_bar[i] + U_bar[j])) 
-                r = np.sqrt(coh_v**2 * S_vv[i,:] * S_vv[j,:])
-                S_vv_full_b[i - j, j, :] = r
+                coh_v = np.exp(-2 * f_w[:,0] * C_vz * delta_x / (U_bar[:,i] + U_bar[:,j])) 
+                r = np.sqrt(coh_v**2 * S_vv[:, i] * S_vv[:, j])
+                S_vv_full_b[:, i - j, j] = r
                 
                 # coh_w = np.exp(-2 * f_w * C_wz * delta_x / (U_bar[i] + U_bar[j]))
                 # r = np.sqrt(coh_w**2 * S_ww[i,:] * S_ww[j,:])
                 # S_ww_full_b[i - j, j, :] = r
                 
     if f_w[0,0] == 0:
-        S_uu_full_b[:,:,0] = 0
-        S_vv_full_b[:,:,0] = 0
+        S_uu_full_b[0, :, :] = 0
+        S_vv_full_b[0, :, :] = 0
         # S_ww_full_b[:,:,0] = 0
-        S_uu_full_b[0,:,0] = np.ones(n_z)*1e-10
-        S_vv_full_b[0,:,0] = np.ones(n_z)*1e-10
+        S_uu_full_b[0, 0, :] = np.ones(n_z)*1e-10
+        S_vv_full_b[0, 0, :] = np.ones(n_z)*1e-10
         # S_ww_full_b[0,:,0] = np.ones(n_z)*1e-10
     
     # Decompose Cross-spectral densities
@@ -85,8 +87,8 @@ def spectral_wind_field(x_grid, f_w, L, U_bar, sigma, C_uz=10, C_vz=7, C_wz=4, s
     # S_ww_chol_b = np.empty_like(S_ww_full_b)
     
     u_target = 10
-    S_uu_chol_b[:u_target,:,0] = scipy.linalg.cholesky_banded(S_uu_full_b[:u_target,:,0], lower=True)
-    S_vv_chol_b[:u_target,:,0] = scipy.linalg.cholesky_banded(S_vv_full_b[:u_target,:,0], lower=True)
+    S_uu_chol_b[0, :u_target, :] = scipy.linalg.cholesky_banded(S_uu_full_b[0, :u_target, :], lower=True)
+    S_vv_chol_b[0, :u_target, :] = scipy.linalg.cholesky_banded(S_vv_full_b[0, :u_target, :], lower=True)
     # S_ww_chol_b[:u_target,:,0] = scipy.linalg.cholesky_banded(S_ww_full_b[:u_target,:,0], lower=True)
     
     all_u = np.zeros((n_fw))
@@ -96,8 +98,8 @@ def spectral_wind_field(x_grid, f_w, L, U_bar, sigma, C_uz=10, C_vz=7, C_wz=4, s
         # for the first frequency we usually need all bands
         while True:
             try:
-                S_uu_chol_b[:u_target,:,k] = scipy.linalg.cholesky_banded(S_uu_full_b[:u_target,:,k], lower=True)
-                S_vv_chol_b[:u_target,:,k] = scipy.linalg.cholesky_banded(S_vv_full_b[:u_target,:,k], lower=True)
+                S_uu_chol_b[k, :u_target, :] = scipy.linalg.cholesky_banded(S_uu_full_b[k, :u_target, :], lower=True)
+                S_vv_chol_b[k, :u_target, :] = scipy.linalg.cholesky_banded(S_vv_full_b[k, :u_target, :], lower=True)
                 # S_ww_chol_b[:u_target,:,k] = scipy.linalg.cholesky_banded(S_ww_full_b[:u_target,:,k], lower=True)
                 all_u[k] = u_target
                 break
@@ -108,31 +110,31 @@ def spectral_wind_field(x_grid, f_w, L, U_bar, sigma, C_uz=10, C_vz=7, C_wz=4, s
                     print(k, u_target,  e)
     
     # Fourier coefficient assembly
-    c_uj = np.zeros((n_z, n_fw), dtype=complex)
-    c_vj = np.zeros((n_z, n_fw), dtype=complex)
+    c_uj = np.zeros((n_fw, n_z), dtype=complex)
+    c_vj = np.zeros((n_fw, n_z), dtype=complex)
     # c_wj = np.zeros((n_z, n_fww), dtype=complex)
     delta_omega = delta_fw * 2 * np.pi
-    # last part is the most expensive as sin(phi_um) has to be repeated n_z times along axis=0)
-    c_uj_b = np.fliplr(np.abs(S_uu_chol_b, where=S_uu_chol_b!=0) * np.sqrt(2* delta_omega) * np.exp(1j * phi_um[np.newaxis,:, :]))
-    c_vj_b = np.fliplr(np.abs(S_vv_chol_b, where=S_vv_chol_b!=0) * np.sqrt(2* delta_omega) * np.exp(1j * phi_vm[np.newaxis,:, :]))
+    # last part is the most expensive as sin(phi_um) has to be repeated n_z times along axis=1)
+    c_uj_b = np.flip(np.abs(S_uu_chol_b, where=S_uu_chol_b!=0) * np.sqrt(2* delta_omega) * np.exp(1j * phi_um[:,np.newaxis, :]), axis=2)
+    c_vj_b = np.flip(np.abs(S_vv_chol_b, where=S_vv_chol_b!=0) * np.sqrt(2* delta_omega) * np.exp(1j * phi_vm[:,np.newaxis, :]), axis=2)
     for j in range(n_z):
-        c_uj[j,:] = np.trace(c_uj_b, offset=n_z - j - 1)
-        c_vj[j,:] = np.trace(c_vj_b, offset=n_z - j - 1)
+        c_uj[:, j] = np.trace(c_uj_b, offset=n_z - j - 1, axis1=1, axis2=2)
+        c_vj[:, j] = np.trace(c_vj_b, offset=n_z - j - 1, axis1=1, axis2=2)
     
     return c_uj, c_vj
 
 def temporal_wind_field(c_uj, c_vj, N_m):
     
-    n_z = c_uj.shape[0]
+    n_z = c_uj.shape[1]
     print(f'Transforming windfield to time domain with {n_z} x {N_m} samples.')
     
-    u_j = np.zeros((n_z, N_m))
-    v_j = np.zeros((n_z, N_m))
+    u_j = np.zeros((N_m, n_z))
+    v_j = np.zeros((N_m, n_z))
     # w_j = np.zeros((n_z, N_m))
     
     for j in range(n_z):
-        u_j[j,:] = np.fft.irfft(c_uj[j,:], n=N_m, norm="forward")/2/np.pi # d="backward", "ortho", "forward"
-        v_j[j,:] = np.fft.irfft(c_vj[j,:], n=N_m, norm="forward")/2/np.pi # d="backward", "ortho", "forward"
+        u_j[:, j] = np.fft.irfft(c_uj[:, j], n=N_m, norm="forward") / 2 / np.pi # d="backward", "ortho", "forward"
+        v_j[:, j] = np.fft.irfft(c_vj[:, j], n=N_m, norm="forward") / 2 / np.pi # d="backward", "ortho", "forward"
         # w_j[j,:] = np.fft.irfft(c_wj[j,:], n=N_m, norm="forward") # "backward", "ortho", "forward"
     
     return u_j, v_j
