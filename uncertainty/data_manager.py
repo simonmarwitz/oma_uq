@@ -154,12 +154,12 @@ class DataManager(object):
         self.title = title
 
         if result_dir is None:
-            logger.debug(
+            logger.warning(
                 'no result_dir specified, using /usr/scratch4/sima9999/work/modal_uq/')
             result_dir = '/usr/scratch4/sima9999/work/modal_uq/'
 
         if not os.path.isdir(result_dir):
-            logger.debug(f'creating directory(s) {result_dir}')
+            logger.info(f'creating directory(s) {result_dir}')
             os.makedirs(result_dir, exist_ok=True)
 
         self.result_dir = result_dir
@@ -168,7 +168,7 @@ class DataManager(object):
             working_dir = os.getcwd()
 
         if not os.path.isdir(working_dir):
-            logger.debug(f'creating directory(s) {working_dir}')
+            logger.info(f'creating directory(s) {working_dir}')
             os.makedirs(working_dir, exist_ok=True)
 
         self.working_dir = working_dir
@@ -386,7 +386,7 @@ class DataManager(object):
         ds_new.to_netcdf(dbpath, engine='h5netcdf')
 
     def evaluate_samples(self, func, arg_vars, ret_names, default_len=30, 
-                         dry_run=False, re_eval_sample=None,
+                         distributed= True, dry_run=False, re_eval_sample=False,
                          chwdir=True, use_lock=True, check_diskspace=False,
                          chunks_submit=None, chunks_save=1000, scramble_evaluation=True, 
                          remote_kwargs={'num_cpus':1}, **kwargs):
@@ -412,13 +412,18 @@ class DataManager(object):
         default_len is used when setting up new dimensions in an array to specify the
             maximum number of values, that will be stored in that dimension
         
-        dry_run may be a boolean, or a specific id_number for debugging purposes
+        distributed: whether to use ray for distributed processing, default: True
+        dry_run: whether to save database with return data from evaluation, default: False
+        re_eval_sample: Re-evaluate already processed samples. 
+            if True re-evaluate all samples 
+            if str indicate the jid to re-evaluate 
+            default: False 
         
         uses ray to distribute tasks to a number of workers.
         a ray head process must be started in an interactive session
 
         '''
-        if not dry_run and not ray.is_initialized():
+        if distributed and not ray.is_initialized():
             if os.path.exists(os.path.expanduser('~/ipaddress.txt')):
                 address = open(os.path.expanduser('~/ipaddress.txt'),'rt').read().splitlines()[0]+':6379'
             else:
@@ -445,8 +450,8 @@ class DataManager(object):
                 
                 # create the working directory
 
-                # if not os.path.exists(result_dir):
-                #     os.makedirs(result_dir, exist_ok=True)
+                if not os.path.exists(result_dir):
+                    os.makedirs(result_dir, exist_ok=True)
                 
                 if working_dir is True:
                     try: #  to get LSF temporary working directory
@@ -603,16 +608,11 @@ class DataManager(object):
                     if logger.isEnabledFor(logging.DEBUG): 
                         logger.debug(out_ds.loc[dict(ids=jid)])
                 
+                
                 # print(f'Cum runtime: loop over samples {time.time() - now :1.3f}')
             
             # print(f'Cum runtime: save/close database {time.time() - now :1.3f}')
               
-            
-        if isinstance(dry_run, str):
-            if re_eval_sample is None:
-                re_eval_sample = dry_run
-            if re_eval_sample != dry_run:
-                logger.warning(f'Trying to debug sample {dry_run} but re-evaluating {re_eval_sample}')
                      
         # open database read-only, without locking
         with self.get_database(database='in') as in_ds, self.get_database(database='out', rw=False) as out_ds:
@@ -624,9 +624,10 @@ class DataManager(object):
 
             total_num_samples = in_ds.ids.size
             
-            if re_eval_sample is not None:
-                in_ds = in_ds.sel(ids=[re_eval_sample])
-                ids=in_ds.ids
+            if re_eval_sample:
+                if isinstance(re_eval_sample, str):
+                    in_ds = in_ds.sel(ids=[re_eval_sample])
+                ids = in_ds.ids
             else:
                 # ids=in_ds.ids
                 done_ids = (~out_ds['_runtimes'].isnull()) & (out_ds['_exceptions']=='')
@@ -668,12 +669,9 @@ class DataManager(object):
                     working_dir = os.path.join(self.working_dir, jid)
                 else:
                     working_dir = None
-
-                if dry_run:
-                    if isinstance(dry_run, str) and dry_run!=jid:
-                        continue
+                
+                if not distributed:
                     # evaluates samples in the regular way, i.e. one at a time
-                    
                     futures.append(_setup_eval(func, jid, fun_kwargs, self.result_dir, working_dir=working_dir,
                                             check_diskspace=check_diskspace, use_lock=use_lock, **kwargs))
                     
@@ -696,9 +694,9 @@ class DataManager(object):
                 if len(futures)>= chunks_submit:
                     break
         
-        if dry_run:
+        if not distributed:
             save_samples(futures, ret_names, total_num_samples, default_len)
-            return
+            return len(ids) - chunks_submit
         
         futures = set(futures)
         logger.info(f'{len(futures)} jobs have been submitted for evaluation in {time.time() - now:1.2f} s.')
@@ -706,7 +704,7 @@ class DataManager(object):
         sav_time = 480
         while True:
             ready, wait = ray.wait(
-                list(futures), num_returns=min(len(futures), chunks_save), timeout=int(sav_time * 2))
+                list(futures), num_returns=min(len(futures), chunks_save), timeout=sav_time)
             
             comp_time = time.time() - now
                 
@@ -730,17 +728,17 @@ class DataManager(object):
             
             now=time.time()
             save_samples(ret_sets, ret_names, total_num_samples, default_len)
-            sav_time = time.time() - now
+            sav_time = int(max(time.time() - now, sav_time))
             
             if len(wait) == 0:
                 logger.info(                
-                    f"Finished all remaining {finished} samples in {comp_time:1.2f} s (async. save time: {sav_time:1.2f} s).")
+                    f"Finished all remaining {finished} samples in {comp_time:1.2f} s (async. save time: {time.time() - now:1.2f} s).")
 
                 break
             
             futures.difference_update(ready)
             logger.info(
-                f"Finished {finished} samples in {comp_time:1.2f} s (async. save time: {sav_time:1.2f} s). Remaining {len(futures)} samples.")
+                f"Finished {finished} samples in {comp_time:1.2f} s (async. save time: {time.time() - now:1.2f} s). Remaining {len(futures)} samples.")
         # ray.shutdown()
         return len(ids) - chunks_submit
 
@@ -1189,7 +1187,7 @@ class DataManager(object):
             cls.entropy = entropy 
             
             result_dir_ = ds.attrs['result_dir']
-            if result_dir_ != result_dir:
+            if str(result_dir_ )!= str(result_dir):
                 logger.warning(
                     f'result dir from db {result_dir_} differs from given result_dir {result_dir}')
 
@@ -1261,8 +1259,8 @@ class DataManager(object):
                 # create database, if it does not exist
                 if not os.path.exists(dbpath):
                     ds = xr.Dataset()
-                    ds.attrs['working_dir'] = self.working_dir
-                    ds.attrs['result_dir'] = self.result_dir
+                    ds.attrs['working_dir'] = str(self.working_dir)
+                    ds.attrs['result_dir'] = str(self.result_dir)
                     ds.attrs['dbfile_in'] = self.dbfile_in
                     ds.attrs['dbfile_out'] = self.dbfile_out
                     ds.attrs['date'] = date.today().__repr__()
@@ -1272,7 +1270,7 @@ class DataManager(object):
                     #ds.to_netcdf(dbpath, format='netcdf4')
                     ds.close()
         else:
-            logger.debug(f'opening existing file {dbfile}')
+            logger.debug(f'opening existing file {dbfile} with write-mode {rw}')
 
         if not rw:
             try:

@@ -9,6 +9,7 @@ import glob
 import shutil
 
 import logging
+from asyncio.log import logger
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 # global logger
 # logger = logger.getLogger('')
@@ -148,6 +149,10 @@ class MechanicalDummy(object):
         #transient_parameters
         self.trans_params = None
         
+    @property
+    def num_nodes(self):
+        return len(self.nodes_coordinates)
+        
     def build_mdof(self, nodes_coordinates=[(1, 0, 0, 0), ],
                    k_vals=[1], masses=[1], d_vals=None, damping=None,
                    sl_force_vals=None, eps_duff_vals=None, hyst_vals=None,
@@ -226,7 +231,174 @@ class MechanicalDummy(object):
             self.state[i] = False
         self.state[7] = True
         
-    def save(self, save_dir, emergency_arrays=None):
+    def transient_ifrf(self, fy=None, fz=None, 
+                       inp_nodes=None,
+                       inp_dt=None, out_dt=None, 
+                       out_quant=['d', 'v', 'a'], **kwargs):        
+        '''
+        Compute the vibration response of the system self to arbitrary forcing in 
+        y and z direction in the frequency domain. The compliance FRF is computed 
+        for as many timesteps / frequency lines as are in the force vectors up to 
+        a frequency of half the sampling frequency 1/inp_dt. The sampling resolution
+        may be increased by zero-padding the response prior to inverse FFT. The 
+        computationally most expensive part is the assembly of the FRF, depending
+        on the number of input and output nodes. Once computed, the FRF will be re-
+        used if no parameters have changed, so the response to different force
+        time histories can be evaluated quickly. Note, that in comparison
+        with direct time stepping methods, Fourier transform methods suffer from 
+        wrap-around effects but reach steady-state instantly.
+        
+        Parameters:
+        -----------
+            fy, fz: np.ndarray (N, n_inp_nodes)
+                Lateral force in y / z direction in time domain for all nodes in 
+                "inp_nodes". A FFT is performed prior to further computations and 
+                the number of output timesteps is N_out = 2 * (N // 2) * inp_dt // out_dt. 
+            inp_nodes: np.ndarray((n_imp_nodes,), int), optional
+                The numbers of input nodes corresponding to the columns of fy / fz.
+                Defaults to all nodes (self.nodes_coordinates[:,0])
+            inp_dt: float
+                Sample spacing (inverse of the sampling rate) of the input force
+                time histories.
+            out_dt: float
+                Sample spacing (inverse of the sampling rate) of the output 
+                response time histories. 
+            out_quant: list of ['d','v','a']
+                Whether to compute displacements, velocities and/or accelerations.
+        
+        Other Parameters:
+        -----------------
+            **kwargs:
+                All other keyword arguments are passed on to self.frequency_response_non_classical 
+        
+        Returns:
+        --------
+            time_values: ndarray
+                Array holding the time instants of the computed responses.
+            [d, v, a]: list-of-ndarray(N_out, num_out_nodes, num_out_dofs
+                Response time histories (displacement, velocity, acceleration).
+                Note, that the ordering of out the output follows the order in 
+                self.dof_ref_out.
+        '''
+        
+        omegas = self.omegas
+        frf = self.frf
+        print(f'The pre-computed FRF array is of type {type(frf)}')
+        
+        if omegas is None or frf is None:
+            raise NotImplementedError("The FRF must be pre-computed in order to call it within MechanicalDummy class.")
+        
+        meas_nodes = self.meas_nodes
+        
+        assert inp_dt is not None
+        
+        if out_dt is None:
+            out_dt = inp_dt
+        assert out_dt <= inp_dt
+        
+        if inp_nodes is None:
+            inp_nodes = self.nodes_coordinates[:,0]
+        num_nodes = len(inp_nodes)
+        
+        inp_dofs = []
+        out_dofs = kwargs.get('out_dofs', inp_dofs)
+        
+        if fy is not None:
+            fy = np.fft.rfft(fy, axis=0)
+            assert num_nodes == fy.shape[1]
+            N = 2 * (fy.shape[0] - 1)
+            inp_dofs.append('uy')
+        if fz is not None:
+            fz = np.fft.rfft(fz, axis=0)
+            assert num_nodes == fz.shape[1]
+            N = 2 * (fz.shape[0] - 1)
+            inp_dofs.append('uz')
+            
+        load_frf = (omegas is not None and omegas[-1] == 1 / 2 / inp_dt * 2 * np.pi)
+        load_frf = (load_frf and frf is not None and np.all(frf.shape == (N // 2 + 1, len(inp_nodes)*len(inp_dofs), len(self.meas_nodes)*len(out_dofs))))
+        
+        if not load_frf:
+            cause = ''
+            if omegas[-1] != 1 / 2 / inp_dt * 2 * np.pi:
+                cause += 'frequency resolution, '
+            if frf.shape[0] != N // 2 + 1:
+                cause += 'number of frequency lines, '
+            if frf.shape[1] != len(inp_nodes)*len(inp_dofs):
+                cause += 'number of input channels, '
+            if frf.shape[2] != len(self.meas_nodes)*len(out_dofs):
+                cause += 'number of output channels'
+            raise RuntimeError(f"Pre-computed FRF is not compatible with given parameters for: {cause}. Refer to Mechanical.transient_frf()")
+        
+        t_end = N * inp_dt
+        N_out = int(t_end / out_dt)
+            
+        F_freq = np.hstack([fy, fz]) # n_lines, n_inp_nodes*n_inp_dofs
+        
+        d_freq = np.empty((N // 2 + 1, 2 * len(meas_nodes)), dtype=complex)
+        for i in range(N // 2 + 1):
+            np.dot(F_freq[i,:], frf[i,:,:], out=d_freq[i,:])
+        d_freq = d_freq.reshape((N // 2 + 1, len(meas_nodes), 2), order='F')
+        
+        if 'd' in out_quant:
+            d_freq_time = np.fft.irfft(d_freq, n=N_out, axis=0)
+        else:
+            d_freq_time = None
+        
+        if 'v' in out_quant:
+            v_freq_time = np.fft.irfft(d_freq * 1j * omegas[:, np.newaxis, np.newaxis], n=N_out, axis=0)
+        else:
+            v_freq_time = None
+            
+        if 'a' in out_quant:
+            a_freq_time = np.fft.irfft(d_freq *-1j * omegas[:, np.newaxis, np.newaxis]**2, n=N_out, axis=0)
+        else:
+            a_freq_time = None
+        
+        time_values = np.linspace(inp_dt, N_out * out_dt, N_out) #  ansys also starts at inp_dt
+        
+        self.time_values = time_values
+        self.d_freq = d_freq
+        self.d_freq_time = d_freq_time
+        self.v_freq_time = v_freq_time
+        self.a_freq_time = a_freq_time
+        
+        return time_values, [d_freq_time, v_freq_time, a_freq_time]
+    
+    
+    def modal(self, damped=True, num_modes=None, use_cache=True, modal_matrices=False):  # Modal Analysis
+
+        num_nodes = self.num_nodes
+        if num_modes is None:
+            num_modes = self.num_modes
+        assert num_modes <= num_nodes
+        if num_modes > 10 * num_nodes:
+            logger.warning(f'The number of modes {num_modes} should be greater/equal than 10 number of nodes {num_nodes}.')
+
+        # cached modal analysis results
+        # TODO: the logic needs improvement: num_modes may have been different for both types of analyses
+        if use_cache:
+            if damped and num_modes == self.num_modes:
+                frequencies = self.damped_frequencies
+                damping = self.modal_damping
+                mode_shapes = self.damped_mode_shapes
+            elif not damped and num_modes == self.num_modes:
+                frequencies = self.frequencies
+                mode_shapes = self.mode_shapes
+                damping = np.zeros_like(frequencies)
+            else:
+                frequencies = None
+                damping = None
+                mode_shapes = None
+            
+            gen_mod_coeff = self.gen_mod_coeff
+            if modal_matrices and gen_mod_coeff is not None and frequencies is not None:
+                return frequencies, damping, mode_shapes, gen_mod_coeff
+            elif not modal_matrices and frequencies is not None:
+                return frequencies, damping, mode_shapes
+        else:
+            return
+    
+    def save(self, fpath, emergency_arrays=None):
         '''
         save under save_dir/{jobname}_mechanical.npz
         
@@ -235,10 +407,11 @@ class MechanicalDummy(object):
          - rerun analysis
          - retrieve previously run analyses
         '''
-        logger.info(f'Saving Mechanical object to {save_dir}/{self.jobname}_mechanical.npz')
+        fdir, file = os.path.split(fpath)
+        fname, ext = os.path.splitext(file)
         
-        if not os.path.isdir(save_dir):
-            os.makedirs(save_dir)
+        logger.info(f'Saving Mechanical object to {fpath}')
+        
         out_dict = {}
         if emergency_arrays is not None:
             out_dict.update(emergency_arrays)
@@ -316,7 +489,7 @@ class MechanicalDummy(object):
             
         if self.state[7]:
             out_dict['self.struct_parms'] = self.struct_parms
-            out_dict['self.num_nodes'] = self.num_nodes
+            # out_dict['self.num_nodes'] = self.num_nodes
             out_dict['self.nodes_coordinates'] = self.nodes_coordinates
             out_dict['self.damping'] = self.damping
             out_dict['self.alpha'] = self.alpha
@@ -327,32 +500,36 @@ class MechanicalDummy(object):
         
         if self.state[8]:
             out_dict['self.omegas'] = self.omegas
-            out_dict['self.frf'] = self.frf
+            if not isinstance(self.frf, np.memmap):
+                frf = np.memmap(os.path.join(fdir, fname + '_frf.dat'), 
+                                dtype=np.complex64, 
+                                mode='w+', shape=self.frf.shape)
+                frf[:] = self.frf
+                frf.flush()
+            else:
+                frf = self.frf
+            out_dict['self.frf'] = frf.filename
             out_dict['self.dof_ref_out'] = self.dof_ref_out
             out_dict['self.dof_ref_inp'] = self.dof_ref_inp
             
         
-        np.savez_compressed(os.path.join(save_dir, f'{self.jobname}_mechanical.npz'), **out_dict)
+        np.savez_compressed(fpath, **out_dict)
         
     @classmethod
-    def load(cls, jobname, load_dir):
+    def load(cls, fpath):
+        assert os.path.exists(fpath)
         
-        assert os.path.isdir(load_dir)
-        
-        fname = os.path.join(load_dir, f'{jobname}_mechanical.npz')
-        assert os.path.exists(fname)
-        
-        logger.info('Now loading previous results from  {}'.format(fname))
+        logger.info('Now loading previous results from  {}'.format(fpath))
 
-        in_dict = np.load(fname, allow_pickle=True)
+        in_dict = np.load(fpath, allow_pickle=True)
         
-        assert jobname == in_dict['self.jobname'].item()
+        jobname = in_dict['self.jobname'].item()
         
-        mech = cls(jobname)
+        mech = cls(jobname=jobname)
         
-        return mech._load(in_dict, mech)
+        return mech._load(fpath, mech)
         
-    def _load(self, in_dict, mech):
+    def _load(self, fpath, mech):
         
         def validate_array(arr):
             '''
@@ -375,7 +552,11 @@ class MechanicalDummy(object):
                 return arr
             else:
                 return list(arr)
-            
+        
+        fdir, file = os.path.split(fpath)
+        fname, ext = os.path.splitext(file)
+        
+        in_dict = np.load(fpath, allow_pickle=True)
         state = list(in_dict['self.state'])
         
         while len(state)<9:
@@ -455,7 +636,7 @@ class MechanicalDummy(object):
             # mech.kappas = validate_array(in_dict['self.kappas'])
             # mech.mus = validate_array(in_dict['self.mus'])
             # mech.etas = validate_array(in_dict['self.etas'])
-            mech.gen_mod_coeff = validate_array(in_dict.get('self.etas', mech.gen_mod_coeff))
+            mech.gen_mod_coeff = validate_array(in_dict.get('self.gen_mod_coeff', mech.gen_mod_coeff))
         
         if state[5]:
             mech.frequencies_comp = in_dict['self.frequencies_comp']
@@ -479,7 +660,7 @@ class MechanicalDummy(object):
             
         if state[7]:
             mech.struct_parms     = validate_array(in_dict['self.struct_parms'])
-            mech.num_nodes        = validate_array(in_dict['self.num_nodes'])
+            # mech.num_nodes        = validate_array(in_dict['self.num_nodes'])
             mech.nodes_coordinates= validate_array(in_dict['self.nodes_coordinates'])
             mech.damping          = validate_array(in_dict['self.damping'])
             mech.alpha            = validate_array(in_dict['self.alpha'])
@@ -490,9 +671,24 @@ class MechanicalDummy(object):
         
         if state[8]:
             mech.omegas= in_dict['self.omegas']
-            mech.frf   = in_dict['self.frf']
             mech.dof_ref_out = in_dict['self.dof_ref_out']
             mech.dof_ref_inp = in_dict['self.dof_ref_inp']
+            frf = in_dict['self.frf']
+            if not frf.shape:
+                # it is a memory map and this parameter is the filename
+                size = (mech.omegas.shape[0], mech.dof_ref_inp.shape[0], mech.dof_ref_out.shape[0])
+                frfpath = frf.item()
+                if not os.path.exists(frfpath):
+                    frfpath = os.path.join(fdir, fname + '_frf.dat')
+                if not os.path.exists(frfpath):
+                    raise RuntimeError(f"FRF memorymap could neither be found in {frf.item()} nor in {frfpath}.")
+                if os.access(frfpath, os.W_OK):
+                    mode = 'r+'
+                else:
+                    mode = 'r'
+                mech.frf = np.memmap(frfpath, dtype=np.complex64, mode=mode, shape=size)
+            else:
+                mech.frf = frf
 
         mech.state = state
         
@@ -517,12 +713,12 @@ class Mechanical(MechanicalDummy):
             path = os.path.join(ansys.directory, ansys.jobname)
             ansys.finish()
             ansys.clear()
-            for file in glob.glob(f'{path}.*'):
-                os.remove(file)
-            if os.path.exists(f'{path}/'):
-                for file in glob.glob(f'{path}/*'):
-                    os.remove(file)
-                os.rmdir(f'{path}/')
+            # for file in glob.glob(f'{path}.*'):
+            #     os.remove(file)
+            # if os.path.exists(f'{path}/'):
+            #     for file in glob.glob(f'{path}/*'):
+            #         os.remove(file)
+            #     os.rmdir(f'{path}/')
         except (pyansys.errors.MapdlExitedError, NameError) as e:
             logger.exception(e)
             ansys = self.start_ansys(wdir, jobname)
@@ -549,9 +745,6 @@ class Mechanical(MechanicalDummy):
         
         super().__init__(jobname)
     
-    @property
-    def num_nodes(self):
-        return len(self.nodes_coordinates)
     
     @staticmethod
     def start_ansys(working_dir=None, jid=None,):
@@ -563,6 +756,8 @@ class Mechanical(MechanicalDummy):
             # logger.warning(repr(e))
         if working_dir is None:
             working_dir = os.getcwd()
+        if not os.path.exists(working_dir):
+            os.makedirs(working_dir)
         os.chdir(working_dir)
         now = time.time()
         if jid is None:
@@ -2086,6 +2281,8 @@ class Mechanical(MechanicalDummy):
         
         if fmax is None:
             fmax = np.max(omegans) / 2 / np.pi
+        if not np.max(omegans) / 2 / np.pi <= fmax:
+            raise ValueError(f'The provided Nyquist frequency (={fmax}) is below the highest natural frequency to be used (={np.max(omegans) / 2 / np.pi})')
         df = fmax / (N // 2 + 1)
         # omegas = np.linspace(0, fmax, N // 2 + 1, False) * 2 * np.pi
         # assert np.isclose(df * 2 * np.pi, (omegas[-1] - omegas[0]) / (N // 2 + 1 - 1))
@@ -2131,7 +2328,13 @@ class Mechanical(MechanicalDummy):
         logger.info(f'FRF computation for non-classical modes with {N // 2 + 1} frequency lines in the frequency range up to {fmax} Hz and {num_modes} modes for {dof_ref_inp.shape[0]} input and {dof_ref_out.shape[0]} output nodes.')
         
         # inp_node_ind = np.logical_and(dof_ref_out[:,0] == inp_nodes, dof_ref_out[:,1] == dof_ind)        
-        frf = np.zeros((N // 2 + 1, dof_ref_inp.shape[0], dof_ref_out.shape[0]), dtype=complex)
+        if kwargs.get('fname_mmap', False):
+            fname = kwargs['fname_mmap']
+            logger.warning("Using a memory map for the frf array slows down parallel (numba) computation.")
+            frf = np.memmap(fname, dtype=np.complex64, mode='w+', shape=(N // 2 + 1, dof_ref_inp.shape[0], dof_ref_out.shape[0]))
+            # frf[:,:,:] = 0
+        else:
+            frf = np.zeros((N // 2 + 1, dof_ref_inp.shape[0], dof_ref_out.shape[0]), dtype=np.complex64)
         
         if modes is None:
             modes = range(num_modes)
@@ -2141,22 +2344,37 @@ class Mechanical(MechanicalDummy):
         omega_scale = np.empty((N // 2 + 1,), dtype=complex)
         omega_scale_conj = np.empty((N // 2 + 1,), dtype=complex)
         
-        for mode in modes:
-            lambda_n = lamda[mode]
+        from numba import njit, prange, set_num_threads
+        set_num_threads(18)
+        @njit(parallel=True)
+        def parallel_freq(frf, omega_scale, in_out, omega_scale_conj, in_out_conj):
             
-            mode_shape_out = mode_shapes_out[np.newaxis, :, mode] # complex vector (num_nodes,)
-            mode_shape_inp = mode_shapes_inp[:, np.newaxis, mode] # complex vector (num_nodes,)
-        
-            a_n = gen_mod_coef[mode]
-            in_out[:,:] = (mode_shape_inp * mode_shape_out) / a_n
-            in_out_conj[:,:] = np.conj(in_out)
-            
-            omega_scale[:]      = (1 / (1j * omegas -         lambda_n ))
-            omega_scale_conj[:] = (1 / (1j * omegas - np.conj(lambda_n)))
-            
-            for i in range(N // 2 + 1):
+            for i in prange(N // 2 + 1):
                 # most expensive part
+                # for i in range((N // 2 + 1) * j, (N // 2 + 1) * (j + 1)):
                 frf[i,:,:] += omega_scale[i]      *      in_out + omega_scale_conj[i] * in_out_conj
+            return True
+        
+        from alive_progress import alive_bar
+        with  alive_bar(len(modes) ,force_tty=True) as pbar:
+            for mode in modes:
+                lambda_n = lamda[mode]
+                
+                mode_shape_out = mode_shapes_out[np.newaxis, :, mode] # complex vector (num_nodes,)
+                mode_shape_inp = mode_shapes_inp[:, np.newaxis, mode] # complex vector (num_nodes,)
+            
+                a_n = gen_mod_coef[mode]
+                in_out[:,:] = (mode_shape_inp * mode_shape_out) / a_n
+                in_out_conj[:,:] = np.conj(in_out)
+                
+                omega_scale[:]      = (1 / (1j * omegas -         lambda_n ))
+                omega_scale_conj[:] = (1 / (1j * omegas - np.conj(lambda_n)))
+                parallel_freq(frf, omega_scale, in_out, omega_scale_conj, in_out_conj)
+                # for i in range(N // 2 + 1):
+                #     # most expensive part
+                #     frf[i,:,:] += omega_scale[i]      *      in_out + omega_scale_conj[i] * in_out_conj
+                    
+                pbar()
             
         if out_quant == 'a':
             frf *=   -omegas[:, np.newaxis, np.newaxis]**2
@@ -2168,7 +2386,9 @@ class Mechanical(MechanicalDummy):
             logger.warning(f'This output quantity is invalid: {out_quant}')
             
         self.omegas = omegas
-        self.frf= frf
+        self.frf = frf
+        if isinstance(frf, np.memmap):
+            frf.flush()
         self.dof_ref_out = dof_ref_out
         self.dof_ref_inp = dof_ref_inp
         
@@ -2391,30 +2611,9 @@ class Mechanical(MechanicalDummy):
     def modal(self, damped=True, num_modes=None, use_cache=True, reset_sliders=True, modal_matrices=False, use_meas_nodes=False):  # Modal Analysis
         ansys = self.ansys
 
-        num_nodes = self.num_nodes
-        if num_modes is None:
-            num_modes = self.num_modes
-        assert num_modes <= num_nodes
-        if num_modes > 10 * num_nodes:
-            logger.warning(f'The number of modes {num_modes} should be greater/equal than 10 number of nodes {num_nodes}.')
-
-        # cached modal analysis results
-        # TODO: the logic needs improvement: num_modes may have been different for both types of analyses
-        if use_cache:
-            if damped and num_modes == self.num_modes:
-                frequencies = self.damped_frequencies
-                damping = self.modal_damping
-                mode_shapes = self.damped_mode_shapes
-            elif not damped and num_modes == self.num_modes:
-                frequencies = self.frequencies
-                mode_shapes = self.mode_shapes
-                damping = np.zeros_like(frequencies)
-            
-            gen_mod_coeff = self.gen_mod_coeff
-            if modal_matrices and gen_mod_coeff is not None and frequencies is not None:
-                return frequencies, damping, mode_shapes, gen_mod_coeff
-            elif not modal_matrices and frequencies is not None:
-                return frequencies, damping, mode_shapes
+        ret_vals = super().modal(damped, num_modes, use_cache, modal_matrices)
+        if ret_vals is not None:
+            return ret_vals
 
         ansys.prep7()
         if self.coulomb_elements and reset_sliders:
@@ -3128,7 +3327,49 @@ class Mechanical(MechanicalDummy):
        
 
         return time_values, [all_disp_d, all_disp_v, all_disp_a]
-
+    
+    def transient_ifrf(self, fy=None, fz=None, 
+                       inp_nodes=None,
+                       inp_dt=None, out_dt=None, 
+                       out_quant=['d', 'v', 'a'], **kwargs):
+        '''
+        move the method to MechanicalDummy for cases where frf is precomputed to avoid ansys startup
+        in case frf is not precomputed we must be in Mechanical
+        so we inherit the method in Mechanical and compute frf (if needed) before calling super()
+        '''
+        omegas = self.omegas
+        frf = self.frf
+        
+        
+        inp_dofs = []
+        
+        if fy is None and fz is None:
+            raise ValueError(f"Neither fy nor fz were provided")
+        
+        if fy is not None:
+            N = fy.shape[0]
+            inp_dofs.append('uy')
+        if fz is not None:
+            N = fz.shape[0]
+            inp_dofs.append('uz')
+            
+        if inp_nodes is None:
+            inp_nodes = self.nodes_coordinates[:,0]
+        
+        out_dofs = kwargs.get('out_dofs', inp_dofs)
+        
+        load_frf = (omegas is not None and omegas[-1] == 1 / 2 / inp_dt * 2 * np.pi)
+        load_frf = (load_frf and frf is not None and np.all(frf.shape == (N // 2 + 1, len(inp_nodes)*len(inp_dofs), len(self.meas_nodes)*len(out_dofs))))
+        
+        if not load_frf:
+            omegas, frf, _, _ = self.frequency_response_non_classical(N,
+                                                      inp_nodes=inp_nodes, 
+                                                      inp_dofs=inp_dofs, 
+                                                      out_dofs=out_dofs, 
+                                                      fmax=1/2/inp_dt, out_quant='d', **kwargs)
+            
+        return super().transient_ifrf(fy, fz, inp_nodes, inp_dt, out_dt, out_quant, out_dofs=out_dofs)
+        
 #     def mode_superpos(self, f=None, d=None):
 #         ansys = self.ansys
 #         # Transient/Harmonic Response
@@ -3229,146 +3470,7 @@ class Mechanical(MechanicalDummy):
 #
 #         return f
 
-    def transient_ifrf(self, fy=None, fz=None, 
-                       inp_domain='freq',
-                       inp_nodes=None,
-                       inp_dt=None, out_dt=None, 
-                       out_quant=['d', 'v', 'a'], **kwargs):
-        
-        '''
-        Compute the vibration response of the system self to arbitrary forcing in 
-        y and z direction in the frequency domain. The compliance FRF is computed 
-        for as many timesteps / frequency lines as are in the force vectors up to 
-        a frequency of half the sampling frequency 1/inp_dt. The sampling resolution
-        may be increased by zero-padding the response prior to inverse FFT. The 
-        computationally most expensive part is the assembly of the FRF, depending
-        on the number of input and output nodes. Once computed, the FRF will be re-
-        used if no parameters have changed, so the response to different force
-        time histories can be evaluated quickly. Note, that in comparison
-        with direct time stepping methods, Fourier transform methods suffer from 
-        wrap-around effects but reach steady-state instantly.
-        
-        Parameters:
-        -----------
-            fy, fz: np.ndarray (N, n_inp_nodes)
-                Lateral force in y / z direction in frequency or time domain (see 
-                argument "inp_domain") for all nodes in "inp_nodes". If given in 
-                time domain, a FFT is performed prior to further computations and 
-                the number of output timesteps is N_out = 2 * (N // 2) * inp_dt // out_dt. 
-                If given in frequency domain, the number of timesteps is
-                N_out = (N // 2 + 1) * inp_dt // out_dt.
-            inp_domain: str ['freq', 'time', 'rbf'], optional
-                Indicate wether force arrays represent frequency- or time-domain
-                data. Defaults to 'freq'
-            inp_nodes: np.ndarray((n_imp_nodes,), int), optional
-                The numbers of input nodes corresponding to the columns of fy / fz.
-                Defaults to all nodes (self.nodes_coordinates[:,0])
-            inp_dt: float
-                Sample spacing (inverse of the sampling rate) of the input force
-                time histories.
-            out_dt: float
-                Sample spacing (inverse of the sampling rate) of the output 
-                response time histories. 
-            out_quant: list of ['d','v','a']
-                Whether to compute displacements, velocities and/or accelerations.
-        
-        Other Parameters:
-        -----------------
-            **kwargs:
-                All other keyword arguments are passed on to self.frequency_response_non_classical 
-        
-        Returns:
-        --------
-            time_values: ndarray
-                Array holding the time instants of the computed responses.
-            [d, v, a]: list-of-ndarray(N_out, num_out_nodes, num_out_dofs
-                Response time histories (displacement, velocity, acceleration).
-                Note, that the ordering of out the output follows the order in 
-                self.dof_ref_out.
-        '''
-        
-        omegas = self.omegas
-        frf = self.frf
-        
-        meas_nodes = self.meas_nodes
-        
-        if inp_domain=='freq':
-            fy_freq = fy
-            fz_freq = fz
-        elif inp_domain=='time':
-            if fy is not None: fy_freq = np.fft.rfft(fy, axis=0)
-            else: fy_freq = None
-            if fz is not None: fz_freq = np.fft.rfft(fz, axis=0)
-            else: fz_freq = None
-        else:
-            raise ValueError(f"Argument 'inp_domain' must be one of ['freq', 'time'] but is {inp_domain}.")
-        
-        assert inp_dt is not None
-        
-        if out_dt is None:
-            out_dt = inp_dt
-        assert out_dt <= inp_dt
-        
-        if inp_nodes is None:
-            inp_nodes = self.nodes_coordinates[:,0]
-        num_nodes = len(inp_nodes)
-        
-        inp_dofs = []
-        out_dofs = kwargs.get('out_dofs', inp_dofs)
-        
-        if fy_freq is not None:
-            assert num_nodes == fy_freq.shape[1]
-            N = 2 * (fy_freq.shape[0] - 1)
-            inp_dofs.append('uy')
-        if fz_freq is not None:
-            assert num_nodes == fz_freq.shape[1]
-            N = 2 * (fz_freq.shape[0] - 1)
-            inp_dofs.append('uz')
-        
-        t_end = N * inp_dt
-        N_out = int(t_end / out_dt)
-        
-        load_frf = (omegas is not None and omegas[-1] == 1 / 2 / inp_dt * 2 * np.pi)
-        load_frf = (load_frf and frf is not None and np.all(frf.shape == (N // 2 + 1, len(inp_nodes)*len(inp_dofs), len(meas_nodes)*len(out_dofs))))
-        
-        if not load_frf:
-            omegas, frf, _, _ = self.frequency_response_non_classical(N,
-                                                      inp_nodes=inp_nodes, 
-                                                      inp_dofs=inp_dofs, 
-                                                      out_dofs=out_dofs, 
-                                                      fmax=1/2/inp_dt, out_quant='d', **kwargs)
-            
-        F_freq = np.hstack([fy_freq, fz_freq]) # n_lines, n_inp_nodes*n_inp_dofs
-        
-        d_freq = np.empty((N // 2 + 1, 2 * len(meas_nodes)), dtype=complex)
-        for i in range(N // 2 + 1):
-            np.dot(F_freq[i,:], frf[i,:,:], out=d_freq[i,:])
-        d_freq = d_freq.reshape((N // 2 + 1, len(meas_nodes), 2), order='F')
-        
-        if 'd' in out_quant:
-            d_freq_time = np.fft.irfft(d_freq, n=N_out, axis=0)
-        else:
-            d_freq_time = None
-        
-        if 'v' in out_quant:
-            v_freq_time = np.fft.irfft(d_freq * 1j * omegas[:, np.newaxis, np.newaxis], n=N_out, axis=0)
-        else:
-            v_freq_time = None
-            
-        if 'a' in out_quant:
-            a_freq_time = np.fft.irfft(d_freq *-1j * omegas[:, np.newaxis, np.newaxis]**2, n=N_out, axis=0)
-        else:
-            a_freq_time = None
-        
-        time_values = np.linspace(inp_dt, N_out * out_dt, N_out) #  ansys also starts at inp_dt
-        
-        self.time_values = time_values
-        self.d_freq = d_freq
-        self.d_freq_time = d_freq_time
-        self.v_freq_time = v_freq_time
-        self.a_freq_time = a_freq_time
-        
-        return time_values, [d_freq_time, v_freq_time, a_freq_time]
+
     
     def export_ans_mats(self):
         ansys = self.ansys
@@ -3435,25 +3537,26 @@ class Mechanical(MechanicalDummy):
         
         return k, m, c
 
-    def save(self, save_dir, emergency_arrays=None):
-        super().save(save_dir, emergency_arrays)
+    def save(self, fpath, emergency_arrays=None):
+        super().save(fpath, emergency_arrays)
         
     @classmethod
-    def load(cls, jobname, load_dir, ansys=None, wdir=None):
-        assert os.path.isdir(load_dir)
+    def load(cls, fpath, ansys=None, wdir=None,):
+        assert os.path.exists(fpath)
         
-        fname = os.path.join(load_dir, f'{jobname}_mechanical.npz')
-        assert os.path.exists(fname)
-        
-        logger.info('Now loading previous results from  {}'.format(fname))
+        logger.info('Now loading previous results from  {}'.format(fpath))
 
-        in_dict = np.load(fname, allow_pickle=True)
+        in_dict = np.load(fpath, allow_pickle=True)
         
-        assert jobname == in_dict['self.jobname'].item()
+        jobname = in_dict['self.jobname'].item()
+        
+        # assert jobname == in_dict['self.jobname'].item()
         
         mech = cls(ansys, jobname, wdir)
         
-        self._load(in_dict, mech)
+        mech._load(fpath, mech)
+        
+        return mech
         
     def get_geometry(self):
         '''

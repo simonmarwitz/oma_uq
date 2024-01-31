@@ -3,11 +3,15 @@ import logging
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.setLevel(level=logging.INFO)
+import time
 
 import numpy as np
 import scipy
 
-def spectral_wind_field(x_grid, f_w, L, U_bar, sigma, C_uz=10, C_vz=7, C_wz=4, seed=None):
+from numba import njit, prange, set_num_threads
+#set_num_threads(18)
+
+def spectral_wind_field(x_grid, f_w, L, U_bar, sigma, C_uz=10, C_vz=7, seed=None):
     
     n_z = x_grid.shape[0]
     
@@ -19,12 +23,14 @@ def spectral_wind_field(x_grid, f_w, L, U_bar, sigma, C_uz=10, C_vz=7, C_wz=4, s
     # random phases of the windfield
     if seed is None:
         seed = np.random.randint(np.iinfo(np.int32).max)
-        logger.info(f'Random seed is: {seed}')
+    logger.info(f'Random seed is: {seed}')
     rng = np.random.default_rng(seed)
-    phi_um = rng.random((n_fw, n_z)) * 2 * np.pi 
-    phi_vm = rng.random((n_fw, n_z)) * 2 * np.pi 
+    phi_um = rng.random((n_fw, n_z), dtype=np.float32) * 2 * np.pi 
+    phi_vm = rng.random((n_fw, n_z), dtype=np.float32) * 2 * np.pi 
     # phi_wm = np.random.random((n_z, n_fw)) * 2 * np.pi 
     
+    logger.debug(phi_um)
+    logger.debug(phi_vm)
     # Compute basic wind parameters and auto spectral densitities according to [Clobes 2008]
 
     # transpose column vectors
@@ -44,33 +50,46 @@ def spectral_wind_field(x_grid, f_w, L, U_bar, sigma, C_uz=10, C_vz=7, C_wz=4, s
     # f_n = f_w * z / U_bar
     # S_ww = 2.15 * f_n / (1 + 11.16 * f_n**(5 / 3)) / f_w * sigma**2
     
-    # CPSD assembly
-    S_uu_full_b = np.zeros((n_fw, n_z, n_z))
-    S_vv_full_b = np.zeros((n_fw, n_z, n_z))
+    # CPSD spectral_assembly
+    S_uu_full_b = np.zeros((n_fw, n_z, n_z), dtype=np.float32)
+    S_vv_full_b = np.zeros((n_fw, n_z, n_z), dtype=np.float32)
     # S_ww_full_b = np.zeros((u + 1, n_z, n_fw))
     
+    # numba just-in-time compilation for parallel computation
+    # high memory requirements limit single runs of this function on a given node
+    # a single core implementation would take much longer and can not be compensated by parallel sample computation
+    @njit(parallel=True)
+    def spectral_assembly(i, j, S_uu_full_b, S_vv_full_b, x_grid, f_w, C_uz, C_vz, U_bar):
+        if i==j: 
+            S_uu_full_b[:, i - j, j] = S_uu[:, i]
+            S_vv_full_b[:, i - j, j] = S_vv[:, i]
+            # S_ww_full_b[i - j, j,:] = S_ww[i,:]
+        else:
+            delta_x = np.abs(x_grid[i] - x_grid[j])
+            
+            common = np.exp(-2 * f_w[:,0] * delta_x / (U_bar[0,i] + U_bar[0,j]))
+            
+            #coh_u = np.exp(-2 * f_w[:,0] * C_uz * delta_x / (U_bar[0,i] + U_bar[0,j]))
+            coh_u = common**(C_uz*2)
+            # print(coh_u.shape)
+            #r = np.sqrt(coh_u**2 * S_uu[:, i] * S_uu[:, j])
+            r = np.sqrt(coh_u * S_uu[:, i] * S_uu[:, j])
+            # print(r.shape)
+            S_uu_full_b[:, i - j, j] = r #* np.exp(1j*phi)
+            
+            #coh_v = np.exp(-2 * f_w[:,0] * C_vz * delta_x / (U_bar[0,i] + U_bar[0,j])) 
+            coh_v = common**(C_vz*2)
+            #r = np.sqrt(coh_v**2 * S_vv[:, i] * S_vv[:, j])
+            r = np.sqrt(coh_v * S_vv[:, i] * S_vv[:, j])
+            S_vv_full_b[:, i - j, j] = r
+            
+            # coh_w = np.exp(-2 * f_w * C_wz * delta_x / (U_bar[i] + U_bar[j]))
+            # r = np.sqrt(coh_w**2 * S_ww[i,:] * S_ww[j,:])
+            # S_ww_full_b[i - j, j, :] = r
+    
     for i in range(n_z):
-        for j in range(i + 1):
-            if i==j: 
-                S_uu_full_b[:, i - j, j] = S_uu[:, i]
-                S_vv_full_b[:, i - j, j] = S_vv[:, i]
-                # S_ww_full_b[i - j, j,:] = S_ww[i,:]
-            else:
-                delta_x = np.abs(x_grid[i] - x_grid[j])
-                                
-                coh_u = np.exp(-2 * f_w[:,0] * C_uz * delta_x / (U_bar[0,i] + U_bar[0,j]))
-                # print(coh_u.shape)
-                r = np.sqrt(coh_u**2 * S_uu[:, i] * S_uu[:, j])
-                # print(r.shape)
-                S_uu_full_b[:, i - j, j] = r #* np.exp(1j*phi)
-                
-                coh_v = np.exp(-2 * f_w[:,0] * C_vz * delta_x / (U_bar[:,i] + U_bar[:,j])) 
-                r = np.sqrt(coh_v**2 * S_vv[:, i] * S_vv[:, j])
-                S_vv_full_b[:, i - j, j] = r
-                
-                # coh_w = np.exp(-2 * f_w * C_wz * delta_x / (U_bar[i] + U_bar[j]))
-                # r = np.sqrt(coh_w**2 * S_ww[i,:] * S_ww[j,:])
-                # S_ww_full_b[i - j, j, :] = r
+        for j in prange(i + 1):
+            spectral_assembly(i, j, S_uu_full_b, S_vv_full_b, x_grid, f_w, C_uz, C_vz, U_bar)
                 
     if f_w[0,0] == 0:
         S_uu_full_b[0, :, :] = 0
@@ -79,11 +98,13 @@ def spectral_wind_field(x_grid, f_w, L, U_bar, sigma, C_uz=10, C_vz=7, C_wz=4, s
         S_uu_full_b[0, 0, :] = np.ones(n_z)*1e-10
         S_vv_full_b[0, 0, :] = np.ones(n_z)*1e-10
         # S_ww_full_b[0,:,0] = np.ones(n_z)*1e-10
+        
+    del S_uu
+    del S_vv
     
     # Decompose Cross-spectral densities
-    
-    S_uu_chol_b = np.empty_like(S_uu_full_b)
-    S_vv_chol_b = np.empty_like(S_vv_full_b)
+    S_uu_chol_b = np.empty_like(S_uu_full_b, dtype=np.float32)
+    S_vv_chol_b = np.empty_like(S_vv_full_b, dtype=np.float32)
     # S_ww_chol_b = np.empty_like(S_ww_full_b)
     
     u_target = 10
@@ -109,24 +130,41 @@ def spectral_wind_field(x_grid, f_w, L, U_bar, sigma, C_uz=10, C_vz=7, C_wz=4, s
                 if u_target > n_z:
                     print(k, u_target,  e)
     
-    # Fourier coefficient assembly
+    del S_uu_full_b
+    del S_vv_full_b
+    
+    @njit(parallel=True)
+    def fourier_assembly(S_chol_b, phase, c_j):
+        c_j_b = np.fliplr(S_chol_b * phase)
+        for i in prange(n_fw):
+            for j in prange(n_z):
+                c_j[i, j] = np.trace(c_j_b[:,:,i], offset=n_z - j - 1)
+                
+    # Fourier coefficient spectral_assembly
     c_uj = np.zeros((n_fw, n_z), dtype=complex)
     c_vj = np.zeros((n_fw, n_z), dtype=complex)
     # c_wj = np.zeros((n_z, n_fww), dtype=complex)
     delta_omega = delta_fw * 2 * np.pi
-    # last part is the most expensive as sin(phi_um) has to be repeated n_z times along axis=1)
-    c_uj_b = np.flip(np.abs(S_uu_chol_b, where=S_uu_chol_b!=0) * np.sqrt(2* delta_omega) * np.exp(1j * phi_um[:,np.newaxis, :]), axis=2)
-    c_vj_b = np.flip(np.abs(S_vv_chol_b, where=S_vv_chol_b!=0) * np.sqrt(2* delta_omega) * np.exp(1j * phi_vm[:,np.newaxis, :]), axis=2)
-    for j in range(n_z):
-        c_uj[:, j] = np.trace(c_uj_b, offset=n_z - j - 1, axis1=1, axis2=2)
-        c_vj[:, j] = np.trace(c_vj_b, offset=n_z - j - 1, axis1=1, axis2=2)
+    # last part is the most expensive as sin(phi_um) has to be repeated n_z times along axis=0)
+    # we transpose both arrays because numba implementations of flip and trace do not suport axis arguments
+    S_uu_chol_b, phase_u = np.broadcast_arrays(np.transpose(np.abs(S_uu_chol_b, where=S_uu_chol_b!=0) , axes=(1, 2, 0)), 
+                                             np.sqrt(2* delta_omega) * np.exp(1j * phi_um.T)[np.newaxis, :, :])
+    fourier_assembly(S_uu_chol_b, phase_u, c_uj)
+    del S_uu_chol_b
+    del phase_u
     
+    S_vv_chol_b, phase_v = np.broadcast_arrays(np.transpose(np.abs(S_vv_chol_b, where=S_vv_chol_b!=0), axes=(1, 2, 0)), 
+                                             np.sqrt(2* delta_omega) * np.exp(1j * phi_vm.T)[np.newaxis, :, :])
+    fourier_assembly(S_vv_chol_b, phase_v, c_vj)
+    del S_vv_chol_b
+    del phase_v
+
     return c_uj, c_vj
 
 def temporal_wind_field(c_uj, c_vj, N_m):
     
     n_z = c_uj.shape[1]
-    print(f'Transforming windfield to time domain with {n_z} x {N_m} samples.')
+    logger.info(f'Transforming windfield to time domain with {N_m} x {n_z} samples.')
     
     u_j = np.zeros((N_m, n_z))
     v_j = np.zeros((N_m, n_z))
@@ -139,8 +177,8 @@ def temporal_wind_field(c_uj, c_vj, N_m):
     
     return u_j, v_j
 
-def force_wind_field(u_j, v_j, delta_x=1.0, b=1.85, cscd=1.0, cf=2.36124, rho=1.25):
-    print(f'Computing forces from windfield with A_ref={delta_x*b} and c_f = {cf}')
+def force_wind_field(u_j, v_j, delta_x=1.0, b=1.9, cscd=1.0, cf=2.86519, rho=1.25):
+    logger.info(f'Computing forces from windfield with A_ref={delta_x*b} and c_f = {cf}')
     
     # q_b = 0.5*\rho*v_b^2$
     q_buj = 0.5 * rho * u_j**2 * np.sign(u_j)
@@ -166,6 +204,7 @@ def terrain_parameters(category):
     return z_min, alpha, vm_fact, vm_min, Iv_fact, Iv_min, eps
 
 def basic_wind_parameters(x_grid, v_b, z_min, alpha, vm_fact, vm_min, Iv_fact, Iv_min, eps):
+    logger.info(f'Computing basic wind parameters according to EN 1991-1-4 for v_b {v_b}')
     # Compute basic wind parameters according to DIN EN 1991-1-4 and corresponding NA    
     # Werte nach Tab. NA.B.2
     v_m = vm_fact * v_b * (x_grid/10)**alpha
@@ -182,7 +221,7 @@ def basic_wind_parameters(x_grid, v_b, z_min, alpha, vm_fact, vm_min, Iv_fact, I
 def default_wind_field(category=2, zone=2, duration=36, fs_w=10, fs_m=100, **kwargs):
     
     
-    # 200 x 2**17 samples take 1min 42 (CPSD assembly) + 2min 20s (CPSD decomposition) + 1min 59s(Fourier coefficients assembly) + 1.4s (IFFT) = 6min 2s; 
+    # 200 x 2**17 samples take 1min 42 (CPSD spectral_assembly) + 2min 20s (CPSD decomposition) + 1min 59s(Fourier coefficients spectral_assembly) + 1.4s (IFFT) = 6min 2s; 
     # peak at 270 GB RAM
     
     # Spatial domain grid
@@ -226,40 +265,9 @@ def default_wind_field(category=2, zone=2, duration=36, fs_w=10, fs_m=100, **kwa
     
     u_j, v_j = temporal_wind_field(c_uj, c_vj, N_m)
     
-    # Getrennte Betrachtung der longitudinalen und lateralen Anstroemung (Annahme nicht belegt durch Literatur)
-    # 
-    # Voelligkeitsgrad je Schuss:
-    # 
-    # $A_c = 1.85^2 = 3.4225$ m²
-    # 
-    # $A = 0.2*1.85 + 0.2*1.85 + \sqrt(2*1.85^2)*0.07 + 0.06*1.85 = 0.37 + 0.37 + 0.183141 + 0.111 = 1.0341$ m²
-    # 
-    # $\phi = 1.0341 / 3.4225 = 0.3021$
-    # phi = A_c / A
-    # 
-    # Effektive Schlankheit $\psi_\lambda$ nach Tabelle 7.16:
-    # 
-    # $l = 200$ m, $b=1.85$ m
-    # 
-    # $\lambda = \min(1.4 \frac{l}{b} = 151.35, 70) = 70$
-    # lamda = min(1.4*l/b,70)
-    # 
-    # $\psi_\lambda = 0.98385$ linearly interpolated
-    # 
-    # Grundkraftbeiwert $c_{f,0}$ (Rechteckiges Fachwerk, senkrechte Anstroemung):
-    # 
-    # $c_{f0} = 2.4$
-    # 
-    # Kraftbeiwert:
-    # 
-    # $c_f = c_{f0} \psi_\lambda = 2.36124$
-    # 
-    # We assume here, that we can simply use 4.10 to get pressure from our computed wind speeds
-    # 
-    # We assume $c_s c_d = 1$
     
     F_uj, F_vj = force_wind_field(u_j + v_m[:,np.newaxis], v_j, delta_x=x_grid[1]-x_grid[0], 
-                                  b=1.85, cscd=1.0, cf=2.36124, rho=1.25)
+                                  b=1.9, cscd=1.0, cf=2.86519, rho=1.25)
     
     # plot_windfield(u_j, v_j, F_uj, F_vj)
     
@@ -269,10 +277,15 @@ def default_wind_field(category=2, zone=2, duration=36, fs_w=10, fs_m=100, **kwa
 def plot_windfield(u_j=None, v_j=None, F_uj=None, F_vj=None, duration=None, height=None):
     import matplotlib.pyplot as plt
     
-    if duration is not None and height is not None:
-        extent = (0, duration, 0, height)
-    else:
-        extent = None
+    for arr in [u_j, v_j, F_uj, F_vj]:
+        if arr is not None:
+            if duration is None:
+                duration = arr.shape[1]
+            if height is None:
+                height = arr.shape[0]
+            break
+            
+    extent = (0, duration, 0, height)
         
     if u_j is not None and v_j is not None:
         Vmin = min([u_j.min(), v_j.min()])#, w_j.min()])
@@ -287,28 +300,32 @@ def plot_windfield(u_j=None, v_j=None, F_uj=None, F_vj=None, duration=None, heig
         Fmin, Fmax = None, None
     
     if u_j is not None:
-        plt.matshow(u_j, origin='lower', aspect='auto', extent=extent, vmin=Vmin, vmax=Vmax)
+        fig = plt.figure()
+        plt.matshow(u_j, fig.number, origin='lower', aspect='auto', extent=extent, vmin=Vmin, vmax=Vmax)
         plt.xlabel('time [s]')
         plt.ylabel('height [m]')
         cbar = plt.colorbar()
         cbar.set_label('Turbulence $V_u$ [m/s]')
         
     if v_j is not None:
-        plt.matshow(v_j, origin='lower', aspect='auto', extent=extent, vmin=Vmin, vmax=Vmax)
+        fig = plt.figure()
+        plt.matshow(v_j, fig.number, origin='lower', aspect='auto', extent=extent, vmin=Vmin, vmax=Vmax)
         plt.xlabel('time [s]')
         plt.ylabel('height [m]')
         cbar = plt.colorbar()
         cbar.set_label('Turbulence $V_v$ [m/s]')
         
     if F_uj is not None:
-        plt.matshow(F_uj, origin='lower', aspect='auto', extent=extent, vmin=Fmin, vmax=Fmax)
+        fig = plt.figure()
+        plt.matshow(F_uj, fig.number, origin='lower', aspect='auto', extent=extent, vmin=Fmin, vmax=Fmax)
         plt.xlabel('time [s]')
         plt.ylabel('height [m]')
         cbar = plt.colorbar()
         cbar.set_label('Force $F_{w,u}$ [N]')
     
     if F_vj is not None:
-        plt.matshow(F_vj, origin='lower', aspect='auto', extent=extent, vmin=Fmin, vmax=Fmax)
+        fig = plt.figure()
+        plt.matshow(F_vj, fig.number, origin='lower', aspect='auto', extent=extent, vmin=Fmin, vmax=Fmax)
         plt.xlabel('time [s]')
         plt.ylabel('height [m]')
         cbar = plt.colorbar()

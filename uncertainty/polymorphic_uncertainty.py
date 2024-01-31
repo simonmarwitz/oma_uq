@@ -114,6 +114,10 @@ class RandomVariable(UncertainVariable):
             return ()
     
     def support(self, percentiles=(0.001,0.999)):
+        '''
+        percentiles are used as fallback only
+        will try to get the bounds corresponding to (0,1)
+        '''
         eval_params = []
         for param in self.params:
             if isinstance(param, UncertainVariable):
@@ -125,7 +129,10 @@ class RandomVariable(UncertainVariable):
         for params in product(*eval_params): # nested for loop over all eval_params -> cartesian product = full factorial
             rv = self.dist_fun(*params)
             if isinstance(self.dist_fun, scipy.stats.rv_continuous):
+                full_supp = rv.ppf((0,1))
                 this_supp = rv.ppf(percentiles)
+                if full_supp[0]>-np.infty: this_supp[0] = full_supp[0]
+                if full_supp[1]<np.infty: this_supp[1] = full_supp[1]
             elif isinstance(self.dist_fun, scipy.stats.rv_discrete):
                 this_supp = rv.support()
             else:
@@ -479,6 +486,7 @@ class PolyUQ(object):
                   
         self.N_mcs_ale = None
         self.N_mcs_epi = None
+        self.N_mcs_max = int(1e6)
         self.percentiles = None
         self.seed = None
         self.var_supp = None
@@ -533,7 +541,7 @@ class PolyUQ(object):
         
         return all_vars
             
-    def sample_qmc(self, N_mcs_ale=1000000, N_mcs_epi=100, percentiles=(0.0001, 0.9999), 
+    def sample_qmc(self, N_mcs_ale=100000, N_mcs_epi=1000, percentiles=(0.0001, 0.9999), 
                    check_discr='auto', seed=None,**kwargs):
         '''
         A function to generate quasi Monte Carlo samples for mixed aleatory-epistemic uncertainty quantification
@@ -626,6 +634,8 @@ class PolyUQ(object):
         # sampling parameters
         N_mcs = max(N_mcs_ale,N_mcs_epi)
         
+        assert N_mcs<=self.N_mcs_max
+        
         # check sample sizes
         n_vars_imp = len(vars_epi_prim)
         if N_mcs_epi < 2.5**n_vars_imp:
@@ -715,30 +725,8 @@ class PolyUQ(object):
         self.inp_suppl_epi = inp_suppl_epi
         
         return 
-    
-    def sample_stochastic(self, N_mcs):
-        '''
-        all_vars_prim
-        loop_ale = True
-        loop_epi = False
         
-        initialize samples pd.DataFrame? (n_vars_prim, N_mcs)
-        
-        compute all_vars (without duplicates)
-        initialze rng
-        
-        for n_ale in range(N_mcs):
-            sample and freeze var_inc (pignistic) pass 'random_state'=rng
-            sample and freeze var_ale (pass percentiles) pass 'random_state'=rng
-            sample var_imp (pignistic) pass 'random_state'=rng
-        
-        split prim, suppl_ale, suppl_epi
-        
-        save variables and store class
-            
-        '''
-        
-    def to_data_manager(self, title, **kwargs):
+    def to_data_manager(self, title, result_dir, working_dir=None, **kwargs):
         '''
         combining PolyUQ and DataManager
         options: 
@@ -788,8 +776,18 @@ class PolyUQ(object):
         inds_ale, inds_epi = np.mgrid[0:N_mcs_ale, 0:N_mcs_epi]
         inds_ale, inds_epi = inds_ale.ravel(), inds_epi.ravel()
         
-        ids_ale = np.array([str(uuid.uuid4()).split('-')[-1] for _ in range(N_mcs_ale)])
-        ids_epi = np.array([str(uuid.uuid4()).split('-')[-1] for _ in range(N_mcs_epi)])
+        # ids_ale = np.array([str(uuid.uuid4()).split('-')[-1] for _ in range(N_mcs_ale)])
+        # ids_epi = np.array([str(uuid.uuid4()).split('-')[-1] for _ in range(N_mcs_epi)])
+        
+        seed_ale, seed_epi = np.random.SeedSequence(self.seed).spawn(2)
+        
+        rng_ale = np.random.default_rng(seed=seed_ale)
+        integers_ale = rng_ale.choice(2**32, size=self.N_mcs_max, replace=False, shuffle=False)
+        ids_ale = np.char.mod('%08x', integers_ale[:N_mcs_ale])
+        
+        rng_epi = np.random.default_rng(seed=seed_epi)
+        integers_epi = rng_epi.choice(2**32, size=self.N_mcs_max, replace=False, shuffle=False)
+        ids_epi = np.char.mod('%08x', integers_epi[:N_mcs_epi])
         
         names_ale = [var.name for var in vars_ale if var.primary]
         names_epi = [var.name for var in vars_epi if var.primary]
@@ -808,13 +806,13 @@ class PolyUQ(object):
         for names in (names_ale, names_epi, names_grid):
             names.append('ids')
         # return
-        manager_ale = DataManager(title + '_ale', entropy=self.seed, **kwargs)
+        manager_ale = DataManager(title + '_ale', entropy=self.seed, result_dir=result_dir, working_dir=working_dir, **kwargs)
         manager_ale.provide_sample_inputs(arrays_ale, names_ale)
         
-        manager_epi = DataManager(title + '_epi', entropy=self.seed, **kwargs)
+        manager_epi = DataManager(title + '_epi', entropy=self.seed, result_dir=result_dir, working_dir=working_dir, **kwargs)
         manager_epi.provide_sample_inputs(arrays_epi, names_epi)
         
-        manager_grid = DataManager(title, entropy=self.seed, **kwargs)
+        manager_grid = DataManager(title, entropy=self.seed, result_dir=result_dir, working_dir=working_dir, **kwargs)
         manager_grid.provide_sample_inputs(arrays_grid, names_grid)
         
         self.fcount = N_mcs_ale * N_mcs_epi

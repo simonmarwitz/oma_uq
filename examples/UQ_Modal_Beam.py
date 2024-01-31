@@ -132,16 +132,15 @@ def mapping_function(E=2.1e11, a=0.9, b=None, t=None, rho=7850, N_wire=None,
     Iyz = 0
     
     # approximately similar second moments of area are achieved with a truss 
-    # consisting of 4 L profiles 0.226x0.226x0.03 m in the corners at a distance of 1.416 m 
     # additionally, the diagonal and horizontal bracings have to be considered for the weight
     # they add a weight of 0.016005*rho per meter, 
-    # so we need a cross-section area of 0.034634 m² to achieve the same weight per meter
-    # use a 200x200x20 L Profile at a 1.85 m distance slightly lower area, but similar moments of area
+    # so we need a cross-section area of 0.033816 m² to achieve the same weight per meter
+    # use a 160x15x15 L Profile at a 1.9 m distance slightly lower area, but similar moments of area
     # (also see photos of Sender Aholming)
     # use only the parts due to Steiner's theorem and reduce to 80 % due to truss flexibility
-    # A_L = (2*a*t - t*t)*4 = 0.0304
-    # Iy_L = 0.8*A_L*(L/2)**2 = 0.020809
-    # Iz_L = 0.8*A_L*(L/2)**2 = 0.020809
+    # A_L = (2*a*t - t*t)*4 = 0.0183
+    # Iy_L = 0.8*A_L*(L/2)**2 = 0.0132
+    # Iz_L = 0.8*A_L*(L/2)**2 = 0.0132
     # also see excel workbook 'pipe_to_truss_conversion.xlsx'
     
     # rotate cross section about angle alpha
