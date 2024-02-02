@@ -881,6 +881,66 @@ class Acquire(object):
             
         pass
     
+
+    def save(self, fpath):
+
+        fdir, file = os.path.split(fpath)
+        fname, ext = os.path.splitext(file)
+        
+        logger.info(f'Saving Acquire object to {fpath}')
+        
+        out_dict = {}
+        # 0:build_mdof, 1:free_decay, 2:ambient, 3:impulse_response, 4:modal  
+        
+        out_dict['self.state'] = self.state
+            
+        np.savez_compressed(fpath, **out_dict)
+        
+    @classmethod
+    def load(cls, fpath):
+        assert os.path.exists(fpath)
+        
+        def validate_array(arr):
+            '''
+            Determine whether the argument has a numeric datatype and if
+            not convert the argument to a scalar object or a list.
+        
+            Booleans, unsigned integers, signed integers, floats and complex
+            numbers are the kinds of numeric datatype.
+        
+            Parameters
+            ----------
+            array : array-like
+                The array to check.
+            
+            '''
+            _NUMERIC_KINDS = set('buifc')
+            if not arr.shape:
+                return arr.item()
+            elif arr.dtype.kind in _NUMERIC_KINDS:
+                return arr
+            else:
+                return list(arr)
+        
+        logger.info('Now loading previous results from  {}'.format(fpath))
+
+        in_dict = np.load(fpath, allow_pickle=True)
+        
+        jobname = in_dict['self.jobname'].item()
+        
+        acquire = cls(jobname=jobname)
+        
+        fdir, file = os.path.split(fpath)
+        fname, ext = os.path.splitext(file)
+        
+        in_dict = np.load(fpath, allow_pickle=True)
+        state = list(in_dict['self.state'])
+        
+        
+        
+        return acquire
+    
+    
 def ashift(array):
     return np.fft.fftshift(np.abs(array))
 
