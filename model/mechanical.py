@@ -350,7 +350,7 @@ class MechanicalDummy(object):
             v_freq_time = None
             
         if 'a' in out_quant:
-            a_freq_time = np.fft.irfft(d_freq *-1j * omegas[:, np.newaxis, np.newaxis]**2, n=N_out, axis=0)
+            a_freq_time = np.fft.irfft(d_freq *-1 * omegas[:, np.newaxis, np.newaxis]**2, n=N_out, axis=0)
         else:
             a_freq_time = None
         
