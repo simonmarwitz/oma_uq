@@ -788,17 +788,22 @@ def plots():
             zeta=0.05
             color='dimgrey'
             
-            mech.example_beam(num_nodes=100, num_modes=14, damping=zeta, num_meas_nodes=1, mD=0)
+            mech.example_beam(num_nodes=100, num_modes=8, damping=zeta, num_meas_nodes=1, mD=0)
             
-            omegas, frf_y = mech.frequency_response(65536,100,'uz',fmax=fmax, out_quant='a')
-            frf_y = frf_y[:,0]
+            omegas, frf_y,_,_ = mech.frequency_response_non_classical(65536, [100], ['uz'], fmax=fmax, out_quant='a')
+            frf_y = frf_y[:,0,2]
 
-            omegas, frf_z = mech.frequency_response(65536,100,'uy',fmax=fmax, out_quant='a')
-            frf_z = frf_z[:,0]
-                
-            ax1.plot(omegas/2/np.pi, np.abs(frf_y), color='grey',label='$x$-$z$-plane',)
+            omegas, frf_z,_,_ = mech.frequency_response_non_classical(65536, [100], ['uy'], fmax=fmax, out_quant='a')
+            frf_z = frf_z[:,0,1]
+            if False:
+                labelz = '$x$-$z$-plane'
+                labely = '$x$-$y$-plane'
+            else:
+                labelz = '$x$-$z$-Ebene'
+                labely = '$x$-$y$-Ebene'
+            ax1.plot(omegas/2/np.pi, np.abs(frf_y), color='grey',label=labelz,)
 
-            ax1.plot(omegas/2/np.pi,np.abs(frf_z), color='dimgrey', ls='dashed',label= '$x$-$y$-plane')
+            ax1.plot(omegas/2/np.pi,np.abs(frf_z), color='dimgrey', ls='dashed',label= labely)
 
                 
             ax1.set_yscale('log')
@@ -807,17 +812,26 @@ def plots():
             ax1.xaxis._set_tick_locations([0,0.2,0.4,0.6,1.4,1.6,1.8,2.0])
             ax1.legend(loc='lower right')
             ax1.set_ylabel('$|\mathcal{H}_\mathrm{f-a}| [\si{\milli\meter\per\square\second\per\\newton}]$',fontdict={'size':9})
-            ax1.set_xlabel('Frequency [\si{\hertz}]', labelpad=-9.3)
+            if False:
+                ax1.set_xlabel('Frequency [\si{\hertz}]', labelpad=-9.3)
+                
+                ax1.annotate('first-order', (0.18,0.0004) , ha='center')
+                ax1.annotate('support translation', (0.34,0.004), ha='center')
+                ax1.annotate('second-order', (0.66,0.002), ha='center')
+                ax1.annotate('third-order', (1.38,0.003), ha='center')
+            else:
+                ax1.set_xlabel('Frequenz [\si{\hertz}]', labelpad=-9.3)
             
-            ax1.annotate('first-order', (0.18,0.0004) , ha='center')
-            ax1.annotate('support translation', (0.34,0.004), ha='center')
-            ax1.annotate('second-order', (0.66,0.002), ha='center')
-            ax1.annotate('third-order', (1.38,0.003), ha='center')
+                ax1.annotate('erste Ordnung', (0.18,0.0004) , ha='center')
+                ax1.annotate('Starrkörperschw.', (0.34,0.0035), ha='center')
+                ax1.annotate('zweite Ordnung', (0.66,0.002), ha='center')
+                ax1.annotate('dritte Ordnung', (1.38,0.003), ha='center')
+                
             
             
             fig.subplots_adjust(top=0.97,bottom=0.18, left=0.09, right=0.98, hspace=0.1)
-            plt.savefig('/usr/scratch4/sima9999/home/2019_OMA_UQ/pres/figures/introduction/frf_example_struc_beam_wide.pdf')
-            plt.savefig('/usr/scratch4/sima9999/home/2019_OMA_UQ/pres/figures/introduction/frf_example_struc_beam_wide.png')
+            plt.savefig('/home/sima9999/2019_OMA_UQ/BB15/figures/introduction/frf_example_struc_beam_wide.pdf')
+            plt.savefig('/home/sima9999/2019_OMA_UQ/BB15/figures/introduction/frf_example_struc_beam_wide.png')
             plt.show()
         
     
@@ -930,7 +944,7 @@ def plots():
                 plt.yticks([])
                 plt.subplots_adjust(top=1,bottom=0, left=0, right=1)
                 plt.gca().set_axis_off()
-                # plt.savefig(f'/usr/scratch4/sima9999/home/2019_OMA_UQ/tex/figures/introduction/mshs/{i}_{j}_wide.pdf')
+                # plt.savefig(f'/home/sima9999/2019_OMA_UQ/tex/figures/introduction/mshs/{i}_{j}_wide.pdf')
                 
     # Mode shape in PlotMSH
     if False:
@@ -964,7 +978,7 @@ def plots():
         merged_data.merged_chan_dofs = PreProcessSignals.load_chan_dofs(f'/dev/shm/womo1998/{jid}/chan_dofs.txt')
         
         mode_shape_plot = ModeShapePlot(geometry, merged_data=merged_data, beamcolor='dimgrey', scale=0.2, amplitude=50, 
-                                        save_ani_path=f'/usr/scratch4/sima9999/home/2019_OMA_UQ/pres/figures/introduction/mshs_ani/')
+                                        save_ani_path=f'/home/sima9999/2019_OMA_UQ/pres/figures/introduction/mshs_ani/')
         
         # Don't forget to re-enable the hack in draw_lines, to draw the TMD mass on the top
         
@@ -980,14 +994,14 @@ def plots():
     plt.show()
 
 def main():
-    default_mapping(alpha=0)
-    default_mapping(alpha=45)
-    default_mapping(alpha=90)
-    default_mapping(alpha=135)
-    default_mapping(alpha=21)
+    # default_mapping(alpha=0)
+    # default_mapping(alpha=45)
+    # default_mapping(alpha=90)
+    # default_mapping(alpha=135)
+    # default_mapping(alpha=21)
     
     # test_domain()
-    # plots()
+    plots()
 
 
 if __name__ == '__main__':

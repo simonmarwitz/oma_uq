@@ -1170,7 +1170,7 @@ class Mechanical(MechanicalDummy):
         
         # ansys.open_gui()
             
-        frequencies, _, _ = self.modal(damped=False)
+        frequencies, _, _ = self.modal(damped=False, num_modes=num_modes)
         
         # undamped analysis
         if damping is None or damping == 0:
@@ -1676,7 +1676,8 @@ class Mechanical(MechanicalDummy):
                 'rho'       : 7850,
                 'Iy'        : 0.0136045227118697,
                 'Iz'        : 0.0136045227118697,
-
+                'Iyz'       : 0,
+                
                 'kz_nl'     : 117476.186062221,
                 'ky_nl'     : 135649.815292788,
                 'x_knl'     : 160,
@@ -2265,6 +2266,9 @@ class Mechanical(MechanicalDummy):
         
         
         '''
+        assert isinstance(inp_nodes, (list,tuple))
+        assert isinstance(inp_dofs, (list,tuple))
+        
         nodes_coordinates = self.nodes_coordinates
         
         if not use_meas_nodes:
@@ -2614,7 +2618,7 @@ class Mechanical(MechanicalDummy):
         ret_vals = super().modal(damped, num_modes, use_cache, modal_matrices)
         if ret_vals is not None:
             return ret_vals
-
+        
         ansys.prep7()
         if self.coulomb_elements and reset_sliders:
             logger.info("Temporarily resetting sliders for modal analysis.")
@@ -2744,7 +2748,7 @@ class Mechanical(MechanicalDummy):
             mode_shapes = mode_shapes[meas_indices, :3, :]
         else:
             #account for internal element nodes by reducing length
-            mode_shapes = mode_shapes[nnum<=num_nodes, :3, :]
+            mode_shapes = mode_shapes[nnum<=self.num_nodes, :3, :]
         
         
         if modal_matrices:
