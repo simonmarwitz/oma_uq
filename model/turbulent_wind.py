@@ -149,6 +149,9 @@ def spectral_wind_field(x_grid, f_w, L, U_bar, sigma, C_uz=10, C_vz=7, seed=None
     # we transpose both arrays because numba implementations of flip and trace do not suport axis arguments
     S_uu_chol_b, phase_u = np.broadcast_arrays(np.transpose(np.abs(S_uu_chol_b, where=S_uu_chol_b!=0) , axes=(1, 2, 0)), 
                                              np.sqrt(2* delta_omega) * np.exp(1j * phi_um.T)[np.newaxis, :, :])
+    # ..TODO:: It is actually invalid to just randomize the phase. 
+    # Spectrum must be generated as a complex timeseries with N(0, S_uu_chol_b) + j N(0, S_uu_chol_b)
+    # https://adsabs.harvard.edu/full/1995A%26A...300..707T
     fourier_assembly(S_uu_chol_b, phase_u, c_uj)
     del S_uu_chol_b
     del phase_u
