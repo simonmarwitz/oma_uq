@@ -187,6 +187,10 @@ class Acquire(object):
         self.is_sampled = False
         
     @property
+    def sampling_rate(self):
+        return 1 / self.deltat
+    
+    @property
     def duration(self):
         return self.num_timesteps * self.deltat
         
@@ -386,32 +390,108 @@ class Acquire(object):
         
         return acqui
             
-    def apply_sensor(self, sensor_type=None):
+    def apply_sensor(self, DTC, fn=None,
+                     spectral_noise_slope=None, noise_rms=None, 
+                     spectral_freq=None, noise_profile=None, 
+                     seed=None):
         '''
-        (- apply sensor FRF (get frfs from our real sensors: 10V/g, 5V/g, small ones, geophones, laser-vib, won't use displacement) by discrete convolution in time domain)
+        Applies a sensor FRF to the signal and add spectral noise, scales the mode
+        shapes by the sensor FRF.
         
-        Let's skip this for now!
-        Datasheets/Calibration data not available, must be requested:
+        Currently only the high-pass of the RC sensor amplifier is implemented
+        as a first-order butterworth filter.
         
-        Sensor    1D-Accelerometer    PCB 352C33      100 mV/g
-        Sensor    1D-Accelerometer    PCB 393A03      1 V/g
-        Sensor    1D-Accelerometer    PCB 393B31      10 V/g
+        Spectral noise can be be provided as a noise profile, or simplified as 
+        as spectral slope and rms value.
         
-        (Sensor    Seismograph         Guralp CMG-T40  2x80 V/m/s)
-        Sensor    3D-Seismometer      VE-53-DIN       2x100 V/m/s
-        Sensor    3D-Geophone         SM6-3D-1        28.8 V/m/s
         
         '''
-        # load frf db (sensor_type, irf, frf, sensitivity, noise?)
-        # apply frf by IRF convolution
-        # simulate sensitivity by transforming to a voltage
-        # then add constant and proportional noise
-        # modify modal mode_shapes, modal_amplitudes, modal_energies by FRF multiplication
-        # damping, frequencies should not be affected
         if self.is_sampled:
             logging.warning(f'This signal is sampled already. Sensor FRFs should preferably be applied before sampling.')
-        raise NotImplementedError('Application of sensor FRFs is not yet implemented.')
-        pass
+
+        deltat = self.deltat
+        num_timesteps = self.num_timesteps
+        num_channels = self.num_channels
+        modal_frequencies = self.modal_frequencies
+        mode_shapes = self.mode_shapes
+
+        # Apply highpass RC filter (sensor amplifier discharge time constant)
+        f_c = 1 / (2 * np.pi * DTC) 
+        nyq = self.sampling_rate / 2
+    
+        b, a = scipy.signal.butter(4, f_c / nyq, 'high')
+        meas_sig = scipy.signal.lfilter(b, a, self.signal, axis=1)
+        # no need to convert to voltage by sensitivity
+        # in case it is required to take sensitivity deviations into account, 
+        # a scaling factor can be applied to acceleration signals
+        
+        # apply FRF to mode shapes
+        if mode_shapes is not None:
+            modal_frf = DTC * 2 * np.pi * 1j * modal_frequencies / (1 + DTC * 2 * np.pi * 1j * modal_frequencies)
+            mode_shapes *= modal_frf
+        if self.modal_amplitudes is not None:
+            logger.warning("Scaling of modal_amplitudes not implemented.")
+        if self.modal_energies is not None:
+            logger.warning("Scaling of modal_energies not implemented.")
+        # modal damping and modal frequencies should not be affected
+        
+        # Appy spectral noise to the signal
+        freq = np.fft.rfftfreq(num_timesteps, deltat)
+        # delta_f = freq[1] - freq[0]
+        
+        if spectral_noise_slope is not None and noise_rms is not None:
+            F0 = noise_rms * np.sqrt(2 * deltat)
+            x0 = 10
+            with np.errstate(divide='ignore'):
+                intercept = F0 / (x0**spectral_noise_slope)
+            var_asd = freq**spectral_noise_slope * intercept
+            # reset DC component to 0 (assumes np.fft.rfftfreq[0] = 0)
+            var_asd[0] = 0
+        elif spectral_freq is not None and noise_profile is not None:
+            # Interpolate in log-log-space
+            with np.errstate(divide='ignore'):
+                var_asd = np.power(10.0, np.interp(np.log10(freq), np.log10(spectral_freq), np.log10(noise_profile)))
+        else:
+            raise RuntimeError(f'Noise characterization arguments were not provided or provided incompletely.')
+        
+        rng = np.random.default_rng(seed)
+    
+        # power spectral density (PSD) is the time average of the energy normalized to unit frequency
+        # amplitude spectral density (ASD) is the square root of the PSD
+        # Amplitude/RMS spectrum given, must not be square rooted for IFFT
+    
+        # Coloured Noise with randomized magnitude and phase 
+        # Randomizing the phase is not sufficient, as the PSD segments would all be the equal
+        # https://blog.ioces.com/matt/posts/colouring-noise/
+        asd = rng.normal(0, 1 / np.sqrt(2 * deltat), 
+                               (num_channels, num_timesteps // 2 + 1)
+                               ) *  var_asd * (1 + 1j)
+        # reverse unit-frequency normalization of the ASD (PSD: 1 / N, ASD: 1 / sqrt(N) to make it available for IFFT
+        # https://physics.stackexchange.com/questions/615349/amplitude-spectral-density-vs-power-spectral-density
+        asd *= np.sqrt(num_timesteps)
+    
+        # Ensure the 0 Hz and Nyquist components are purely real
+        asd[:, 0] = np.abs(asd[:, 0])
+        if len(freq) % 2 == 0:
+            asd[:, -1] = np.abs(asd[:, -1])
+        
+        # Transform to time-domain
+        spectral_noise = np.fft.irfft(asd, axis=1)
+        
+        channel_powers = np.mean(meas_sig**2, axis=1)
+        power_noise = np.mean(spectral_noise ** 2, axis=1)
+        logger.debug(f'Final average noise power: {np.mean(power_noise):1.3g} (signal: {np.mean(channel_powers):1.3g})')
+        
+        # Add to signal
+        meas_sig += spectral_noise
+        
+        self.sensor_noise = spectral_noise
+        self.sensor_cutoff = f_c
+        self.update_snr(power_noise, channel_powers)
+        
+        self.signal = meas_sig
+        
+        return meas_sig, spectral_noise
     
     def sample_helper(self, dec_fact=None, f_max=None, num_modes=None, nyq_rat=2.5, numtaps_fact=21):
         '''
