@@ -14,6 +14,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 import os
 import logging
+import signal
+from pickle import NONE
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -75,7 +77,7 @@ class Acquire(object):
     '''
     A class for processing a signal, simulating ADC signal acquisition:
         apply sensor FRFs
-        add measurement noise
+        (add measurement noise)
         sample (apply lowpass AA filter and downsample)
     
     Additionally, characteristics of the generating system and the signal
@@ -92,7 +94,6 @@ class Acquire(object):
     
     .. TODO::
         * add save / load abilities
-        * implement apply_sensor function
         * add functions for verification, plots
     '''
     def __init__(self, t_vals, signal=None, IRF_matrix=None, channel_defs=None,
@@ -102,42 +103,30 @@ class Acquire(object):
                  ):
         '''
         input a synthethised signal (ambient response, impulse response) and corresponding t_vals
-        
-        
         '''
         if IRF_matrix is not None:
             assert signal is None
             #(num_ref_nodes, num_channels, num_timesteps)
-            num_channels = IRF_matrix.shape[1]
-            num_ref_nodes = IRF_matrix.shape[0]
-            num_timesteps = IRF_matrix.shape[2]
+            num_channels_ = IRF_matrix.shape[1]
+            num_ref_nodes_ = IRF_matrix.shape[0]
+            num_timesteps_ = IRF_matrix.shape[2]
             # Flatten the IRF matrix to a signal of shape (num_channels, num_timesteps)
-            signal = IRF_matrix.reshape((num_ref_nodes * num_channels, num_timesteps))
+            signal = IRF_matrix.reshape((num_ref_nodes_ * num_channels_, num_timesteps_))
             # Store the shape to restore the IRF matrix in get_signal
-            self.re_shape = [num_ref_nodes, num_channels, num_timesteps]
+            self.re_shape = [num_ref_nodes_, num_channels_, num_timesteps_]
         else:
-            self.num_channels = signal.shape[0]
             self.re_shape = list(signal.shape)
-        #print(signal.shape)
-        self.num_channels = signal.shape[0]
-        self.num_timesteps = signal.shape[1]
-        
-        #self.deltat = np.mean(np.diff(t_vals))
-        self.deltat = (t_vals[-1] - t_vals[0]) / (t_vals.size - 1)
-        #print(self.num_timesteps, len(t_vals))
-        assert self.num_timesteps == len(t_vals)
         
         self.t_vals = t_vals
+        
         self.signal = signal
         
         self.channel_defs = channel_defs
         
-        self.num_modes = None
-        
         if modal_frequencies is not None:
             assert isinstance(modal_frequencies, (list, tuple, np.ndarray))
             assert len(modal_frequencies.shape) == 1
-            self.num_modes = modal_frequencies.size
+            # self.num_modes = modal_frequencies.size
             
             assert np.all(np.diff(modal_frequencies) >= 0)  # ensure they are sorted
             
@@ -146,7 +135,7 @@ class Acquire(object):
         if modal_damping is not None:
             assert isinstance(modal_damping, (list, tuple, np.ndarray))
             assert len(modal_damping.shape) == 1
-            self.num_modes = modal_damping.size
+            # self.num_modes = modal_damping.size
             
         self.modal_damping = modal_damping
             
@@ -154,7 +143,7 @@ class Acquire(object):
             assert isinstance(mode_shapes, (list, tuple, np.ndarray))
             assert len(mode_shapes.shape) == 2  # needs reduced mode shapes (channel,mode) type, not (node, dof, mode) 3D type
             
-            self.num_modes = mode_shapes.shape[1]
+            # self.num_modes = mode_shapes.shape[1]
             #print(mode_shapes.shape, self.num_channels)
             assert mode_shapes.shape[0] == self.num_channels
             
@@ -164,7 +153,7 @@ class Acquire(object):
             assert isinstance(modal_energies, (list, tuple, np.ndarray))
             assert len(modal_energies.shape) == 1
             
-            self.num_modes = modal_energies.shape[1]
+            # self.num_modes = modal_energies.shape[1]
             # IRF matrix modal matrices are shaped (num_ref_nodes, num_modes)
             # impulse response modal matrices are shape (num_nodes, num_modes
         
@@ -174,30 +163,66 @@ class Acquire(object):
             assert isinstance(modal_amplitudes, (list, tuple, np.ndarray))
             assert len(modal_amplitudes.shape) == 1
             
-            self.num_modes = modal_amplitudes.shape[1]
+            # self.num_modes = modal_amplitudes.shape[1]
             # IRF matrix modal matrices are shaped (num_ref_nodes, num_modes)
             # impulse response modal matrices are shape (num_nodes, num_modes
         
         self.modal_amplitudes = modal_amplitudes
         
-        self.snr = [np.mean(signal**2, axis=1), np.zeros((self.num_channels,))]  # no noise so far
+        self.reset_snr()  # no noise so far
         
         self.jobname = jobname
         
-        self.is_sampled = False
+        self.is_sensed = False
+    
+    @property
+    def deltat (self):
+        if self.is_sampled:
+            t_vals = self.t_vals_samp
+        else:
+            t_vals = self.t_vals
+        return (t_vals[-1] - t_vals[0]) / (t_vals.size - 1)
+    
+    @property    
+    def num_channels(self):
+        signal = self.signal
+        return signal.shape[0]
+    
+    @property
+    def num_timesteps(self):
+        if self.is_sampled:
+            signal = self.signal_samp
+        else:
+            signal = self.signal
+        return signal.shape[1]
+    
+    @property
+    def num_modes(self):
+        if self.modal_frequencies is None:
+            return None
+        elif self.is_sampled:
+            return self.modal_frequencies_samp.shape[0]
+        else:
+            return self.modal_frequencies.shape[0]
         
     @property
     def sampling_rate(self):
-        return 1 / self.deltat
+        if self.is_sampled:
+            return 1 / self.deltat_samp
+        else:
+            return 1 / self.deltat
     
     @property
     def duration(self):
-        return self.num_timesteps * self.deltat
+        if self.is_sampled:
+            return self.num_timesteps_samp * self.deltat_samp
+        else:
+            return self.num_timesteps * self.deltat
         
     @property
     def snr_db(self):
         return 10 * np.log10(self.snr[0] / self.snr[1])
-        
+    
     @classmethod
     def init_from_mech(cls, mech, channel_defs=None):
         
@@ -390,50 +415,84 @@ class Acquire(object):
         
         return acqui
             
-    def apply_sensor(self, DTC, fn=None,
+    def apply_sensor(self, DTC, fn=None, 
+                     senst_nom=1, senst_dev=0, 
                      spectral_noise_slope=None, noise_rms=None, 
                      spectral_freq=None, noise_profile=None, 
                      seed=None):
         '''
-        Applies a sensor FRF to the signal and add spectral noise, scales the mode
+        Applies a sensor FRF to the signal and adds spectral noise, scales the mode
         shapes by the sensor FRF.
         
         Currently only the high-pass of the RC sensor amplifier is implemented
         as a first-order butterworth filter.
         
-        Spectral noise can be be provided as a noise profile, or simplified as 
-        as spectral slope and rms value.
+        Spectral noise can be be provided as a noise profile, or in a simplified 
+        form, as a spectral slope and noise rms value.
         
+        Finally the signal is converted by sensor sensitivity to a voltage, 
+        s. t. argument measurement_range in self.sample(...) makes sense
+        additionally, slight deviations can be taken into account
+        by sampling each channels sensitivity from a Uniform distribution centered
+        at the nominal sensitivity and a given interval, e.g. +- 10%
         
+        Parameters
+        ----------
+            DTC: float, required
+                The discharge time constant of the sensor RC circuit in seconds
+            fn: float, optional
+                The (mechanical) resonance frequency of the sensor
+            senst_nom: float, optional
+                The nominal sensitivity of the sensor in V m^-1 s^2
+            senst_dev: float, optional
+                The deviation of the sensor sensitivity in V m^-1 s^2
+                derived e.g. from datasheet specifications such as +-10%
+            spectral_noise_slope: float, optional
+                The slope of the spectral noise amplitude in log-log-space [m s^-2/sqrt(Hz)]
+            noise_rms: float, optional
+                The RMS value of the spectral noise in 
+            spectral_freq, noise_profile: ndarray, optional
+                Spectral noise amplitudes at given frequencies of the noise profile
+            seed: int, optional
+                Seed for the Random Number Generator for reproducible results
         '''
+        
+        if fn is not None:
+            raise NotImplementedError("Sensor resonance frequency response is not implemented")
+        
         if self.is_sampled:
-            logging.warning(f'This signal is sampled already. Sensor FRFs should preferably be applied before sampling.')
+            logger.warning(f'Resetting an already sampled signal.')
+            self.reset_snr()
+        if self.is_sensed:
+            logger.warning('Reseeting an already sensed signal.')
+            self.reset_snr()
 
         deltat = self.deltat
         num_timesteps = self.num_timesteps
         num_channels = self.num_channels
         modal_frequencies = self.modal_frequencies
-        mode_shapes = self.mode_shapes
 
         # Apply highpass RC filter (sensor amplifier discharge time constant)
         f_c = 1 / (2 * np.pi * DTC) 
         nyq = self.sampling_rate / 2
-    
-        b, a = scipy.signal.butter(4, f_c / nyq, 'high')
+        
+        b, a = scipy.signal.butter(1, f_c / nyq, 'high')
         meas_sig = scipy.signal.lfilter(b, a, self.signal, axis=1)
-        # no need to convert to voltage by sensitivity
-        # in case it is required to take sensitivity deviations into account, 
-        # a scaling factor can be applied to acceleration signals
         
         # apply FRF to mode shapes
-        if mode_shapes is not None:
+        if modal_frequencies is not None:  # proxy for: "modal characteristics are present"
+            # adjust modal characteristics according to sensor frf 
+            
             modal_frf = DTC * 2 * np.pi * 1j * modal_frequencies / (1 + DTC * 2 * np.pi * 1j * modal_frequencies)
-            mode_shapes *= modal_frf
-        if self.modal_amplitudes is not None:
-            logger.warning("Scaling of modal_amplitudes not implemented.")
-        if self.modal_energies is not None:
-            logger.warning("Scaling of modal_energies not implemented.")
-        # modal damping and modal frequencies should not be affected
+            
+            if self.mode_shapes is not None:
+                self.mode_shapes_sensed = self.mode_shapes * modal_frf
+            if self.modal_amplitudes is not None:
+                self.modal_amplitudes_sensed = self.modal_amplitudes * np.abs(modal_frf)
+            if self.modal_energies is not None:
+                logger.warning('Energy reduction by FIR filters not validated.')
+                self.modal_energies_sensed = self.modal_energies * np.abs(modal_frf)
+            # modal damping and modal frequencies should not be affected
         
         # Appy spectral noise to the signal
         freq = np.fft.rfftfreq(num_timesteps, deltat)
@@ -485,14 +544,60 @@ class Acquire(object):
         # Add to signal
         meas_sig += spectral_noise
         
-        self.sensor_noise = spectral_noise
-        self.sensor_cutoff = f_c
-        self.update_snr(power_noise, channel_powers)
+        # convert final signal to voltage
+        rng = np.random.default_rng(seed)
+        sensitivities = rng.uniform(senst_nom - senst_dev, senst_nom + senst_dev, num_channels)
+        meas_sig *= sensitivities
         
-        self.signal = meas_sig
+        self.sensor_noise = spectral_noise
+        # self.sensor_cutoff = f_c
+        self.update_snr(power_noise, channel_powers)
+        self.sensor_sensitivity = senst_nom
+        
+        self.signal_volt = meas_sig
+        self.is_sensed = True
+        self.is_sampled = False
         
         return meas_sig, spectral_noise
     
+    @property
+    def is_sampled(self):
+        return self._is_sampled
+    
+    @is_sampled.setter
+    def is_sampled(self, b):
+        if not b:
+            # invalidate sampled values
+            self.signal_samp = None
+            # self.num_timesteps_samp = None
+            self.t_vals_samp = None
+            # self.deltat_samp = None
+            # self.num_modes_samp = None
+            self.modal_frequencies_samp  = None
+            self.modal_damping_samp = None
+            self.mode_shapes_samp = None
+            self.modal_energies_samp = None
+            self.modal_amplitudes_samp = None
+        self._is_sampled = b
+        
+    @property
+    def is_sensed(self):
+        return self._is_sensed
+    
+    @is_sensed.setter
+    def is_sensed(self, b):
+        if not b:
+            # invalidate sensed values
+            self.mode_shapes_sensed = None
+            self.modal_energies_sensed= None
+            self.modal_amplitudes_sensed = None
+            self.sensor_noise = None
+            self.sensor_sensitivity = None
+            self.signal_volt = None
+            self.is_sampled = False
+            
+        self._is_sensed = b
+        
     def sample_helper(self, dec_fact=None, f_max=None, num_modes=None, nyq_rat=2.5, numtaps_fact=21):
         '''
         Helper function to  compute a final sampling frequency from given:
@@ -510,7 +615,6 @@ class Acquire(object):
         '''
         
         dt = self.deltat
-        N = self.num_timesteps
         modal_frequencies = self.modal_frequencies
         
         if num_modes is not None:
@@ -561,7 +665,7 @@ class Acquire(object):
         
         here, we just choose a random sample of length sample_dur and
         evaluate all channels from this sample (assuming all channels will 
-        use the same measurment range and bit resolution
+        use the same measurement range and bit resolution
         '''
         
         dt = self.deltat
@@ -597,13 +701,15 @@ class Acquire(object):
         
         return max_amp * margin
     
-    def sample(self, fs=None, numtaps=21, cutoff=None,
+    def sample(self, fs=None, 
+               aa_order=4, aa_cutoff=None, aa_ftype='butter',
                bits=16, meas_range=None,
                duration=None):
         '''
         Sampling consists of three steps:
             - anti-aliasing filtering
             - sample-and-hold
+            (- in current hardware delta-sigma-digitizers are used that work different, though)
             - quantization
             
         Not considered is:
@@ -614,23 +720,27 @@ class Acquire(object):
         
         Simulation of these three steps:
             -apply an (simulated) analog anti-aliasing filter
-                use a hardcoded FIR brickwall filter, to avoid any undesired effects from aliasing,
-                as this is not the primary objective of the research
+                use a IIR filter (default butterworth 4th order)
             - then sample-and-hold -> take every nth sample
             - simulate quantization (SCXI 1600 -> 16 bit, NI PXI 6221 -> 16 bit)
          
         Additionally, the noise resulting from these operations is estimated:
             - aliasing noise
             - quantization noise
-            
-            
         '''
         if self.is_sampled:
-            logging.warning(f'This signal is sampled already. Applying sampling again.')
+            logger.warning(f'This signal is sampled already. Applying sampling again.')
         
+        if not self.is_sensed:
+            logger.warning('The signal is still in mechanical units, no sensor has been applied.')
+            signal = self.signal
+        else:
+            signal = self.signal_volt
+            
         dt = self.deltat
-        signal = self.signal
         t_vals = self.t_vals
+        fs_initial = self.sampling_rate
+        sensor_sensitivity = self.sensor_sensitivity
         
         if duration is not None:
             assert duration <= self.duration
@@ -643,22 +753,32 @@ class Acquire(object):
         num_channels = self.num_channels
         modal_frequencies = self.modal_frequencies
         
-        dec_fact = int(1 / (dt * fs))
+        dec_fact = int(fs_initial / fs)
         
         dt_dec = dt * dec_fact
         N_dec = int(np.floor(N / dec_fact))
         # ceil would also work, but breaks indexing for aliasing noise estimation
         # with floor though, care must be taken to shorten the time domain signal to N_dec full blocks before slicing
         
-        if cutoff is None:
-            cutoff = 1 / dt / 2.5 / dec_fact
+        if aa_cutoff is None:
+            cutoff = fs_initial / dec_fact / 2.5
             
-        logger.info(f'Sampling signal at {1/dt_dec} Hz with a cutoff frequency of {cutoff} Hz using a {numtaps} point FIR filter resulting in a sample size of {N_dec} out of {N}.')
-        # fir lowpass filter
-        fir_firwin = scipy.signal.firwin(numtaps, cutoff, fs=1 / dt)
-    
-        #filter signal
-        sig_filt = scipy.signal.lfilter(fir_firwin, [1.0], signal)
+        if fs < fs_initial:
+            logger.info(f'Sampling signal at {1/dt_dec} Hz with a cutoff frequency of {cutoff} Hz using a {aa_order} order {aa_ftype} filter resulting in a sample size of {N_dec} out of {N}.')
+        
+            # fir lowpass filter
+            # fir_firwin = scipy.signal.firwin(order, cutoff, fs=1 / dt)
+            b, a = scipy.signal.iirfilter(
+                    aa_order, [cutoff / (fs_initial / 2)],
+                    btype='lowpass', ftype=aa_ftype, output='ba')
+        
+            #filter signal
+            # sig_filt = scipy.signal.lfilter(fir_firwin, [1.0], signal)
+            sig_filt = scipy.signal.lfilter(b, a, signal)
+        elif fs > fs_initial:
+            raise RuntimeError("Sampling frequency must not be greater than the given sampling frequency")
+        else:
+            sig_filt = np.copy(signal)
         #sig_filt = np.apply_along_axis(lambda y: np.convolve(fir_firwin, y, 'same'), axis, signal)
         #sig_filt =  np.convolve(signal, fir_firwin, 'same')
     
@@ -721,35 +841,37 @@ class Acquire(object):
         
         logger.debug(f'SNR alias: {snr_alias} in dB: {np.log10(snr_alias) * 10}')
         
-        if modal_frequencies is not None :  # proxy for: "modal characteristics are present"
+        if modal_frequencies is not None and fs < fs_initial:  # proxy for: "modal characteristics are present"
             # adjust modal characteristics according to filter frf and reduced number of modes
             
             # compute number of modes in the remaining frequency band
             # assuming the aliasing filter has a perfect roll-off
             num_modes = np.sum(modal_frequencies <= cutoff)
             
-            self.modal_frequencies = self.modal_frequencies[:num_modes]
-            omegas = self.modal_frequencies[np.newaxis, :] * 2 * np.pi
-            filter_frf = np.sum(fir_firwin[:, np.newaxis] * np.exp(-1j * omegas * np.linspace(0, dt * numtaps, numtaps)[:, np.newaxis]), axis=0)
+            modal_frequencies = modal_frequencies[:num_modes]
+            # omegas = self.modal_frequencies[np.newaxis, :] * 2 * np.pi
+            # modal_frf = np.sum(fir_firwin[:, np.newaxis] * np.exp(-1j * omegas * np.linspace(0, dt * order, order)[:, np.newaxis]), axis=0)
+            _, modal_frf = scipy.signal.freqz(b, a, modal_frequencies / fs_initial * 2 * np.pi)
                 
             if self.modal_damping is not None:
-                self.modal_damping = self.modal_damping[:num_modes]
+                self.modal_damping_samp = self.modal_damping[:num_modes]
             if self.mode_shapes is not None:
-                self.mode_shapes = self.mode_shapes[:, :num_modes] * filter_frf  # scale modal coordinates by filter frf
+                self.mode_shapes_samp = self.mode_shapes[:, :num_modes] * modal_frf  # scale modal coordinates by filter frf
             if self.modal_amplitudes is not None:
-                self.modal_amplitudes = self.modal_amplitudes[:, :num_modes] * np.abs(filter_frf)
+                self.modal_amplitudes_samp = self.modal_amplitudes[:, :num_modes] * np.abs(modal_frf)
             if self.modal_energies is not None:
                 logger.warning('Energy reduction by FIR filters not validated.')
-                self.modal_energies = self.modal_energies[:, :num_modes] * np.abs(filter_frf)
+                self.modal_energies_samp = self.modal_energies[:, :num_modes] * np.abs(modal_frf)
             
-            self.num_modes = num_modes
+            self.modal_frequencies_samp = modal_frequencies
+            # self.num_modes_samp = num_modes
             
         self.re_shape[-1] = sig_filt_dec.shape[-1]
         
-        self.num_timesteps = sig_filt_dec.shape[1]
-        assert self.num_timesteps == N_dec
-        self.deltat = dt_dec
-        assert np.isclose(t_dec[1] - t_dec[0], self.deltat)
+        # self.num_timesteps_samp = sig_filt_dec.shape[1]
+        # assert self.num_timesteps == N_dec
+        # self.deltat_samp = dt_dec
+        # assert np.isclose(t_dec[1] - t_dec[0], self.deltat)
         
         self.update_snr(p_fft_filt_alias, p_fft_filt_non_alias)
         
@@ -791,12 +913,17 @@ class Acquire(object):
         
         self.update_snr(P_N, P_S)
         
-        self.t_vals = t_dec
-        self.signal = sig_filt_dec_quant
+        self.t_vals_samp = t_dec
+        self.signal_samp = sig_filt_dec_quant / sensor_sensitivity
         
         self.is_sampled = True
         
-        return t_dec, sig_filt_dec_quant, snr_alias, snr_quant, margin_quant_norm
+        return
+    
+    def reset_snr(self):
+        signal = self.signal
+        num_channels = self.num_channels
+        self.snr = [np.mean(signal**2, axis=1), np.zeros((num_channels,))]
     
     def update_snr(self, power_noise, power_no_noise=None):
         '''
@@ -845,11 +972,7 @@ class Acquire(object):
         returns power_signal, power_noise
         
         '''
-        
-        if self.is_sampled:
-            logging.warning(f'This signal is sampled already. Noise should preferably be applied before sampling.')
-            
-        signal = self.signal
+        _, signal = self.get_signal()
         num_channels = self.num_channels
         num_timesteps = self.num_timesteps
         
@@ -904,26 +1027,41 @@ class Acquire(object):
         signal += noise
         
         self.update_snr(power_noise, channel_powers)
-        self.signal = signal
+        if self.is_sampled:
+            self.signal_samp = signal
+        elif self.is_sensed:
+            self.signal_volt = signal
+        else:
+            self.signal = signal
 
         return power_signal, power_noise
     
     def get_signal(self):
-        
-        return self.t_vals, self.signal.reshape(self.re_shape)
+        if self.is_sampled:
+            t_vals = self.t_vals_samp
+            signal = self.signal_samp
+            logger.info('Getting a sampled signal')
+        elif self.is_sensed:
+            t_vals = self.t_vals
+            signal = self.signal_volt
+            logger.info('Getting a sensed signal')
+        else:
+            t_vals = self.t_vals
+            signal = self.signal
+            logger.info('Getting a response signal')
+            
+        return t_vals, signal(self.re_shape)
     
     def to_prep_data(self):
         
         
         if not self.is_sampled:
-            logging.warning(f'This signal has not been sampled already. Proceeding anyways.')
+            logger.warning(f'This signal has not been sampled already. Proceeding anyways.')
         
         t_vals, signal = self.get_signal()
         assert signal.ndim == 2
-        fs = 1 / self.deltat
-        total_time_steps = self.num_timesteps
+        fs = self.sampling_rate
         setup_name = self.jobname
-        
         
         channel_defs = self.channel_defs  # list of (node, dof, quantity)
         
@@ -935,9 +1073,6 @@ class Acquire(object):
             channel_headers = []
             for node, dof, quantity in channel_defs:
                 channel_headers.append(f'{["dsp", "vel", "acc", ][quantity]} {node} {["x", "y", "z"][dof]} ')
-            # channel_headers = list(map(' '.join,
-                                       # zip(channel_defs[:, 0].astype(str),
-                                           # channel_defs[:, 1].astype(str))))
         else:
             disp_channels = None
             velo_channels = None
@@ -953,13 +1088,6 @@ class Acquire(object):
                   'channel_headers': channel_headers}
         
         return kwargs
-        
-    def to_modal(self, mech=None):
-        
-        if not self.is_sampled:
-            logging.warning(f'This signal has not been sampled already. Proceeding anyways.')
-            
-        pass
     
 
     def save(self, fpath):
@@ -970,9 +1098,39 @@ class Acquire(object):
         logger.info(f'Saving Acquire object to {fpath}')
         
         out_dict = {}
-        # 0:build_mdof, 1:free_decay, 2:ambient, 3:impulse_response, 4:modal  
         
-        out_dict['self.state'] = self.state
+        out_dict['self.jobname'] = self.jobname
+        out_dict['self.re_shape'] = self.re_shape
+        out_dict['self.signal'] = self.signal
+        out_dict['self.t_vals'] = self.t_vals
+        out_dict['self.channel_defs'] = self.channel_defs
+        out_dict['self.snr'] = self.snr
+        
+        out_dict['self.modal_frequencies'] = self.modal_frequencies
+        out_dict['self.modal_damping'] = self.modal_damping
+        out_dict['self.mode_shapes'] = self.mode_shapes
+        out_dict['self.modal_energies'] = self.modal_energies
+        out_dict['self.modal_amplitudes'] = self.modal_amplitudes
+        
+        if self._is_sensed:
+            out_dict['self._is_sensed'] = self._is_sensed
+            out_dict['self.signal_volt'] = self.signal_volt
+            out_dict['self.mode_shapes_sensed'] = self.mode_shapes_sensed
+            out_dict['self.modal_energies_sensed'] = self.modal_energies_sensed
+            out_dict['self.modal_amplitudes_sensed'] = self.modal_amplitudes_sensed
+            out_dict['self.sensor_noise'] = self.sensor_noise
+            out_dict['self.sensor_cutoff'] = self.sensor_cutoff
+            out_dict['self.sensor_sensitivity'] = self.sensor_sensitivity
+                
+        if self.is_sampled:
+            out_dict['self._is_sampled'] = self.is_sampled
+            out_dict['self.t_vals_samp'] = self.t_vals_samp
+            out_dict['self.signal_samp'] = self.signal_samp
+            out_dict['self.modal_frequencies_samp'] = self.modal_frequencies_samp
+            out_dict['self.modal_damping_samp'] = self.modal_damping_samp
+            out_dict['self.mode_shapes_samp'] = self.mode_shapes_samp
+            out_dict['self.modal_energies_samp'] = self.modal_energies_samp
+            out_dict['self.modal_amplitudes_samp'] = self.modal_amplitudes_samp
             
         np.savez_compressed(fpath, **out_dict)
         
@@ -1014,12 +1172,41 @@ class Acquire(object):
         fname, ext = os.path.splitext(file)
         
         in_dict = np.load(fpath, allow_pickle=True)
-        state = list(in_dict['self.state'])
         
+        acquire.re_shape = validate_array(in_dict['self.re_shape'])
+        acquire.signal = validate_array(in_dict['self.signal'])
+        acquire.t_vals = validate_array(in_dict['self.t_vals'])
+        acquire.channel_defs = validate_array(in_dict['self.channel_defs'])
+        acquire.snr = validate_array(in_dict['self.snr'])
         
+        acquire.modal_frequencies = validate_array(in_dict['self.modal_frequencies'])
+        acquire.modal_damping = validate_array(in_dict['self.modal_damping'])
+        acquire.mode_shapes = validate_array(in_dict['self.mode_shapes'])
+        acquire.modal_energies = validate_array(in_dict['self.modal_energies'])
+        acquire.modal_amplitudes = validate_array(in_dict['self.modal_amplitudes'])
+        
+        acquire._is_sensed = validate_array(in_dict['self._is_sensed'])
+        acquire._is_sampled = validate_array(in_dict['self.is_sampled'])
+        
+        if acquire._is_sensed:
+            acquire.signal_volt = validate_array(in_dict['self.signal_volt'])
+            acquire.mode_shapes_sensed = validate_array(in_dict['self.mode_shapes_sensed'])
+            acquire.modal_energies_sensed = validate_array(in_dict['self.modal_energies_sensed'])
+            acquire.modal_amplitudes_sensed = validate_array(in_dict['self.modal_amplitudes_sensed'])
+            acquire.sensor_noise = validate_array(in_dict['self.sensor_noise'])
+            acquire.sensor_cutoff = validate_array(in_dict['self.sensor_cutoff'])
+            acquire.sensor_sensitivity = validate_array(in_dict['self.sensor_sensitivity'])
+        
+        if acquire.is_sampled:
+            acquire.t_vals_samp = validate_array(in_dict['self.t_vals_samp'])
+            acquire.signal_samp = validate_array(in_dict['self.signal_samp'])
+            acquire.modal_frequencies_samp = validate_array(in_dict['self.modal_frequencies_samp'])
+            acquire.modal_damping_samp = validate_array(in_dict['self.modal_damping_samp'])
+            acquire.mode_shapes_samp = validate_array(in_dict['self.mode_shapes_samp'])
+            acquire.modal_energies_samp = validate_array(in_dict['self.modal_energies_samp'])
+            acquire.modal_amplitudes_samp = validate_array(in_dict['self.modal_amplitudes_samp'])        
         
         return acquire
-    
     
 def ashift(array):
     return np.fft.fftshift(np.abs(array))
