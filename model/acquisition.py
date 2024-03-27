@@ -1287,7 +1287,25 @@ class Acquire(object):
             acquire.bits_effective = validate_array(in_dict['self.bits_effective'])
         
         return acquire
-    
+
+def sensor_position(num_sensors, num_nodes, method):
+    assert method in ['lumped','distributed']
+
+    all_positions = np.arange(5, num_nodes, 5)
+    num_positions = all_positions.shape[0]
+    num_clusters = int(np.floor(num_positions/num_sensors))
+
+    if method == 'distributed': 
+        clusters = np.reshape(all_positions[:num_sensors*(num_clusters)], (num_sensors, num_clusters)).T
+        last_setup = all_positions[- (num_sensors - 1) * (num_clusters) - 1::num_clusters]
+    elif method == 'lumped': 
+        clusters = np.reshape(all_positions[:num_sensors*(num_clusters)], (num_clusters, num_sensors))
+        last_setup = np.reshape(all_positions[-num_sensors:], (1, num_sensors))
+
+    clusters = np.vstack((clusters, last_setup))
+
+    return clusters
+
 def ashift(array):
     return np.fft.fftshift(np.abs(array))
 

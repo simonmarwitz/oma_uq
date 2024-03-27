@@ -479,6 +479,7 @@ def animate_response(nodes_coordinates, d_time=None, d_freq_time=None, Fu_time=N
     return fig, ani
 
 
+
 def vars_definition():
     
     lamda = MassFunction('lambda_vb',[(2.267, 2.3),(1.96, 2.01)],[0.75,0.25], primary=False) # incompleteness
