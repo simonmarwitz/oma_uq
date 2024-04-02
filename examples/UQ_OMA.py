@@ -488,6 +488,30 @@ def vars_definition():
     v_b = RandomVariable('weibull_min','v_b', [lamda, c], primary=True) # meter per second
     alpha = RandomVariable('uniform', 'alpha', [0, 180], primary=True) # meter per second
     
+    n_channels = MassFunction('n_channels', [(8,), (16,), (24,)], [0.2, 0.5, 0.3], primary=True)
+    
+    DTC = MassFunction('DTC', [(1.6, 30), (0.8, 1.6), (0.4, 0.8)],[0.7, 0.2, 0.1], primary=True)
+    
+     = MassFunction('', [(,),], [], primary=True)
+    
+    sensitivity_nominal = MassFunction('sensitivity_nominal', [(1.02,), (1.02, 0.102), (0.51, 0.01)], [0.5, 0.3, 0.2], primary=False)
+    sensitivity_deviation = MassFunction('sensitivity_deviation', [(5,), (10,), (2, 20)], [0.4, 0.4, 0.1, ], primary=True)
+    
+    spectral_noise_slope = MassFunction('spectral_noise_slope', [(-0.8,-0.3),], [1.0,], primary=True)
+    sensor_noise_rms = MassFunction('sensor_noise_rms', [(1e-6,1e-2,),], [1.0,], primary=True)
+    
+    range_estimation_duration = MassFunction('range_estimation_duration', [(30,), (60, 120), (300,)], [0.2, 0.5, 0.3], primary=True)
+    range_estimation_margin = MassFunction('range_estimation_margin', [(2, 5), (5, 10)], [0.6, 0.4], primary=True)
+    
+    DAQ_noise_rms = MassFunction('DAQ_noise_rms', [(2.5e-6, 3e-3),], [1.0, ], primary=True)
+    
+    sampling_rate = MassFunction('sampling_rate', [(,),], [], primary=True)
+    anti_aliasing_cutoff_factor = MassFunction('anti_aliasing_cutoff_factor', [(,),], [], primary=True)
+    
+    quantization_bits = MassFunction('quantization_bits', [(,),], [], primary=True)
+    
+    duration = MassFunction('duration', [(,),], [], primary=True)
+    
     vars_epi = [lamda, c]
     vars_ale = [v_b, alpha] 
     
