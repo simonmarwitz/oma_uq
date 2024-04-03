@@ -238,7 +238,7 @@ class MassFunction(UncertainVariable):
         total_mass = np.sum(masses)
         if total_mass > 1:
             raise ValueError(f'The sum of all mass values ({total_mass}) must not be greater than one.')
-        if  total_mass < 1:
+        if  np.round(total_mass,4) < 1:
             if frame is None:
                 raise ValueError("If unassigned mass remains, the frame must be specified")
             focals = np.vstack([focals, frame])
@@ -327,7 +327,9 @@ class MassFunction(UncertainVariable):
             if isinstance(ubound, UncertainVariable):
                 usupp = ubound.support(*args, **kwargs)
             elif np.isnan(ubound):
-                usupp = (0, 0)
+                # A singleton focal interval
+                #usupp = (0, 0)
+                usupp = lsupp
             else:
                 usupp = (ubound, ubound)
                 

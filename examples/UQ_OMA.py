@@ -233,7 +233,7 @@ def mapping(zeta, Iy, Iz, alpha,
     return mean_Force_magnitude, std_Force_magnitude, mean_Force_direction, std_Force_direction, RMS_d, RMS_v, RMS_a
 
 
-def stage2mapping(mech, jid, result_dir, skip_existing) :
+def stage1bmapping(mech, jid, result_dir, skip_existing) :
     
     if not isinstance(result_dir, Path):
         result_dir = Path(result_dir)
@@ -480,7 +480,7 @@ def animate_response(nodes_coordinates, d_time=None, d_freq_time=None, Fu_time=N
 
 
 
-def vars_definition():
+def vars_definition(stage=2):
     
     lamda = MassFunction('lambda_vb',[(2.267, 2.3),(1.96, 2.01)],[0.75,0.25], primary=False) # incompleteness
     c = MassFunction('c_vb',[(5.618, 5.649),(5.91,6.0)],[0.75,0.25], primary=False) # incompleteness
@@ -492,30 +492,81 @@ def vars_definition():
     
     DTC = MassFunction('DTC', [(1.6, 30), (0.8, 1.6), (0.4, 0.8)],[0.7, 0.2, 0.1], primary=True)
     
-     = MassFunction('', [(,),], [], primary=True)
+    #= MassFunction('', [(,), ], [], primary=True)
     
-    sensitivity_nominal = MassFunction('sensitivity_nominal', [(1.02,), (1.02, 0.102), (0.51, 0.01)], [0.5, 0.3, 0.2], primary=False)
-    sensitivity_deviation = MassFunction('sensitivity_deviation', [(5,), (10,), (2, 20)], [0.4, 0.4, 0.1, ], primary=True)
+    sensitivity_nominal = MassFunction('sensitivity_nominal', [(1.02,), (0.102, 1.02), (0.01, 0.51)], [0.5, 0.3, 0.2], primary=False)
+    # ..TODO:: actually, the last mass should be 0.1, but that requires several modifications to include the open-world assumption 
+    sensitivity_deviation = MassFunction('sensitivity_deviation', [(5,), (10,), (2, 20)], [0.4, 0.4, 0.2, ], primary=False)
+    # Formal definition of sensitivity would result in a sample of n_channels x N_mcs_epi, where n_channels changes for each n_epi
+    # Actual implementation is in Acquire.apply_sensor, using a seed, derived from the sample ID
+    #sensitivity = RandomVariable('Uniform', 'sensitivity', 
+    #                             [sensitivity_nominal - sensitivity_deviation, sensitivity_nominal + sensitivity_deviation, n_channels], primary =True)
+    # make MassFunctions primary, to pass them on to the mapping
+    sensitivity_nominal.primary = True
+    sensitivity_deviation.primary = True
     
     spectral_noise_slope = MassFunction('spectral_noise_slope', [(-0.8,-0.3),], [1.0,], primary=True)
     sensor_noise_rms = MassFunction('sensor_noise_rms', [(1e-6,1e-2,),], [1.0,], primary=True)
+    # Formal definition of spectral_noise would result in a sample of n_channels x num_timesteps x N_mcs_epi, where n_channels, num_timesteps changes for each n_epi
+    # Actual implementation is in Acquire.apply_sensor, using a seed, derived from the sample ID
+    #spectral_noise = RandomVariable('normal', 'spectral_noise', [...], primary=True)
+    # make MassFunctions primary, to pass them on to the mapping
+    spectral_noise_slope.primary = True
+    sensor_noise_rms.primary = True
     
-    range_estimation_duration = MassFunction('range_estimation_duration', [(30,), (60, 120), (300,)], [0.2, 0.5, 0.3], primary=True)
-    range_estimation_margin = MassFunction('range_estimation_margin', [(2, 5), (5, 10)], [0.6, 0.4], primary=True)
+    range_estimation_duration = MassFunction('range_estimation_duration', [(30,), (60, 120), (300,)], [0.2, 0.5, 0.3], primary=False)
+    range_estimation_margin = MassFunction('range_estimation_margin', [(2, 5), (5, 10)], [0.6, 0.4], primary=False)
+    # Formal definition of meas_range is based on the signal itself and cannot be done using simple RandomVariabls
+    # Actual implementation is in Acquire.estimate_meas_range, using a seed, derived from the sample ID
+    #meas_range = RandomVariable(..., primary=True)
+    # make MassFunctions primary, to pass them on to the mapping
+    range_estimation_duration.primary = True
+    range_estimation_margin.primary = True
     
-    DAQ_noise_rms = MassFunction('DAQ_noise_rms', [(2.5e-6, 3e-3),], [1.0, ], primary=True)
+    DAQ_noise_rms = MassFunction('DAQ_noise_rms', [(2.5e-6, 3e-3),], [1.0, ], primary=False)
+    # Formal definition of DAQ_noise would result in a sample of n_channels x num_timesteps x N_mcs_epi, where n_channels, num_timesteps changes for each n_epi
+    # Actual implementation is in Acquire.add_noise, using a seed, derived from the sample ID
+    #DAQ_noise = RandomVariable('DAQ_noise', 'normal', [0, DAQ_noise_rms, (n_channels, num_timesteps)], primary=True)
+    # make MassFunctions primary, to pass them on to the mapping
+    DAQ_noise_rms.primary = True
     
-    sampling_rate = MassFunction('sampling_rate', [(,),], [], primary=True)
-    anti_aliasing_cutoff_factor = MassFunction('anti_aliasing_cutoff_factor', [(,),], [], primary=True)
+    sampling_rate = MassFunction('sampling_rate', [(50,100), (10,50), (4,10)], [0.5, 0.3, 0.2], primary=True)
+    anti_aliasing_cutoff_factor = MassFunction('anti_aliasing_cutoff_factor', [(0.4, 0.45), (0.45, 0.49), (0.5,)], [0.7, 0.2, 0.1], primary=True)
     
-    quantization_bits = MassFunction('quantization_bits', [(,),], [], primary=True)
+    quantization_bits = MassFunction('quantization_bits', [(12,), (16,), (24,)], [0.1, 0.3, 0.6], primary=True)
     
-    duration = MassFunction('duration', [(,),], [], primary=True)
+    duration = MassFunction('duration', [(10, 20), (30, 45), (60,), (120,)], [0.1, 0.2, 0.5, 0.2], primary=True)
     
-    vars_epi = [lamda, c]
-    vars_ale = [v_b, alpha] 
+    if stage==1:
+        vars_epi = [lamda, c]
+        vars_ale = [v_b, alpha] 
+        
+        arg_vars = {'v_b':v_b.name,} # 9 
+        
+    elif stage==2:
+        vars_epi = [lamda, c, # stage 1
+                    n_channels, DTC, sensitivity_nominal, sensitivity_deviation, 
+                    spectral_noise_slope, sensor_noise_rms,
+                    range_estimation_duration, range_estimation_margin,
+                    DAQ_noise_rms,
+                    sampling_rate, anti_aliasing_cutoff_factor,
+                    quantization_bits, duration]
+        vars_ale = [v_b, alpha] # all stage 1
+        
+        arg_vars = {'n_channels':n_channels, 
+                    'DTC':DTC,  
+                    'sensitivity_nominal':sensitivity_nominal,  
+                    'sensitivity_deviation':sensitivity_deviation,  
+                    'spectral_noise_slope':spectral_noise_slope,  
+                    'sensor_noise_rms':sensor_noise_rms, 
+                    'range_estimation_duration':range_estimation_duration,  
+                    'range_estimation_margin':range_estimation_margin, 
+                    'DAQ_noise_rms':DAQ_noise_rms, 
+                    'sampling_rate':sampling_rate,  
+                    'anti_aliasing_cutoff_factor':anti_aliasing_cutoff_factor, 
+                    'quantization_bits':quantization_bits, 
+                    'duration':duration,}
     
-    arg_vars = {'v_b':v_b.name,} # 9 
     return vars_ale, vars_epi, arg_vars
 
 
@@ -545,7 +596,7 @@ def main():
             continue
         jid = aid + '_' + eid
         try:
-            stage2mapping(mech, jid, result_dir, True)
+            stage1bmapping(mech, jid, result_dir, True)
         except Exception as e:
             print(e)
         
@@ -557,4 +608,4 @@ def main():
     print('exit')
     
 if __name__ == '__main__':
-    main()
+    vars_definition(stage=2)
