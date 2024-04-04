@@ -133,7 +133,9 @@ class RandomVariable(UncertainVariable):
                 this_supp = rv.ppf(percentiles)
                 if full_supp[0]>-np.infty: this_supp[0] = full_supp[0]
                 if full_supp[1]<np.infty: this_supp[1] = full_supp[1]
+                self.dtype = float
             elif isinstance(self.dist_fun, scipy.stats.rv_discrete):
+                self.dtype = int
                 this_supp = rv.support()
             else:
                 raise TypeError(f"Random variable {self} is neither discrete nor continuous but {type(rv)}.")
@@ -206,11 +208,23 @@ class MassFunction(UncertainVariable):
     
     def __init__(self, name, focals, masses, frame=None, primary=True, incremental=False):
         super().__init__(name, chain.from_iterable(focals), primary)
-        
+        def get_dtype_num(val):
+            if np.isnan(val):
+                return -1
+            if isinstance(val, np.bool_):
+                return 0
+            elif isinstance(val, (int, np.integer)):
+                return 1
+            elif isinstance(val, (float, np.floating)):
+                return 2
+            elif isinstance(val, (complex, np.complexfloating)):
+                return 3
+            else:
+                raise RuntimeError(f'Dtype {type(val)} of value {val} was not understood.')
         # focals may be a 3-tuple, where the first is the incremental reference and will be dropped in numeric_focal,support etc
         # focals may be a 1-tuple to define a crisp focal set, containing only singletons
         # otherwise it should be a 2-tuple
-        
+        dtype_num = 0
         if not isinstance(focals, np.ndarray): # note, it may contain objects
             focals_l = focals
             focals = np.empty((len(focals),3), dtype=object)
@@ -221,6 +235,8 @@ class MassFunction(UncertainVariable):
                     if isinstance(focal[0], UncertainVariable) and focal[0].name != self.name:
                         logger.warning(f'A singleton focal interval consisting of variable {focal[0].name}.'
                                        f'Consider sharing samples with {self.name} by setting names equal.')
+                    
+                    
                 elif len(focal) == 2:
                     focal_arr[1:] = focal
                     focal_arr[0] = np.nan
@@ -230,6 +246,21 @@ class MassFunction(UncertainVariable):
                     focal_arr[:] = focal
                     incremental = True
             
+                dtype_num = max(get_dtype_num(focal_arr[0]),
+                                get_dtype_num(focal_arr[1]),
+                                get_dtype_num(focal_arr[2]),
+                                dtype_num)
+        
+        if dtype_num==0:
+            self.dtype = bool
+        elif dtype_num==1:
+            self.dtype  = int
+        elif dtype_num==2:
+            self.dtype  = float
+        elif dtype_num==3:
+            self.dtype  = complex
+        
+                
         if not isinstance(masses,  np.ndarray):
             masses = np.array(masses)
 
@@ -377,6 +408,9 @@ class MassFunction(UncertainVariable):
             logger.debug(f'MassFunction {self.name} has support {supp}')
         if np.isnan(supp).any():
             raise RuntimeError(f"Variable {self} has invalid support. Check your definitions")
+        if self.dtype==int:
+            supp[0] -= 0.499
+            supp[1] += 0.5
         return supp
     
     def rvs(self, size=1, *args, **kwargs):
@@ -700,7 +734,13 @@ class PolyUQ(object):
                 this_samples -= this_samples.min()
                 this_samples /= this_samples.max()
             # scale to physical boundaries
-            samples[var.name] = vars_unif[i].ppf(this_samples)
+            this_samples = vars_unif[i].ppf(this_samples)
+            if var.dtype==int:
+                samples[var.name] = np.rint(this_samples).astype(var.dtype)
+            else:
+                samples[var.name] = this_samples.astype(var.dtype)
+             
+            
                 
         
         logger.debug('Finalizing...')

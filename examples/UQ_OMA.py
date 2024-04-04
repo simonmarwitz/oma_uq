@@ -488,7 +488,7 @@ def vars_definition(stage=2):
     v_b = RandomVariable('weibull_min','v_b', [lamda, c], primary=True) # meter per second
     alpha = RandomVariable('uniform', 'alpha', [0, 180], primary=True) # meter per second
     
-    n_channels = MassFunction('n_channels', [(8,), (16,), (24,)], [0.2, 0.5, 0.3], primary=True)
+    n_locations = MassFunction('n_locations', [(4,), (8,), (12,)], [0.2, 0.5, 0.3], primary=True)
     
     DTC = MassFunction('DTC', [(1.6, 30), (0.8, 1.6), (0.4, 0.8)],[0.7, 0.2, 0.1], primary=True)
     
@@ -496,7 +496,7 @@ def vars_definition(stage=2):
     
     sensitivity_nominal = MassFunction('sensitivity_nominal', [(1.02,), (0.102, 1.02), (0.01, 0.51)], [0.5, 0.3, 0.2], primary=False)
     # ..TODO:: actually, the last mass should be 0.1, but that requires several modifications to include the open-world assumption 
-    sensitivity_deviation = MassFunction('sensitivity_deviation', [(5,), (10,), (2, 20)], [0.4, 0.4, 0.2, ], primary=False)
+    sensitivity_deviation = MassFunction('sensitivity_deviation', [(5.,), (10.,), (2., 20.)], [0.4, 0.4, 0.2, ], primary=False)
     # Formal definition of sensitivity would result in a sample of n_channels x N_mcs_epi, where n_channels changes for each n_epi
     # Actual implementation is in Acquire.apply_sensor, using a seed, derived from the sample ID
     #sensitivity = RandomVariable('Uniform', 'sensitivity', 
@@ -514,8 +514,8 @@ def vars_definition(stage=2):
     spectral_noise_slope.primary = True
     sensor_noise_rms.primary = True
     
-    range_estimation_duration = MassFunction('range_estimation_duration', [(30,), (60, 120), (300,)], [0.2, 0.5, 0.3], primary=False)
-    range_estimation_margin = MassFunction('range_estimation_margin', [(2, 5), (5, 10)], [0.6, 0.4], primary=False)
+    range_estimation_duration = MassFunction('range_estimation_duration', [(30.,), (60, 120), (300,)], [0.2, 0.5, 0.3], primary=False)
+    range_estimation_margin = MassFunction('range_estimation_margin', [(2., 5.), (5., 10.)], [0.6, 0.4], primary=False)
     # Formal definition of meas_range is based on the signal itself and cannot be done using simple RandomVariabls
     # Actual implementation is in Acquire.estimate_meas_range, using a seed, derived from the sample ID
     #meas_range = RandomVariable(..., primary=True)
@@ -530,12 +530,12 @@ def vars_definition(stage=2):
     # make MassFunctions primary, to pass them on to the mapping
     DAQ_noise_rms.primary = True
     
-    sampling_rate = MassFunction('sampling_rate', [(50,100), (10,50), (4,10)], [0.5, 0.3, 0.2], primary=True)
+    sampling_rate = MassFunction('sampling_rate', [(50.,100.), (10.,50.), (4.,10.)], [0.5, 0.3, 0.2], primary=True)
     anti_aliasing_cutoff_factor = MassFunction('anti_aliasing_cutoff_factor', [(0.4, 0.45), (0.45, 0.49), (0.5,)], [0.7, 0.2, 0.1], primary=True)
     
-    quantization_bits = MassFunction('quantization_bits', [(12,), (16,), (24,)], [0.1, 0.3, 0.6], primary=True)
+    quant_bit_factor = MassFunction('quant_bit_factor', [(3,), (4,), (6,)], [0.1, 0.3, 0.6], primary=True)
     
-    duration = MassFunction('duration', [(10, 20), (30, 45), (60,), (120,)], [0.1, 0.2, 0.5, 0.2], primary=True)
+    duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60.,), (120.*60.,)], [0.1, 0.2, 0.5, 0.2], primary=True)
     
     if stage==1:
         vars_epi = [lamda, c]
@@ -545,15 +545,15 @@ def vars_definition(stage=2):
         
     elif stage==2:
         vars_epi = [lamda, c, # stage 1
-                    n_channels, DTC, sensitivity_nominal, sensitivity_deviation, 
+                    n_locations, DTC, sensitivity_nominal, sensitivity_deviation, 
                     spectral_noise_slope, sensor_noise_rms,
                     range_estimation_duration, range_estimation_margin,
                     DAQ_noise_rms,
                     sampling_rate, anti_aliasing_cutoff_factor,
-                    quantization_bits, duration]
+                    quant_bit_factor, duration]
         vars_ale = [v_b, alpha] # all stage 1
         
-        arg_vars = {'n_channels':n_channels, 
+        arg_vars = {'n_locations':n_locations, 
                     'DTC':DTC,  
                     'sensitivity_nominal':sensitivity_nominal,  
                     'sensitivity_deviation':sensitivity_deviation,  
@@ -564,7 +564,7 @@ def vars_definition(stage=2):
                     'DAQ_noise_rms':DAQ_noise_rms, 
                     'sampling_rate':sampling_rate,  
                     'anti_aliasing_cutoff_factor':anti_aliasing_cutoff_factor, 
-                    'quantization_bits':quantization_bits, 
+                    'quant_bit_factor':quant_bit_factor, 
                     'duration':duration,}
     
     return vars_ale, vars_epi, arg_vars
