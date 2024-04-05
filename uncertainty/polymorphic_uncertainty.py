@@ -105,7 +105,27 @@ class RandomVariable(UncertainVariable):
         self.dist = dist
         self.dist_fun = getattr(scipy.stats, self.dist)
         self.params = params
-    
+        
+        for param in self.params:
+            if isinstance(param, UncertainVariable):
+                # do not traverse polymorphic variables but infer dtype from distribution type
+                if isinstance(self.dist_fun, scipy.stats.rv_continuous):
+                    self.dtype = float
+                elif isinstance(self.dist_fun, scipy.stats.rv_discrete):
+                    self.dtype = int
+            elif isinstance(param, (int, np.integer)):
+                param = [param]
+                self.dtype = int
+            elif isinstance(param, (float, np.floating)):
+                param = [param]
+                self.dtype = float
+            elif isinstance(param, (complex, np.complexfloating)):
+                param = [param]
+                self.dtype = complex
+            else:
+                raise RuntimeError(f'Could not determine datatype for parameter {param}.')
+
+            
     @property
     def _children(self):
         if self.is_poly:
@@ -122,7 +142,11 @@ class RandomVariable(UncertainVariable):
         for param in self.params:
             if isinstance(param, UncertainVariable):
                 param = param.support(percentiles=percentiles)
-            if isinstance(param, (float, int)):
+            if isinstance(param, (int, np.integer)):
+                param = [param]
+            elif isinstance(param, (float, np.floating)):
+                param = [param]
+            elif isinstance(param, (complex, np.complexfloating)):
                 param = [param]
             eval_params.append(param)
         supp = [np.infty, -np.infty]
@@ -133,9 +157,7 @@ class RandomVariable(UncertainVariable):
                 this_supp = rv.ppf(percentiles)
                 if full_supp[0]>-np.infty: this_supp[0] = full_supp[0]
                 if full_supp[1]<np.infty: this_supp[1] = full_supp[1]
-                self.dtype = float
             elif isinstance(self.dist_fun, scipy.stats.rv_discrete):
-                self.dtype = int
                 this_supp = rv.support()
             else:
                 raise TypeError(f"Random variable {self} is neither discrete nor continuous but {type(rv)}.")
@@ -835,11 +857,11 @@ class PolyUQ(object):
         names_epi = [var.name for var in vars_epi if var.primary]
         names_grid = names_ale + names_epi
         
-        arrays_ale = [inp_samp_prim[name].iloc[:N_mcs_ale] for name in names_ale]
-        arrays_epi = [inp_samp_prim[name].iloc[:N_mcs_epi] for name in names_epi]
+        arrays_ale = [inp_samp_prim[var.name].iloc[:N_mcs_ale].astype(var.dtype) for var in vars_ale if var.primary]
+        arrays_epi = [inp_samp_prim[var.name].iloc[:N_mcs_epi].astype(var.dtype) for var in vars_epi if var.primary]
         
-        arrays_grid = [inp_samp_prim[name].iloc[inds_ale] for name in names_ale]
-        arrays_grid += [inp_samp_prim[name].iloc[inds_epi] for name in names_epi]
+        arrays_grid = [inp_samp_prim[var.name].iloc[inds_ale].astype(var.dtype) for var in vars_ale if var.primary]
+        arrays_grid += [inp_samp_prim[var.name].iloc[inds_epi].astype(var.dtype) for var in vars_epi if var.primary]
         ids_grid = np.array(list(map('_'.join, zip(ids_ale[inds_ale], ids_epi[inds_epi]))))
         
         arrays_ale.append(ids_ale)

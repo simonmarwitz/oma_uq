@@ -305,8 +305,10 @@ class DataManager(object):
                 ds.coords['ids'] = ids
             else:
                 assert len(ds.coords['ids']) == num_samples
-                assert "jid" not in names
-                assert "ids" not in names
+                if "jid" in names:
+                    raise RuntimeError('The database already exists. Delete/rename/move it first.')
+                if "ids" in names:
+                    raise RuntimeError('The database already exists. Delete/rename/move it first.')
                 ids = ds.coords['ids']
 
             for values, name in zip(arrays, names):
@@ -663,6 +665,8 @@ class DataManager(object):
 
                 fun_kwargs = {}
                 for arg, var in arg_vars.items():
+                    if not isinstance(var, str):
+                        logger.warning(f'The variable name that was passed for argument {arg} should be a string but is a {type(var)}')
                     fun_kwargs[arg] = this_ds[var].item()
 
                 if chwdir:

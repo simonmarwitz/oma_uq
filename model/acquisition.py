@@ -705,7 +705,7 @@ class Acquire(object):
         
         return max_amp * margin
     
-    def sample(self, fs=None, 
+    def sample(self, dec_fact=None, 
                aa_order=4, aa_cutoff=None, aa_ftype='butter',
                bits=16, meas_range=None,
                duration=None):
@@ -757,7 +757,8 @@ class Acquire(object):
         num_channels = self.num_channels
         modal_frequencies = self.modal_frequencies
         
-        dec_fact = int(fs_initial / fs)
+        # dec_fact = int(fs_initial / fs)
+        assert isinstance(dec_fact, (int, np.integer))
         
         dt_dec = dt * dec_fact
         N_dec = int(np.floor(N / dec_fact))
@@ -766,8 +767,10 @@ class Acquire(object):
         
         if aa_cutoff is None:
             aa_cutoff = fs_initial / dec_fact / 2.5
+        if aa_cutoff > fs_initial / dec_fact / 2:
+            logger.warning(f"The cutoff factor of the anti-aliasing filter is larger than the target Nyquist frequency.")
             
-        if fs < fs_initial:
+        if dec_fact > 1:
             logger.info(f'Sampling signal at {1/dt_dec} Hz, using a {aa_order}. order {aa_ftype} anti-aliasing filter with a cutoff frequency of {aa_cutoff} Hz.') 
             logger.info(f'Final signal size {N_dec} of {N}.')
         
@@ -780,7 +783,7 @@ class Acquire(object):
             #filter signal
             # sig_filt = scipy.signal.lfilter(fir_firwin, [1.0], signal)
             sig_filt = scipy.signal.lfilter(b, a, signal)
-        elif fs > fs_initial:
+        elif dec_fact < 1:
             raise RuntimeError("Sampling frequency must not be greater than the given sampling frequency")
         else:
             sig_filt = np.copy(signal)
@@ -807,46 +810,47 @@ class Acquire(object):
         subtractive depending on phase differences
         -> computed noise power is a conservative estimate
         '''
-        fft_filt_alias = np.zeros((num_channels, N_dec), dtype=complex)
-        fft_filt_non_alias = np.zeros((num_channels, N_dec), dtype=complex)
-    
-        fft_filt_non_alias[:, :N_dec // 2] += np.copy(fft_filt[:, :1 * N_dec // 2])
-        fft_filt_non_alias[:, N_dec // 2:] += np.copy(fft_filt[:, -1 * N_dec // 2:])
-    
-        pos_alias = fft_filt_alias[:, :N_dec // 2]  # is a view, any modifications are reflected to the original array
-        neg_alias = fft_filt_alias[:, N_dec // 2:]  # is a view, any modifications are reflected to the original array
-    
-        for i in reversed(range(1, dec_fact)):
-            # folding and aliasing all parts of the spectrum above the
-            # new Nyquist frequency into the remaining spectrum
-            slp = slice(i * N_dec // 2, (i + 1) * N_dec // 2)
-            sln = slice(-(i + 1) * N_dec // 2, -i * N_dec // 2)
-    
-            if i % 2:  # alias and fold
-                neg = fft_filt[:, slp]
-                pos = fft_filt[:, sln]
-            else:  # alias
-                pos = fft_filt[:, slp]
-                neg = fft_filt[:, sln]
-    
-            pos_alias += pos
-            neg_alias += neg
+        if dec_fact > 1:
+            fft_filt_alias = np.zeros((num_channels, N_dec), dtype=complex)
+            fft_filt_non_alias = np.zeros((num_channels, N_dec), dtype=complex)
         
-        p_fft_filt_alias = np.mean(np.abs(fft_filt_alias / np.sqrt(N_dec))**2, axis=1)
-        p_fft_filt_non_alias = np.mean(np.abs(fft_filt_non_alias / np.sqrt(N_dec))**2, axis=1)
-        snr_alias = p_fft_filt_non_alias / p_fft_filt_alias
-    
-        # signal powers
-        logger.debug(f'Power signal:  {np.mean(np.abs(signal)**2, axis=1)}')
-        logger.debug(f'Power filtered signal: {np.mean(np.abs(sig_filt)**2, axis=1)} filtered spectrum: {np.mean(np.abs(fft_filt / np.sqrt(N))**2, axis=1)}')
-        logger.debug(f'Power decimated signal: {np.mean(np.abs(sig_filt_dec)**2, axis=1)}')
-        logger.debug(f'Power aliased/folded spectrum: {p_fft_filt_alias}')
-        logger.debug(f'Power non-alias spectrum: {p_fft_filt_non_alias}')
-        logger.debug(f'Power error due to non-additivity:  {np.mean(np.abs(sig_filt_dec)**2, axis=1) -p_fft_filt_alias-p_fft_filt_non_alias}')
+            fft_filt_non_alias[:, :N_dec // 2] += np.copy(fft_filt[:, :1 * N_dec // 2])
+            fft_filt_non_alias[:, N_dec // 2:] += np.copy(fft_filt[:, -1 * N_dec // 2:])
         
-        logger.debug(f'SNR alias: {snr_alias} in dB: {np.log10(snr_alias) * 10}')
+            pos_alias = fft_filt_alias[:, :N_dec // 2]  # is a view, any modifications are reflected to the original array
+            neg_alias = fft_filt_alias[:, N_dec // 2:]  # is a view, any modifications are reflected to the original array
         
-        if modal_frequencies is not None and fs < fs_initial:  # proxy for: "modal characteristics are present"
+            for i in reversed(range(1, dec_fact)):
+                # folding and aliasing all parts of the spectrum above the
+                # new Nyquist frequency into the remaining spectrum
+                slp = slice(i * N_dec // 2, (i + 1) * N_dec // 2)
+                sln = slice(-(i + 1) * N_dec // 2, -i * N_dec // 2)
+        
+                if i % 2:  # alias and fold
+                    neg = fft_filt[:, slp]
+                    pos = fft_filt[:, sln]
+                else:  # alias
+                    pos = fft_filt[:, slp]
+                    neg = fft_filt[:, sln]
+        
+                pos_alias += pos
+                neg_alias += neg
+            
+            p_fft_filt_alias = np.mean(np.abs(fft_filt_alias / np.sqrt(N_dec))**2, axis=1)
+            p_fft_filt_non_alias = np.mean(np.abs(fft_filt_non_alias / np.sqrt(N_dec))**2, axis=1)
+            snr_alias = p_fft_filt_non_alias / p_fft_filt_alias
+        
+            # signal powers
+            logger.debug(f'Power signal:  {np.mean(np.abs(signal)**2, axis=1)}')
+            logger.debug(f'Power filtered signal: {np.mean(np.abs(sig_filt)**2, axis=1)} filtered spectrum: {np.mean(np.abs(fft_filt / np.sqrt(N))**2, axis=1)}')
+            logger.debug(f'Power decimated signal: {np.mean(np.abs(sig_filt_dec)**2, axis=1)}')
+            logger.debug(f'Power aliased/folded spectrum: {p_fft_filt_alias}')
+            logger.debug(f'Power non-alias spectrum: {p_fft_filt_non_alias}')
+            logger.debug(f'Power error due to non-additivity:  {np.mean(np.abs(sig_filt_dec)**2, axis=1) -p_fft_filt_alias-p_fft_filt_non_alias}')
+            
+            logger.debug(f'SNR alias: {snr_alias} in dB: {np.log10(snr_alias) * 10}')
+        
+        if modal_frequencies is not None and dec_fact > 1:  # proxy for: "modal characteristics are present"
             # adjust modal characteristics according to filter frf and reduced number of modes
             
             # compute number of modes in the remaining frequency band
@@ -877,8 +881,8 @@ class Acquire(object):
         # assert self.num_timesteps == N_dec
         # self.deltat_samp = dt_dec
         # assert np.isclose(t_dec[1] - t_dec[0], self.deltat)
-        
-        self.update_snr(p_fft_filt_alias, p_fft_filt_non_alias)
+        if dec_fact > 1:
+            self.update_snr(p_fft_filt_alias, p_fft_filt_non_alias)
         
         # Quantization
         if meas_range is None:
