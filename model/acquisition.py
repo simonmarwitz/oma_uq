@@ -1167,7 +1167,7 @@ class Acquire(object):
         return kwargs
     
 
-    def save(self, fpath):
+    def save(self, fpath, differential=None):
 
         fdir, file = os.path.split(fpath)
         fname, ext = os.path.splitext(file)
@@ -1178,23 +1178,25 @@ class Acquire(object):
         
         out_dict['self.jobname'] = self.jobname
         out_dict['self.re_shape'] = self.re_shape
-        out_dict['self.signal'] = self.signal
-        out_dict['self.t_vals'] = self.t_vals
         out_dict['self.channel_defs'] = self.channel_defs
         out_dict['self.snr'] = self.snr
         out_dict['self.s_vals_psd'] = self.s_vals_psd
         out_dict['self.snr_db_est'] = self.snr_db_est
         
-        out_dict['self.modal_frequencies'] = self.modal_frequencies
-        out_dict['self.modal_damping'] = self.modal_damping
-        out_dict['self.mode_shapes'] = self.mode_shapes
-        out_dict['self.modal_energies'] = self.modal_energies
-        out_dict['self.modal_amplitudes'] = self.modal_amplitudes
-        
         out_dict['self._is_sensed'] = self._is_sensed
         out_dict['self._is_sampled'] = self.is_sampled
         
-        if self._is_sensed:
+        if differential is None:
+            out_dict['self.signal'] = self.signal
+            out_dict['self.t_vals'] = self.t_vals
+            out_dict['self.modal_frequencies'] = self.modal_frequencies
+            out_dict['self.modal_damping'] = self.modal_damping
+            out_dict['self.mode_shapes'] = self.mode_shapes
+            out_dict['self.modal_energies'] = self.modal_energies
+            out_dict['self.modal_amplitudes'] = self.modal_amplitudes
+        
+        if differential=='sensed' or (differential is None and self._is_sensed):
+            assert self._is_sensed
             out_dict['self.signal_volt'] = self.signal_volt
             out_dict['self.mode_shapes_sensed'] = self.mode_shapes_sensed
             out_dict['self.modal_energies_sensed'] = self.modal_energies_sensed
@@ -1202,7 +1204,7 @@ class Acquire(object):
             out_dict['self.sensor_noise'] = self.sensor_noise
             out_dict['self.sensor_sensitivity'] = self.sensor_sensitivity
                 
-        if self.is_sampled:
+        if differential=='sampled' or (differential is None and self.is_sampled):
             out_dict['self.t_vals_samp'] = self.t_vals_samp
             out_dict['self.signal_samp'] = self.signal_samp
             out_dict['self.modal_frequencies_samp'] = self.modal_frequencies_samp
@@ -1216,6 +1218,7 @@ class Acquire(object):
         
     @classmethod
     def load(cls, fpath):
+        # ..TODO:: implement differential loading with dummy signal
         assert os.path.exists(fpath)
         
         def validate_array(arr):
