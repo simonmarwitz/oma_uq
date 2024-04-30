@@ -1217,7 +1217,7 @@ class Acquire(object):
         np.savez_compressed(fpath, **out_dict)
         
     @classmethod
-    def load(cls, fpath):
+    def load(cls, fpath, differential=None):
         # ..TODO:: implement differential loading with dummy signal
         assert os.path.exists(fpath)
         
