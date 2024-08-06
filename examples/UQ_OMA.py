@@ -17,10 +17,98 @@ import time
 
 from model.turbulent_wind import terrain_parameters, basic_wind_parameters, spectral_wind_field,temporal_wind_field,force_wind_field,plot_windfield
 from model.mechanical import Mechanical, MechanicalDummy
+from model.acquisition import Acquire, sensor_position
+
 
 global ansys
 
 from uncertainty.polymorphic_uncertainty import MassFunction, RandomVariable, PolyUQ
+
+def stage2mapping(n_locations,
+            DTC, 
+            sensitivity_nominal, sensitivity_deviation, 
+            spectral_noise_slope, sensor_noise_rms,
+            range_estimation_duration, range_estimation_margin,
+            DAQ_noise_rms,
+            decimation_factor, anti_aliasing_cutoff_factor,
+            quant_bit_factor,
+            duration,
+            jid, result_dir, working_dir, skip_existing=True):
+    
+    if not isinstance(result_dir, Path):
+        result_dir = Path(result_dir)
+    
+    if not isinstance(working_dir, Path):
+        working_dir = Path(working_dir)
+    
+    # Set up directories
+    if '_' in jid:
+        id_ale, id_epi = jid.split('_')
+        this_result_dir_ale = result_dir / id_ale
+        assert os.path.exists(this_result_dir_ale)
+        seed = int.from_bytes(bytes(id_ale, 'utf-8'), 'big')
+        # print(seed)
+        this_result_dir = this_result_dir_ale / id_epi
+        
+        if not os.path.exists(this_result_dir):
+            os.makedirs(this_result_dir)
+    else:
+        this_result_dir = result_dir / jid
+        this_result_dir_ale = this_result_dir
+        assert os.path.exists(this_result_dir)
+        seed = int.from_bytes(bytes(jid, 'utf-8'), 'big')
+    
+    
+    if os.path.exists(this_result_dir / 'measurement.npz') and skip_existing:
+        try:
+            acqui = Acquire.load(this_result_dir / 'measurement.npz', differential='samp')
+        except Exception as e:
+            os.remove(this_result_dir / 'measurement.npz')
+            raise e
+    else:
+        logger= logging.getLogger('model.acquisition')
+        logger.setLevel(level=logging.WARNING)
+        if not os.path.exists(this_result_dir_ale / 'response.npz'):
+            raise RuntimeError(f"Response does not exist at {this_result_dir_ale / 'response.npz'}")
+        assert os.path.exists(result_dir / 'mechanical.npz') 
+
+        mech = MechanicalDummy.load(fpath=result_dir / 'mechanical.npz')
+
+        arr = np.load(this_result_dir_ale / 'response.npz')
+
+        mech.t_vals_amb = arr['t_vals']
+        mech.resp_hist_amb = [arr['d_freq_time'], arr['v_freq_time'], arr['a_freq_time']]
+        mech.deltat = mech.t_vals_amb[1] - mech.t_vals_amb[0]
+        mech.timesteps = mech.t_vals_amb.shape[0]
+        mech.state[2] = True
+
+        setups = sensor_position(n_locations, mech.num_nodes, 'distributed')
+        # select a setup based on a "random" integer modulo the total number of setups
+        i_setup = seed % setups.shape[0]
+        sensor_nodes = setups[i_setup,:]
+        quant = 'a'
+        # list of (node, dof, quant)
+        channel_defs = []
+        for node in sensor_nodes:
+            for dof in ['ux','uy']:
+                channel_defs.append((node, dof, quant))
+
+        acqui = Acquire.init_from_mech(mech, channel_defs)
+        acqui.apply_sensor(DTC=DTC, 
+                             sensitivity_nominal=sensitivity_nominal, sensitivity_deviation=sensitivity_deviation, 
+                             spectral_noise_slope=spectral_noise_slope, noise_rms=sensor_noise_rms)
+        meas_range = acqui.estimate_meas_range(sample_dur=range_estimation_duration, margin=range_estimation_margin)
+        acqui.add_noise(noise_power=DAQ_noise_rms**2)
+
+        quantization_bits = quant_bit_factor * 4
+        anti_aliasing_cutoff = anti_aliasing_cutoff_factor * acqui.sampling_rate / decimation_factor
+        acqui.sample(dec_fact=decimation_factor, aa_cutoff=anti_aliasing_cutoff, 
+                       bits=quantization_bits, meas_range=meas_range, 
+                       duration=duration)
+        acqui.estimate_snr()
+        acqui.save(this_result_dir / 'measurement.npz', differential='samp')
+    
+    return np.array(acqui.bits_effective), np.array(acqui.snr_db_est), np.array(np.mean(acqui.snr_db))
 
 
 # Spatial domain grid
