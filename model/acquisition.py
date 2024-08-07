@@ -1149,7 +1149,9 @@ class Acquire(object):
             
             channel_headers = []
             for node, dof, quantity in channel_defs:
-                channel_headers.append(f'{["dsp", "vel", "acc", ][quantity]} {node} {["x", "y", "z"][dof]} ')
+                channel_headers.append(f'{node} {["x", "y", "z"][dof]} ')
+                # channel_headers.append(f'{["dsp", "vel", "acc", ][quantity]} {node} {["x", "y", "z"][dof]} ')
+
         else:
             disp_channels = None
             velo_channels = None
