@@ -1479,8 +1479,8 @@ def generate_mdof_time_hist(ansys, num_nodes=None, damping=None, nl_stiff=None, 
         meas_nodes = mech.meas_nodes
 
         if False:
-            from core import PreProcessingTools
-            from core import PlotMSH
+            from pyOMA.core import PreProcessingTools
+            from pyOMA.core import PlotMSH
 
             mech.export_geometry(f'/dev/shm/womo1998/{jid}/')
             geometry = PreProcessingTools.GeometryProcessor.load_geometry(f'/dev/shm/womo1998/{jid}/grid.txt', f'/dev/shm/womo1998/{jid}/lines.txt')
@@ -1639,7 +1639,7 @@ def generate_mdof_time_hist(ansys, num_nodes=None, damping=None, nl_stiff=None, 
         jid = ansys.jobname
 
         mech.export_geometry(f'/dev/shm/womo1998/{jid}/')
-        from core import PreProcessingTools
+        from pyOMA.core import PreProcessingTools
         geometry = PreProcessingTools.GeometryProcessor.load_geometry(f'/dev/shm/womo1998/{jid}/grid.txt', f'/dev/shm/womo1998/{jid}/lines.txt')
 
         if out_quant[0] == 'd':
@@ -2171,17 +2171,17 @@ def verify_numerical_accuracy(ansys, m=None, d=1, r=1):
 
 def IRF_to_ssi(ansys=None, jid=None, **kwargs):
 
-    from core.SSICovRef import BRSSICovRef
+    from pyOMA.core.SSICovRef import BRSSICovRef
 
-    from core.PreProcessingTools import PreProcessSignals, GeometryProcessor
+    from pyOMA.core.PreProcessingTools import PreProcessSignals, GeometryProcessor
 
     # Modal Analysis PostProcessing Class e.g. Stabilization Diagram
-    from core.StabilDiagram import StabilCalc, StabilPlot
-    from GUI.StabilGUI import StabilGUI, start_stabil_gui
+    from pyOMA.core.StabilDiagram import StabilCalc, StabilPlot
+    from pyOMA.GUI.StabilGUI import StabilGUI, start_stabil_gui
 
     # Modeshape Plot
-    from core.PlotMSH import ModeShapePlot
-    from GUI.PlotMSHGUI import start_msh_gui
+    from pyOMA.core.PlotMSH import ModeShapePlot
+    from pyOMA.GUI.PlotMSHGUI import start_msh_gui
 
     if ansys is not None:
         omega_d = np.pi / 2

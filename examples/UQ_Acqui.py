@@ -2,8 +2,8 @@ from uncertainty.data_manager import DataManager, HiddenPrints
 from model.mechanical import Mechanical, MechanicalDummy
 from model.acquisition import Acquire
 
-from core.PreProcessingTools import PreProcessSignals
-from core.SSICovRef import BRSSICovRef
+from pyOMA.core.PreProcessingTools import PreProcessSignals
+from pyOMA.core.SSICovRef import BRSSICovRef
 
 import os
 #import uuid
@@ -163,8 +163,8 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
     if False:
         modal_data.compute_modal_params()
         
-        from core import StabilDiagram
-        from GUI import StabilGUI
+        from pyOMA.core import StabilDiagram
+        from pyOMA.GUI import StabilGUI
         stabil_calc = StabilDiagram.StabilCalc(modal_data)
         stabil_plot = StabilDiagram.StabilPlot(stabil_calc)
         StabilGUI.start_stabil_gui(stabil_plot, modal_data, None, prep_signals)

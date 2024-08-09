@@ -64,7 +64,7 @@ def stage2mapping(n_locations,
             acqui = Acquire.load(this_result_dir / 'measurement.npz', differential='samp')
         except Exception as e:
             os.remove(this_result_dir / 'measurement.npz')
-            raise e
+            print(e)
     else:
         logger= logging.getLogger('model.acquisition')
         logger.setLevel(level=logging.WARNING)
@@ -106,7 +106,7 @@ def stage2mapping(n_locations,
                        bits=quantization_bits, meas_range=meas_range, 
                        duration=duration)
         acqui.estimate_snr()
-        acqui.save(this_result_dir / 'measurement.npz', differential='samp')
+        acqui.save(this_result_dir / 'measurement.npz', differential='sampled')
     
     return np.array(acqui.bits_effective), np.array(acqui.snr_db_est), np.array(np.mean(acqui.snr_db))
 

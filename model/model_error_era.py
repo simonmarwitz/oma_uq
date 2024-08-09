@@ -5,8 +5,8 @@ import os
 import logging
 from model.mechanical import generate_mdof_time_hist, start_ansys
 from model.acquisition import Acquire
-from core.SSICovRef import BRSSICovRef
-from core.PreProcessingTools import PreProcessSignals, GeometryProcessor
+from pyOMA.core.SSICovRef import BRSSICovRef
+from pyOMA.core.PreProcessingTools import PreProcessSignals, GeometryProcessor
 
 matplotlib.use('qt5Agg')
 logging.basicConfig(level=logging.INFO)

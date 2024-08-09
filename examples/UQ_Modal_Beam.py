@@ -948,10 +948,10 @@ def plots():
                 
     # Mode shape in PlotMSH
     if False:
-        from core.PreProcessingTools import GeometryProcessor, PreProcessSignals
-        from core.PlotMSH import ModeShapePlot
-        from GUI.PlotMSHGUI import start_msh_gui
-        from core.PostProcessingTools import MergePoSER
+        from pyOMA.core.PreProcessingTools import GeometryProcessor, PreProcessSignals
+        from pyOMA.core.PlotMSH import ModeShapePlot
+        from pyOMA.GUI.PlotMSHGUI import start_msh_gui
+        from pyOMA.core.PostProcessingTools import MergePoSER
         jid='test'
         
         mech.example_beam(num_nodes=100, num_modes=14, damping=0.005, num_meas_nodes=100, damp_mode=1)

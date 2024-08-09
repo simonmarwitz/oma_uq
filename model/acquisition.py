@@ -1196,6 +1196,8 @@ class Acquire(object):
             out_dict['self.mode_shapes'] = self.mode_shapes
             out_dict['self.modal_energies'] = self.modal_energies
             out_dict['self.modal_amplitudes'] = self.modal_amplitudes
+        else:
+            assert differential in ['sensed', 'sampled']
         
         if differential=='sensed' or (differential is None and self._is_sensed):
             assert self._is_sensed
@@ -1207,6 +1209,7 @@ class Acquire(object):
             out_dict['self.sensor_sensitivity'] = self.sensor_sensitivity
                 
         if differential=='sampled' or (differential is None and self.is_sampled):
+            assert self.is_sampled
             out_dict['self.t_vals_samp'] = self.t_vals_samp
             out_dict['self.signal_samp'] = self.signal_samp
             out_dict['self.modal_frequencies_samp'] = self.modal_frequencies_samp
@@ -1219,7 +1222,7 @@ class Acquire(object):
         np.savez_compressed(fpath, **out_dict)
         
     @classmethod
-    def load(cls, fpath, differential=None):
+    def load(cls, fpath):
         # ..TODO:: implement differential loading with dummy signal
         assert os.path.exists(fpath)
         
@@ -1700,7 +1703,7 @@ def filter_example():
     acqui.sample(*acqui.sample_helper(f_max=102.4))
     
     # pass to PreProcessingTools and create filter example with it
-    from core import PreProcessingTools
+    from pyOMA.core import PreProcessingTools
     figt, axest = plt.subplots(2, 2, sharex=True, sharey=True)
     axest = axest.flat
     figf, axesf = plt.subplots(2, 2, sharex=True, sharey=True)
