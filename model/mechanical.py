@@ -397,6 +397,66 @@ class MechanicalDummy(object):
                 return frequencies, damping, mode_shapes
         else:
             return
+        
+    def get_geometry(self):
+        '''
+        return (meas)nodes, lines, chan_dofs in a format usable in pyOMA
+        '''
+        nodes = []
+        for meas_node in np.concatenate(([1], self.meas_nodes)):
+            for node, x, y, z in self.nodes_coordinates:
+                if node == meas_node:
+                    nodes.append([meas_node, x, y, z])
+                    break
+            else:
+                logger.warning(f'Meas node {meas_node} was not found in nodes_coordinates')
+        
+        lines = []
+        meas_node_last = 1  # ansys starts at 1
+        for meas_node in self.meas_nodes:
+            # how is that node connected to any other node in self.meas_nodes
+            # for all_occurences_of_it_in_ntn_conns:
+            #     for connect_level in range(num_nodes):
+            #         find all nodes connected to it in ntn_conns
+            #         check, if any of them are in meas_nodes
+            #            store and remove from
+            #            pah, that sucks
+            lines.append((meas_node_last, meas_node))
+            meas_node_last = meas_node
+        
+        chan_dofs = []
+        channel = 0
+        # for channel in range(3):
+        #     chan_dofs.append((channel, 1, 0, 0))
+        for az, elev in [(0, 0), (270, 0), (0, 90)]:
+            for meas_node in self.meas_nodes:
+                chan_dofs.append((channel, meas_node, az, elev))
+                channel += 1
+        
+        return nodes, lines, chan_dofs
+    
+    def export_geometry(self, save_dir='/usr/scratch4/sima9999/work/modal_uq/datasets/'):
+        'save under jid_folder, nodes_file, lines_file, chan_dofs_file'
+        os.makedirs(save_dir, exist_ok=True)
+    
+        nodes, lines, chan_dofs = self.get_geometry()
+        
+        with open(os.path.join(save_dir, 'grid.txt'), 'wt') as f:
+            f.write('node_name\tx\ty\tz\n')
+            for node, x, y, z in nodes:
+                f.write(f'{node}\t{x:e}\t{y:e}\t{z:e}\n')
+                
+        with open(os.path.join(save_dir, 'lines.txt'), 'wt') as f:
+            f.write('node_name_1\tnode_name_2\n')
+            for line_s, line_e in lines:
+                f.write(f'{line_s}\t{line_e}\n')
+                
+        with open(os.path.join(save_dir, 'chan_dofs.txt'), 'wt') as f:
+            f.write('Channel-Nr.\tNode\tAzimuth\tElevation\tChannel Name\n')
+            for channel, meas_node, az, elev in chan_dofs:
+                f.write(f'{channel}\t{meas_node}\t{az}\t{elev}\t \n')
+                
+        return
     
     def save(self, fpath, emergency_arrays=None):
         '''
@@ -3561,66 +3621,6 @@ class Mechanical(MechanicalDummy):
         mech._load(fpath, mech)
         
         return mech
-        
-    def get_geometry(self):
-        '''
-        return (meas)nodes, lines, chan_dofs in a format usable in pyOMA
-        '''
-        nodes = []
-        for meas_node in np.concatenate(([1], self.meas_nodes)):
-            for node, x, y, z in self.nodes_coordinates:
-                if node == meas_node:
-                    nodes.append([meas_node, x, y, z])
-                    break
-            else:
-                logger.warning(f'Meas node {meas_node} was not found in nodes_coordinates')
-        
-        lines = []
-        meas_node_last = 1  # ansys starts at 1
-        for meas_node in self.meas_nodes:
-            # how is that node connected to any other node in self.meas_nodes
-            # for all_occurences_of_it_in_ntn_conns:
-            #     for connect_level in range(num_nodes):
-            #         find all nodes connected to it in ntn_conns
-            #         check, if any of them are in meas_nodes
-            #            store and remove from
-            #            pah, that sucks
-            lines.append((meas_node_last, meas_node))
-            meas_node_last = meas_node
-        
-        chan_dofs = []
-        channel = 0
-        # for channel in range(3):
-        #     chan_dofs.append((channel, 1, 0, 0))
-        for az, elev in [(0, 0), (270, 0), (0, 90)]:
-            for meas_node in self.meas_nodes:
-                chan_dofs.append((channel, meas_node, az, elev))
-                channel += 1
-        
-        return nodes, lines, chan_dofs
-    
-    def export_geometry(self, save_dir='/usr/scratch4/sima9999/work/modal_uq/datasets/'):
-        'save under jid_folder, nodes_file, lines_file, chan_dofs_file'
-        os.makedirs(save_dir, exist_ok=True)
-    
-        nodes, lines, chan_dofs = self.get_geometry()
-        
-        with open(os.path.join(save_dir, 'grid.txt'), 'wt') as f:
-            f.write('node_name\tx\ty\tz\n')
-            for node, x, y, z in nodes:
-                f.write(f'{node}\t{x:e}\t{y:e}\t{z:e}\n')
-                
-        with open(os.path.join(save_dir, 'lines.txt'), 'wt') as f:
-            f.write('node_name_1\tnode_name_2\n')
-            for line_s, line_e in lines:
-                f.write(f'{line_s}\t{line_e}\n')
-                
-        with open(os.path.join(save_dir, 'chan_dofs.txt'), 'wt') as f:
-            f.write('Channel-Nr.\tNode\tAzimuth\tElevation\tChannel Name\n')
-            for channel, meas_node, az, elev in chan_dofs:
-                f.write(f'{channel}\t{meas_node}\t{az}\t{elev}\t \n')
-                
-        return
 
     def numerical_response_parameters(self, num_modes=None, compensate=True, dofs = [2]):
         '''optionally, compensate with time integration parameters

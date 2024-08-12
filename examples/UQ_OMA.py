@@ -61,9 +61,9 @@ def stage2mapping(n_locations,
     
     if os.path.exists(this_result_dir / 'measurement.npz') and skip_existing:
         try:
-            acqui = Acquire.load(this_result_dir / 'measurement.npz', differential='samp')
+            acqui = Acquire.load(this_result_dir / 'measurement.npz', differential='sampled')
         except Exception as e:
-            os.remove(this_result_dir / 'measurement.npz')
+            # os.remove(this_result_dir / 'measurement.npz')
             print(e)
     else:
         logger= logging.getLogger('model.acquisition')

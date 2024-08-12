@@ -15,7 +15,6 @@ import matplotlib.pyplot as plt
 import os
 import logging
 import signal
-from pickle import NONE
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -875,7 +874,7 @@ class Acquire(object):
             self.modal_frequencies_samp = modal_frequencies
             # self.num_modes_samp = num_modes
             
-        self.re_shape[-1] = sig_filt_dec.shape[-1]
+        # self.re_shape[-1] = sig_filt_dec.shape[-1]
         
         # self.num_timesteps_samp = sig_filt_dec.shape[1]
         # assert self.num_timesteps == N_dec
@@ -1222,7 +1221,7 @@ class Acquire(object):
         np.savez_compressed(fpath, **out_dict)
         
     @classmethod
-    def load(cls, fpath):
+    def load(cls, fpath, differential=None):
         # ..TODO:: implement differential loading with dummy signal
         assert os.path.exists(fpath)
         
@@ -1257,30 +1256,43 @@ class Acquire(object):
         in_dict = np.load(fpath, allow_pickle=True)
         
         jobname = in_dict['self.jobname'].item()
-        signal = validate_array(in_dict['self.signal'])
-        t_vals = validate_array(in_dict['self.t_vals'])
         channel_defs = validate_array(in_dict['self.channel_defs'])
+        re_shape = validate_array(in_dict['self.re_shape'])
         
-        modal_frequencies = validate_array(in_dict['self.modal_frequencies'])
-        modal_damping = validate_array(in_dict['self.modal_damping'])
-        mode_shapes = validate_array(in_dict['self.mode_shapes'])
-        modal_energies = validate_array(in_dict['self.modal_energies'])
-        modal_amplitudes = validate_array(in_dict['self.modal_amplitudes'])
-        
+        if differential is None:
+            signal = validate_array(in_dict['self.signal'])
+            t_vals = validate_array(in_dict['self.t_vals'])
+            modal_frequencies = validate_array(in_dict['self.modal_frequencies'])
+            modal_damping = validate_array(in_dict['self.modal_damping'])
+            mode_shapes = validate_array(in_dict['self.mode_shapes'])
+            modal_energies = validate_array(in_dict['self.modal_energies'])
+            modal_amplitudes = validate_array(in_dict['self.modal_amplitudes'])
+        else:
+            assert differential in ['sensed', 'sampled']
+            signal = np.empty(re_shape)
+            t_vals = np.empty(re_shape[-1])
+            modal_frequencies = None
+            modal_damping= None
+            mode_shapes= None
+            modal_energies= None
+            modal_amplitudes= None
+            
+            
         acquire = cls(t_vals, signal, None, channel_defs,
                  modal_frequencies, modal_damping, mode_shapes,
                  modal_energies, modal_amplitudes,
                  jobname,)
+        assert np.all(acquire.re_shape == re_shape)
         
         acquire.s_vals_psd = validate_array(in_dict['self.s_vals_psd'])
         acquire.snr_db_est = validate_array(in_dict['self.snr_db_est'])
-        acquire.re_shape = validate_array(in_dict['self.re_shape'])
         acquire.snr = validate_array(in_dict['self.snr'])
         
         acquire._is_sensed = validate_array(in_dict['self._is_sensed'])
         acquire._is_sampled = validate_array(in_dict['self._is_sampled'])
         
-        if acquire._is_sensed:
+        if (acquire._is_sensed and differential != 'sampled') or differential == 'sensed':
+            assert acquire._is_sensed
             acquire.signal_volt = validate_array(in_dict['self.signal_volt'])
             acquire.mode_shapes_sensed = validate_array(in_dict['self.mode_shapes_sensed'])
             acquire.modal_energies_sensed = validate_array(in_dict['self.modal_energies_sensed'])
@@ -1288,7 +1300,8 @@ class Acquire(object):
             acquire.sensor_noise = validate_array(in_dict['self.sensor_noise'])
             acquire.sensor_sensitivity = validate_array(in_dict['self.sensor_sensitivity'])
         
-        if acquire.is_sampled:
+        if (acquire.is_sampled and differential != 'sensed') or differential == 'sampled':
+            assert acquire.is_sampled
             acquire.t_vals_samp = validate_array(in_dict['self.t_vals_samp'])
             acquire.signal_samp = validate_array(in_dict['self.signal_samp'])
             acquire.modal_frequencies_samp = validate_array(in_dict['self.modal_frequencies_samp'])
@@ -1302,7 +1315,10 @@ class Acquire(object):
 
 def sensor_position(num_sensors, num_nodes, method):
     assert method in ['lumped','distributed']
-
+    
+    # put the tip node always as the last channel
+    num_sensors -= 1
+    
     all_positions = np.arange(5, num_nodes, 5)
     num_positions = all_positions.shape[0]
     num_clusters = int(np.floor(num_positions/num_sensors))
@@ -1315,7 +1331,10 @@ def sensor_position(num_sensors, num_nodes, method):
         last_setup = np.reshape(all_positions[-num_sensors:], (1, num_sensors))
 
     clusters = np.vstack((clusters, last_setup))
-
+    
+    # put the tip node always as the last channel
+    clusters = np.hstack((clusters, np.ones((num_clusters + 1, 1), dtype=int) * 201))
+    
     return clusters
 
 def ashift(array):
