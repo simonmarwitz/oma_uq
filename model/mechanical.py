@@ -275,7 +275,7 @@ class MechanicalDummy(object):
         --------
             time_values: ndarray
                 Array holding the time instants of the computed responses.
-            [d, v, a]: list-of-ndarray(N_out, num_out_nodes, num_out_dofs
+            [d, v, a]: list-of-ndarray(N_out, num_out_nodes, 2
                 Response time histories (displacement, velocity, acceleration).
                 Note, that the ordering of out the output follows the order in 
                 self.dof_ref_out.

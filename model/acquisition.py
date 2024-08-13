@@ -849,7 +849,8 @@ class Acquire(object):
             
             logger.debug(f'SNR alias: {snr_alias} in dB: {np.log10(snr_alias) * 10}')
         
-        if modal_frequencies is not None and dec_fact > 1:  # proxy for: "modal characteristics are present"
+        if modal_frequencies is not None:
+            # proxy for: "modal characteristics are present"
             # adjust modal characteristics according to filter frf and reduced number of modes
             
             # compute number of modes in the remaining frequency band
@@ -858,8 +859,11 @@ class Acquire(object):
             
             modal_frequencies = modal_frequencies[:num_modes]
             # omegas = self.modal_frequencies[np.newaxis, :] * 2 * np.pi
-            # modal_frf = np.sum(fir_firwin[:, np.newaxis] * np.exp(-1j * omegas * np.linspace(0, dt * order, order)[:, np.newaxis]), axis=0)
-            _, modal_frf = scipy.signal.freqz(b, a, modal_frequencies / fs_initial * 2 * np.pi)
+            if dec_fact == 1:
+                modal_frf = np.ones_like(modal_frequencies)
+            else:
+                # modal_frf = np.sum(fir_firwin[:, np.newaxis] * np.exp(-1j * omegas * np.linspace(0, dt * order, order)[:, np.newaxis]), axis=0)
+                _, modal_frf = scipy.signal.freqz(b, a, modal_frequencies / fs_initial * 2 * np.pi)
                 
             if self.modal_damping is not None:
                 self.modal_damping_samp = self.modal_damping[:num_modes]
@@ -872,7 +876,6 @@ class Acquire(object):
                 self.modal_energies_samp = self.modal_energies[:, :num_modes] * np.abs(modal_frf) / sensor_sensitivity
             
             self.modal_frequencies_samp = modal_frequencies
-            # self.num_modes_samp = num_modes
             
         # self.re_shape[-1] = sig_filt_dec.shape[-1]
         
@@ -1321,6 +1324,7 @@ def sensor_position(num_sensors, num_nodes, method):
     
     all_positions = np.arange(5, num_nodes, 5)
     num_positions = all_positions.shape[0]
+    assert num_positions >= num_sensors
     num_clusters = int(np.floor(num_positions/num_sensors))
 
     if method == 'distributed': 

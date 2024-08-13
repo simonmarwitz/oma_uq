@@ -26,7 +26,7 @@ from uncertainty.polymorphic_uncertainty import MassFunction, RandomVariable, Po
 
 def stage2mapping(n_locations,
             DTC, 
-            sensitivity_nominal, sensitivity_deviation, 
+            sensitivity_nominal, sensitivity_deviation_percent, 
             spectral_noise_slope, sensor_noise_rms,
             range_estimation_duration, range_estimation_margin,
             DAQ_noise_rms,
@@ -75,7 +75,8 @@ def stage2mapping(n_locations,
         mech = MechanicalDummy.load(fpath=result_dir / 'mechanical.npz')
 
         arr = np.load(this_result_dir_ale / 'response.npz')
-
+        
+        # Here's the Hack
         mech.t_vals_amb = arr['t_vals']
         mech.resp_hist_amb = [arr['d_freq_time'], arr['v_freq_time'], arr['a_freq_time']]
         mech.deltat = mech.t_vals_amb[1] - mech.t_vals_amb[0]
@@ -90,10 +91,18 @@ def stage2mapping(n_locations,
         # list of (node, dof, quant)
         channel_defs = []
         for node in sensor_nodes:
+            # We work around the Hack from transient_ifrf, where we omitted the x-axis in the response,
+            # by wrongly definining dofs ux and uy instead of uy and uz
             for dof in ['ux','uy']:
                 channel_defs.append((node, dof, quant))
+        
+        # the above hack conflicts with the modeshape dof though, 
+        # so we have to hack around it as well
+        mech.damped_mode_shapes = np.delete(mech.damped_mode_shapes, (0), axis=1)
 
         acqui = Acquire.init_from_mech(mech, channel_defs)
+        
+        sensitivity_deviation = sensitivity_deviation_percent / 100 * sensitivity_nominal
         acqui.apply_sensor(DTC=DTC, 
                              sensitivity_nominal=sensitivity_nominal, sensitivity_deviation=sensitivity_deviation, 
                              spectral_noise_slope=spectral_noise_slope, noise_rms=sensor_noise_rms)
