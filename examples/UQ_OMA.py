@@ -19,6 +19,8 @@ from model.turbulent_wind import terrain_parameters, basic_wind_parameters, spec
 from model.mechanical import Mechanical, MechanicalDummy
 from model.acquisition import Acquire, sensor_position
 
+from pyOMA.core.PreProcessingTools import PreProcessSignals
+from pyOMA.core.SSICovRef import BRSSICovRef
 from pyOMA.core.StabilDiagram import StabilCalc
 global ansys
 
@@ -119,6 +121,40 @@ def stage2mapping(n_locations,
     
     return np.array(acqui.bits_effective), np.array(acqui.snr_db_est), np.array(np.mean(acqui.snr_db))
 
+
+def stage3mapping(n_lags, estimator,
+                  order,
+                  
+            jid, result_dir, working_dir, skip_existing=True):
+    if not isinstance(result_dir, Path):
+        result_dir = Path(result_dir)
+    
+    if not isinstance(working_dir, Path):
+        working_dir = Path(working_dir)
+    
+    # Set up directories
+    if '_' in jid:
+        id_ale, id_epi = jid.split('_')
+        this_result_dir = result_dir / 'samples' / id_ale
+        this_result_dir = this_result_dir / id_epi
+    
+    acqui = Acquire.load(this_result_dir / 'measurement.npz', differential='sampled')
+    
+    pd_kwargs = acqui.to_prep_data()
+    ref_channels=np.where(acqui.channel_defs[:,0]==201)[0]
+    prep_signals = PreProcessSignals(**pd_kwargs, ref_channels=ref_channels)
+    
+    prep_signals.corr_blackman_tukey(n_lags, num_blocks=1, refs_only=True)
+    
+    modal_data = BRSSICovRef(prep_signals)
+    modal_data.build_toeplitz_cov(prep_signals.n_lags // 2)
+    modal_data.compute_state_matrices()
+    this_modal_frequencies, this_modal_damping, this_mode_shapes, this_eigenvalues, this_modal_contributions = \
+                    modal_data.single_order_modal(order, plot_=False, corr_synth=False)
+    pass
+    
+    
+    
 def pair_modes(freq_num, freq_ident, 
                shapes_num, shapes_ident, 
                freq_thresh=0.2, mac_thresh=0.8):
@@ -762,6 +798,7 @@ def vars_definition(stage=2):
     DAQ_noise_rms.primary = True
     
     # sampling_rate = MassFunction('sampling_rate', [(50.,100.), (10.,50.), (4.,10.)], [0.5, 0.3, 0.2], primary=True)
+    logger.warning('The decimation factors are too high for a final estimation up to 3.5 Hz (numerical pre-study). Consider modifications')
     decimation_factor = MassFunction('decimation_factor', [(1, 2), (2,7), (7, 18)], [0.5, 0.3, 0.2], primary=True)
 
     anti_aliasing_cutoff_factor = MassFunction('anti_aliasing_cutoff_factor', [(0.4, 0.45), (0.45, 0.49), (0.5,)], [0.7, 0.2, 0.1], primary=True)
