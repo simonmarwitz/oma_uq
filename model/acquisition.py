@@ -1740,17 +1740,17 @@ def filter_example():
                                             ('cheby1', 6, 58.19, axest[3], axesf[3])
                                             ]:
         
-        prep_data = PreProcessingTools.PreProcessSignals(**acqui.to_prep_data())
+        prep_signals = PreProcessingTools.PreProcessSignals(**acqui.to_prep_data())
         
         # use analytical example data
-        #prep_data = PreProcessingTools.PreProcessSignals(sig, fs)
+        #prep_signals = PreProcessingTools.PreProcessSignals(sig, fs)
         
         channel = 18
-        prep_data.plot_signals(channels=channel, NFFT=prep_data.total_time_steps // 8, axest=[ax1], axesf=[ax2], window='hamm', color='dimgrey', alpha=1)
+        prep_signals.plot_signals(channels=channel, NFFT=prep_signals.total_time_steps // 8, axest=[ax1], axesf=[ax2], window='hamm', color='dimgrey', alpha=1)
         
         axins = inset_axes(ax1, width='30%', height='18.5%', loc=2, axes_class=AxesZero, borderpad=.75)
-        prep_data.filter_signals(ftype=filt, order=order, lowpass=cutoff, overwrite=True, plot_ax=[axins, ax2])
-        prep_data.plot_signals(channels=channel, NFFT=prep_data.total_time_steps // 8, axest=[ax1], axesf=[ax2], window='hamm', color='black', alpha=1)
+        prep_signals.filter_signals(ftype=filt, order=order, lowpass=cutoff, overwrite=True, plot_ax=[axins, ax2])
+        prep_signals.plot_signals(channels=channel, NFFT=prep_signals.total_time_steps // 8, axest=[ax1], axesf=[ax2], window='hamm', color='black', alpha=1)
         
         ax1.annotate(label_dict[filt], (0.05, 0.05), xycoords='axes fraction', backgroundcolor='#ffffff80')
         ax2.annotate(label_dict[filt], (0.05, 0.05), xycoords='axes fraction', backgroundcolor='#ffffff80')
@@ -1793,7 +1793,7 @@ def filter_example():
     axesf[-1].set_xlim((0, 2 * 58.19))
     axesf[-1].set_ylim((-62, 3))
     
-    axest[-1].set_xlim((0, prep_data.duration))
+    axest[-1].set_xlim((0, prep_signals.duration))
     
     leg_handlesf = []
     leg_handlest = []
@@ -1832,7 +1832,7 @@ def filter_example():
     # decimate and estimate decimation noise / quantization noise
     acqui.sample(f_max, fs_factor)
     
-    prep_data = PreProcessingTools.PreProcessSignals(**acqui.to_preprocessdata())
+    prep_signals = PreProcessingTools.PreProcessSignals(**acqui.to_preprocessdata())
     
     nodes, lines, chan_dofs = mech.get_geometry()
     
