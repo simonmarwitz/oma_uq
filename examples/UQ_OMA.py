@@ -150,7 +150,7 @@ def stage3mapping(n_lags, estimator,
     modal_data.build_toeplitz_cov(prep_signals.n_lags // 2)
     modal_data.compute_state_matrices()
     this_modal_frequencies, this_modal_damping, this_mode_shapes, this_eigenvalues, this_modal_contributions = \
-                    modal_data.single_order_modal(order, plot_=False, corr_synth=False)
+                    modal_data.single_order_modal(order, plot_modes=False, synth_corr=False)
     pass
     
     
