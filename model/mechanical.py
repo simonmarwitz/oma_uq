@@ -2679,6 +2679,9 @@ class Mechanical(MechanicalDummy):
         if ret_vals is not None:
             return ret_vals
         
+        if num_modes is None:
+            num_modes = self.num_modes
+            
         ansys.prep7()
         if self.coulomb_elements and reset_sliders:
             logger.info("Temporarily resetting sliders for modal analysis.")

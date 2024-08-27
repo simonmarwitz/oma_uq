@@ -753,7 +753,7 @@ def vars_definition(stage=2):
     c = MassFunction('c_vb',[(5.618, 5.649),(5.91,6.0)],[0.75,0.25], primary=False) # incompleteness
     
     v_b = RandomVariable('weibull_min','v_b', [lamda, c], primary=True) # meter per second
-    alpha = RandomVariable('uniform', 'alpha', [0., 180.], primary=True) # meter per second
+    alpha = RandomVariable('uniform', 'alpha', [0., 180.], primary=True) # degreee
     
     n_locations = MassFunction('n_locations', [(4,), (8,), (12,)], [0.2, 0.5, 0.3], primary=True)
     
