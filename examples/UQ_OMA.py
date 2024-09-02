@@ -69,7 +69,7 @@ def stage2mapping(n_locations,
             print(e)
     else:
         logger= logging.getLogger('model.acquisition')
-        logger.setLevel(level=logging.WARNING)
+        logger.setLevel(level=logging.INFO)
         if not os.path.exists(this_result_dir_ale / 'response.npz'):
             raise RuntimeError(f"Response does not exist at {this_result_dir_ale / 'response.npz'}")
         assert os.path.exists(result_dir / 'mechanical.npz') 
@@ -103,20 +103,40 @@ def stage2mapping(n_locations,
         mech.damped_mode_shapes = np.delete(mech.damped_mode_shapes, (0), axis=1)
 
         acqui = Acquire.init_from_mech(mech, channel_defs)
+        fig, axes = plt.subplots(n_locations, 2, sharex=True, sharey=True)
+        t_vals, signal = acqui.get_signal() 
+        for i_location in range(n_locations):
+            axes[i_location,0].plot(t_vals, signal[i_location * 2,:], alpha=0.5)
+            axes[i_location,1].plot(t_vals, signal[i_location * 2 + 1,:], alpha=0.5)
         
         sensitivity_deviation = sensitivity_deviation_percent / 100 * sensitivity_nominal
         acqui.apply_sensor(DTC=DTC, 
                              sensitivity_nominal=sensitivity_nominal, sensitivity_deviation=sensitivity_deviation, 
                              spectral_noise_slope=spectral_noise_slope, noise_rms=sensor_noise_rms)
+        print(acqui.snr)
+        t_vals, signal = acqui.get_signal() 
+        for i_location in range(n_locations):
+            axes[i_location,0].plot(t_vals, signal[i_location * 2,:], alpha=0.5)
+            axes[i_location,1].plot(t_vals, signal[i_location * 2 + 1,:], alpha=0.5)
         meas_range = acqui.estimate_meas_range(sample_dur=range_estimation_duration, margin=range_estimation_margin)
-        acqui.add_noise(noise_power=DAQ_noise_rms**2)
-
+        
         quantization_bits = quant_bit_factor * 4
         anti_aliasing_cutoff = anti_aliasing_cutoff_factor * acqui.sampling_rate / decimation_factor
         acqui.sample(dec_fact=decimation_factor, aa_cutoff=anti_aliasing_cutoff, 
                        bits=quantization_bits, meas_range=meas_range, 
                        duration=duration)
+        # add noise here, because sampling (decimation) removes all noise again
+        print(acqui.snr)
+        acqui.add_noise(noise_power=DAQ_noise_rms**2)
+        print(acqui.snr)
+        t_vals, signal = acqui.get_signal() 
+        for i_location in range(n_locations):
+            axes[i_location,0].plot(t_vals, signal[i_location * 2,:], alpha=0.5)
+            axes[i_location,1].plot(t_vals, signal[i_location * 2 + 1,:], alpha=0.5)
+        
+            
         acqui.estimate_snr()
+        
         acqui.save(this_result_dir / 'measurement.npz', differential='sampled')
     
     return np.array(acqui.bits_effective), np.array(acqui.snr_db_est), np.array(np.mean(acqui.snr_db))

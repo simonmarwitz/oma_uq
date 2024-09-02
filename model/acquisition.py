@@ -674,7 +674,7 @@ class Acquire(object):
         dt = self.deltat
         dur = self.duration
         num_timesteps = self.num_timesteps
-        signal = self.signal
+        _, signal = self.get_signal()
         
         if margin is None:
             margin = 3.0
@@ -884,6 +884,8 @@ class Acquire(object):
         # self.deltat_samp = dt_dec
         # assert np.isclose(t_dec[1] - t_dec[0], self.deltat)
         if dec_fact > 1:
+            # Wikipedia - SNR:  "noise goes down as the square root of the number of averaged samples. "
+            self.snr[1] /= np.sqrt(dec_fact)
             self.update_snr(p_fft_filt_alias, p_fft_filt_non_alias)
         
         # Quantization
@@ -924,6 +926,8 @@ class Acquire(object):
         
         snr_quant = 10 * np.log10(P_S / P_N)
         logger.debug(f'SNR quantization: {P_S / P_N} in dB: {snr_quant}')
+        
+
         
         self.update_snr(P_N, P_S)
         
