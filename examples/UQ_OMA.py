@@ -828,6 +828,9 @@ def vars_definition(stage=2):
     
     duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60.,), (120.*60.,)], [0.1, 0.2, 0.5, 0.2], primary=True)
     
+    
+    
+    
     if stage==1:
         vars_epi = [lamda, c]
         vars_ale = [v_b, alpha] 

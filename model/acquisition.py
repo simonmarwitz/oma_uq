@@ -1340,7 +1340,7 @@ def sensor_position(num_sensors, num_nodes, method):
 
     clusters = np.vstack((clusters, last_setup))
     
-    # put the tip node always as the last channel
+    # put the tip node always as the last channel (reference channel)
     clusters = np.hstack((clusters, np.ones((num_clusters + 1, 1), dtype=int) * 201))
     
     return clusters
