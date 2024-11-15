@@ -103,21 +103,25 @@ def stage2mapping(n_locations,
         mech.damped_mode_shapes = np.delete(mech.damped_mode_shapes, (0), axis=1)
 
         acqui = Acquire.init_from_mech(mech, channel_defs)
-        fig, axes = plt.subplots(n_locations, 2, sharex=True, sharey=True)
-        t_vals, signal = acqui.get_signal() 
-        for i_location in range(n_locations):
-            axes[i_location,0].plot(t_vals, signal[i_location * 2,:], alpha=0.5)
-            axes[i_location,1].plot(t_vals, signal[i_location * 2 + 1,:], alpha=0.5)
+        if logger.isEnabledFor(logging.DEBUG):
+            fig, axes = plt.subplots(n_locations, 2, sharex=True, sharey=True)
+            t_vals, signal = acqui.get_signal() 
+            for i_location in range(n_locations):
+                axes[i_location,0].plot(t_vals, signal[i_location * 2,:], alpha=0.5)
+                axes[i_location,1].plot(t_vals, signal[i_location * 2 + 1,:], alpha=0.5)
         
         sensitivity_deviation = sensitivity_deviation_percent / 100 * sensitivity_nominal
         acqui.apply_sensor(DTC=DTC, 
                              sensitivity_nominal=sensitivity_nominal, sensitivity_deviation=sensitivity_deviation, 
                              spectral_noise_slope=spectral_noise_slope, noise_rms=sensor_noise_rms)
-        print(acqui.snr)
-        t_vals, signal = acqui.get_signal() 
-        for i_location in range(n_locations):
-            axes[i_location,0].plot(t_vals, signal[i_location * 2,:], alpha=0.5)
-            axes[i_location,1].plot(t_vals, signal[i_location * 2 + 1,:], alpha=0.5)
+        logger.debug(acqui.snr)
+        
+        if logger.isEnabledFor(logging.DEBUG):
+            t_vals, signal = acqui.get_signal() 
+            for i_location in range(n_locations):
+                axes[i_location,0].plot(t_vals, signal[i_location * 2,:], alpha=0.5)
+                axes[i_location,1].plot(t_vals, signal[i_location * 2 + 1,:], alpha=0.5)
+                
         meas_range = acqui.estimate_meas_range(sample_dur=range_estimation_duration, margin=range_estimation_margin)
         
         quantization_bits = quant_bit_factor * 4
@@ -126,13 +130,16 @@ def stage2mapping(n_locations,
                        bits=quantization_bits, meas_range=meas_range, 
                        duration=duration)
         # add noise here, because sampling (decimation) removes all noise again
-        print(acqui.snr)
+        logger.debug(acqui.snr)
+        
         acqui.add_noise(noise_power=DAQ_noise_rms**2)
-        print(acqui.snr)
-        t_vals, signal = acqui.get_signal() 
-        for i_location in range(n_locations):
-            axes[i_location,0].plot(t_vals, signal[i_location * 2,:], alpha=0.5)
-            axes[i_location,1].plot(t_vals, signal[i_location * 2 + 1,:], alpha=0.5)
+        
+        logger.debug(acqui.snr)
+        if logger.isEnabledFor(logging.DEBUG):
+            t_vals, signal = acqui.get_signal() 
+            for i_location in range(n_locations):
+                axes[i_location,0].plot(t_vals, signal[i_location * 2,:], alpha=0.5)
+                axes[i_location,1].plot(t_vals, signal[i_location * 2 + 1,:], alpha=0.5)
         
             
         acqui.estimate_snr()
@@ -850,7 +857,7 @@ def vars_definition(stage=2):
         arg_vars = {'n_locations':n_locations.name, 
                     'DTC':DTC.name,  
                     'sensitivity_nominal':sensitivity_nominal.name,  
-                    'sensitivity_deviation':sensitivity_deviation.name,  
+                    'sensitivity_deviation_percent':sensitivity_deviation.name,  
                     'spectral_noise_slope':spectral_noise_slope.name,  
                     'sensor_noise_rms':sensor_noise_rms.name, 
                     'range_estimation_duration':range_estimation_duration.name,  
