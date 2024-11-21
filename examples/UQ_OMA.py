@@ -35,7 +35,7 @@ def stage2mapping(n_locations,
             decimation_factor, anti_aliasing_cutoff_factor,
             quant_bit_factor,
             duration,
-            jid, result_dir, working_dir, skip_existing=True):
+            jid, result_dir, working_dir, skip_existing=True, **kwargs):
     
     if not isinstance(result_dir, Path):
         result_dir = Path(result_dir)
@@ -59,7 +59,6 @@ def stage2mapping(n_locations,
         this_result_dir_ale = this_result_dir
         assert os.path.exists(this_result_dir)
         seed = int.from_bytes(bytes(jid, 'utf-8'), 'big')
-    
     
     if os.path.exists(this_result_dir / 'measurement.npz') and skip_existing:
         try:
@@ -146,39 +145,10 @@ def stage2mapping(n_locations,
         
         acqui.save(this_result_dir / 'measurement.npz', differential='sampled')
     
+    if kwargs.get('chained_mapping', False):
+        return np.array(acqui.bits_effective), np.array(acqui.snr_db_est), np.array(np.mean(acqui.snr_db)), acqui
+    
     return np.array(acqui.bits_effective), np.array(acqui.snr_db_est), np.array(np.mean(acqui.snr_db))
-
-
-def stage3mapping(n_lags, estimator,
-                  order,
-                  
-            jid, result_dir, working_dir, skip_existing=True):
-    if not isinstance(result_dir, Path):
-        result_dir = Path(result_dir)
-    
-    if not isinstance(working_dir, Path):
-        working_dir = Path(working_dir)
-    
-    # Set up directories
-    if '_' in jid:
-        id_ale, id_epi = jid.split('_')
-        this_result_dir = result_dir / 'samples' / id_ale
-        this_result_dir = this_result_dir / id_epi
-    
-    acqui = Acquire.load(this_result_dir / 'measurement.npz', differential='sampled')
-    
-    pd_kwargs = acqui.to_prep_data()
-    ref_channels=np.where(acqui.channel_defs[:,0]==201)[0]
-    prep_signals = PreProcessSignals(**pd_kwargs, ref_channels=ref_channels)
-    
-    prep_signals.corr_blackman_tukey(n_lags, num_blocks=1, refs_only=True)
-    
-    modal_data = BRSSICovRef(prep_signals)
-    modal_data.build_toeplitz_cov(prep_signals.n_lags // 2)
-    modal_data.compute_state_matrices()
-    this_modal_frequencies, this_modal_damping, this_mode_shapes, this_eigenvalues, this_modal_contributions = \
-                    modal_data.single_order_modal(order, plot_modes=False, synth_corr=False)
-    pass
     
     
     
