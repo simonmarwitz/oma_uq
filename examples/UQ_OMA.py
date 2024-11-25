@@ -661,7 +661,7 @@ def vars_definition(stage=2):
     DAQ_noise_rms.primary = True
     
     # sampling_rate = MassFunction('sampling_rate', [(50.,100.), (10.,50.), (4.,10.)], [0.5, 0.3, 0.2], primary=True)
-    logger.warning('The decimation factors are too high for a final estimation up to 3.5 Hz (numerical pre-study). Consider modifications')
+    # logger.warning('The decimation factors are too high for a final estimation up to 3.5 Hz (numerical pre-study). Consider modifications')
     decimation_factor = MassFunction('decimation_factor', [(1, 2), (2,7), (7, 18)], [0.5, 0.3, 0.2], primary=True)
 
     anti_aliasing_cutoff_factor = MassFunction('anti_aliasing_cutoff_factor', [(0.4, 0.45), (0.45, 0.49), (0.5,)], [0.7, 0.2, 0.1], primary=True)
@@ -671,9 +671,14 @@ def vars_definition(stage=2):
     
     duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60.,), (120.*60.,)], [0.1, 0.2, 0.5, 0.2], primary=True)
     
-    tau_max = MassFunction('tau_max', [(20,650),()], [0.5, 0.5])
+    tau_max = MassFunction('tau_max', [(20.0,200.0),(60.0,200.0)], [0.5, 0.5], primary=True)
+    m_lags = MassFunction('m_lags', [(20.0,2000.0),(50.0,300.0)], [0.4, 0.6], primary=True)    
+    tau_percentage = MassFunction('tau_percentage', [(1.0,100),], [1.0,], primary=True)
+
     
     model_order = MassFunction('model_order', [(20,200),], [1.0,], primary=True)
+    
+    estimator = MassFunction('estimator', [(0, 1),], [1.0, ]) # 0: welch, 1: blackman-tukey
     
     
     if stage==1:
@@ -705,6 +710,35 @@ def vars_definition(stage=2):
                     'anti_aliasing_cutoff_factor':anti_aliasing_cutoff_factor.name, 
                     'quant_bit_factor':quant_bit_factor.name, 
                     'duration':duration.name,}
+        
+    elif stage==3:
+        vars_epi = [lamda, c, # stage 1
+                    n_locations, DTC, sensitivity_nominal, sensitivity_deviation, 
+                    spectral_noise_slope, sensor_noise_rms,
+                    range_estimation_duration, range_estimation_margin,
+                    DAQ_noise_rms,
+                    decimation_factor, anti_aliasing_cutoff_factor,
+                    quant_bit_factor, duration, #stage 2
+                    m_lags, estimator, model_order, tau_max] # stage 3
+        vars_ale = [v_b, alpha] # all stage 1
+        
+        arg_vars = {'n_locations':n_locations.name, 
+                    'DTC':DTC.name,  
+                    'sensitivity_nominal':sensitivity_nominal.name,  
+                    'sensitivity_deviation_percent':sensitivity_deviation.name,  
+                    'spectral_noise_slope':spectral_noise_slope.name,  
+                    'sensor_noise_rms':sensor_noise_rms.name, 
+                    'range_estimation_duration':range_estimation_duration.name,  
+                    'range_estimation_margin':range_estimation_margin.name, 
+                    'DAQ_noise_rms':DAQ_noise_rms.name, 
+                    'decimation_factor':decimation_factor.name,  
+                    'anti_aliasing_cutoff_factor':anti_aliasing_cutoff_factor.name, 
+                    'quant_bit_factor':quant_bit_factor.name, 
+                    'duration':duration.name,
+                    'm_lags':m_lags.name,
+                    'estimator':estimator.name,
+                    'model_order':model_order.name,
+                    }
     
     return vars_ale, vars_epi, arg_vars
 

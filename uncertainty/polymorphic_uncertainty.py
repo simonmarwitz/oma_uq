@@ -751,7 +751,7 @@ class PolyUQ(object):
         for i,var in enumerate(all_vars):
             # print(var, vars_unif[i].ppf([0,1]))
             this_samples = samples[var.name]
-            if isinstance(var, MassFunction):
+            if isinstance(var, MassFunction) and var.dtype!=int:
                 # scale (0,1) to [0,1]
                 this_samples -= this_samples.min()
                 this_samples /= this_samples.max()
