@@ -24,7 +24,7 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
                              snr_db=-30.0, noise_power=0.0, ref_sig='channel',  # acquisition noise properties
                              nyq_rat=2.5, numtaps_fact=21, # sampling_properties
                              sample_dur=None, margin=None, bits=16, duration=None,  # quantization properties
-                             decimate_factor=None, n_lags=100, window=6, method='welch', # signal processing parameters
+                             decimate_factor=None, m_lags=100, window=6, method='welch', # signal processing parameters
                              order_factor=2,  # system identification parameters
                              ):
     
@@ -144,13 +144,13 @@ def model_acqui_signal_sysid(jid, result_dir, working_dir, ansys=None,
     if decimate_factor is not None:  # implying signal shall be decimated
         prep_signals.decimate_signals(decimate_factor, highpass=None, order=int(21 * decimate_factor), filter_type='brickwall')
     with HiddenPrints():
-        prep_signals.correlation(n_lags, method, window=window)
+        prep_signals.correlation(m_lags, method, window=window)
     #prep_signals.plot_data(svd_spect=True)
     #plt.show()
     # pass to Modal System Identification
     model_order = num_modes * order_factor
     modal_data = BRSSICovRef(prep_signals)
-    modal_data.build_toeplitz_cov(num_block_columns=n_lags // 2)
+    modal_data.build_toeplitz_cov(num_block_columns=m_lags // 2)
     modal_data.compute_state_matrices(max_model_order=model_order)
     modal_frequencies, modal_damping, mode_shapes, _, modal_contributions = modal_data.single_order_modal(order=model_order)
     
@@ -283,7 +283,7 @@ def uq_acqui(step, working_dir, result_dir):
                     'lumped':'lumped',
                     'snr_db':'snr_db',
                     'bits':'bits2',
-                    'n_lags':'tau_max',
+                    'm_lags':'tau_max',
                     'window':'window',
                     'method':'method',
                     'order_factor':'order_factor',

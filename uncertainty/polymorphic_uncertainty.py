@@ -768,7 +768,8 @@ class PolyUQ(object):
         logger.debug('Finalizing...')
         inp_samp_prim = samples[[var.name for var in all_vars_prim]] # variability and imprecision
         inp_suppl_ale = samples.iloc[:N_mcs_ale][[var.name for var in vars_ale if not var.primary]] # variability -> imprecision
-        inp_suppl_epi = samples.iloc[:N_mcs_ale][[var.name for var in vars_epi if not var.primary]] # incompleteness -> variability
+        # this had .iloc[:N_mcs_ale] not sure if this was intentional or a mistake
+        inp_suppl_epi = samples.iloc[:N_mcs_epi][[var.name for var in vars_epi if not var.primary]] # incompleteness -> variability
         
         # check the number of samples per focal set
         # if check_sample_sizes:

@@ -671,10 +671,8 @@ def vars_definition(stage=2):
     
     duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60.,), (120.*60.,)], [0.1, 0.2, 0.5, 0.2], primary=True)
     
-    tau_max = MassFunction('tau_max', [(20.0,200.0),(60.0,200.0)], [0.5, 0.5], primary=True)
+    tau_max = MassFunction('tau_max', [(20.0,175.0),(60.0,175.0)], [0.5, 0.5], primary=True)
     m_lags = MassFunction('m_lags', [(20.0,2000.0),(50.0,300.0)], [0.4, 0.6], primary=True)    
-    tau_percentage = MassFunction('tau_percentage', [(1.0,100),], [1.0,], primary=True)
-
     
     model_order = MassFunction('model_order', [(20,200),], [1.0,], primary=True)
     
