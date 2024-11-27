@@ -21,10 +21,265 @@ from model.acquisition import Acquire, sensor_position
 
 from pyOMA.core.PreProcessingTools import PreProcessSignals
 from pyOMA.core.SSICovRef import BRSSICovRef
+from pyOMA.core.SSIData import SSIDataCV
+from pyOMA.core.PLSCF import PLSCF
 from pyOMA.core.StabilDiagram import StabilCalc
 global ansys
 
 from uncertainty.polymorphic_uncertainty import MassFunction, RandomVariable, PolyUQ
+
+
+def stage3mapping(m_lags, estimator, model_order,
+                  jid, result_dir, working_dir, skip_existing=True, **kwargs):
+    # return with default: n_blocks=40, k = 10
+    
+    estimator =  ['blackman-tukey','welch'][estimator]
+    return _stage3mapping(m_lags=m_lags, estimator=estimator,
+                          n_blocks=40, k=10, model_order=model_order, 
+                          jid=jid, result_dir=result_dir, 
+                          working_dir=working_dir, skip_existing=skip_existing, **kwargs)
+
+def _stage3mapping(m_lags, estimator,
+                  n_blocks, k, 
+                  model_order, 
+                  jid, result_dir, working_dir, skip_existing=True, **kwargs):
+    logger = logging.getLogger(__name__)
+    logger.setLevel(level=logging.INFO)
+    
+    '''
+    p + q = m_lags          -> num_block_rows = m_lags // 2
+    p = q = m_lags // 2     -> num_block_rows = m_lags // 2
+    n_{+} = m_lags // 2 + 1 -> nperseg = m_lags
+    
+    
+    What are the bounds on m_lags, order, etc. ?
+    
+    fixed parameters:
+        n_blocks = 40
+        n_r = 2
+        
+    parameters from acqui:
+        channel_headers -> n_l
+        sampling_rate 
+        signals -> N = shape[0]
+        
+    
+    corr_blackman_tukey:
+        N_segment = N // n_blocks
+                  = N // 40
+        N_segment > m_lags
+    
+    corr_welch:
+        N_segment = N // n_segments
+        n_lines = (m_lags - 1) * 2
+        
+        (bypassed in psd_welch: N_segment < n_lines)
+        (avoid zero-padding: N_segment > n_lines / 2)
+    
+    SSICovRef:
+        num_block_rows = num_block_columns = m_lags // 2
+        K = min(n_l * (num_block_rows + 1), n_r * num_block_columns)
+        (here specifically)
+          = n_r * num_block_columns
+          = n_r * (m_lags // 2)
+        
+        order <= K
+              <= 2 * m_lags //2
+              <= m_lags
+    
+    pLSCF:
+        nperseg = m_lags
+        
+        order < nperseg - 1 
+              <= m_lags - 2
+    
+    SSIDataCV:
+        q = p = num_block_rows = m_lags // 2
+        N_b = (N - q - p) / n_blocks
+            = (N - m_lags) / 40
+        N_b > n_r * q
+            > m_lags
+            
+        K = n_r * q
+          = 2 * m_lags // 2
+          = m_lags
+          
+        order < K
+              < m_lags
+    
+    ======================================
+    m_lags < N // 40 # corr_blackman_tukey
+    m_lags < N // 41 # SSIData
+    
+    order < m_lags # SSICovRef
+    order < m_lags - 2 # pLSCF
+    order < m_lags # SSIData
+    
+    Final bound to be checked:
+    order + 2 < m_lags < N // 41
+    =====================================
+    
+    Returns: f_sc, f_sc, phi_sc, mc_sc: order modal parameter from SSICovRef (only order//2 are present)
+            f_c,f f_cf, phi_cf, mc_cf: n_r * order modal parameter from pLSCF (typically four times as many modes)
+            f_sd, f_sd, phi_sd, mc_sd: order modal parameter from SSIDataCV (only order//2 are present)
+    '''
+    
+    assert model_order + 2 < m_lags
+    
+    if not isinstance(result_dir, Path):
+        result_dir = Path(result_dir)
+    
+    if not isinstance(working_dir, Path):
+        working_dir = Path(working_dir)
+    
+    # Set up directories
+    id_ale, id_epi = jid.split('_')
+    this_result_dir = result_dir / 'samples' / id_ale
+    this_result_dir = this_result_dir / id_epi
+    seed = int.from_bytes(bytes(id_ale, 'utf-8'), 'big')
+    assert os.path.exists(this_result_dir) 
+    
+    if 'acqui_obj' in kwargs:
+        acqui = kwargs['acqui_obj']
+    else:
+        assert os.path.exists(this_result_dir / 'measurement.npz')        
+        acqui = Acquire.load(this_result_dir / 'measurement.npz', differential='sampled')
+    
+    pd_kwargs = acqui.to_prep_data()
+    ref_channels=np.where(acqui.channel_defs[:,0]==201)[0]
+    
+    assert ref_channels.shape[0] == 2
+    
+    N = pd_kwargs['signals'].shape[0]
+    if m_lags > N // (n_blocks + 1):
+        raise RuntimeError(f"m_lags > N // (n_blocks + 1): {m_lags} > {N // (n_blocks + 1)}")
+    
+    del acqui
+    
+    rng = np.random.default_rng(seed)
+    cardinality = n_blocks // k
+    block_indices = np.arange(cardinality*k)
+    rng.shuffle(block_indices)
+    
+    
+    prep_signals = None
+    if os.path.exists(this_result_dir / 'prep_signals.npz') and skip_existing:
+        try:
+            prep_signals = PreProcessSignals.load_state(this_result_dir / 'prep_signals.npz')
+        except Exception as e:
+            # os.remove(this_result_dir / 'measurement.npz')
+            print(e)
+            
+    if prep_signals is None:
+        prep_signals = PreProcessSignals(**pd_kwargs, ref_channels=ref_channels)
+        # prep_signals.corr_blackman_tukey(m_lags, num_blocks=n_blocks, refs_only=True)
+        if estimator == 'blackman-tukey':
+            prep_signals.corr_blackman_tukey(m_lags, num_blocks=n_blocks)
+        elif estimator == 'welch':
+            prep_signals.corr_welch(m_lags, n_segments=n_blocks)
+        prep_signals.save_state(this_result_dir / 'prep_signals.npz')
+    
+    
+    
+    # holdout method, single run with a training and test set 
+    i = rng.integers(0,k)
+    
+    test_set = block_indices[i * cardinality:(i + 1) * cardinality]
+    training_set = np.take(block_indices, np.arange((i + 1) * cardinality, (i + k) * cardinality), mode='wrap')    
+    
+    if estimator == 'blackman-tukey':
+        training_corr = np.mean(prep_signals.corr_matrices_bt[training_set,...], axis=0)
+        test_corr = np.mean(prep_signals.corr_matrices_bt[test_set,...], axis=0)    
+    elif estimator == 'welch':
+        training_corr = np.mean(prep_signals.corr_matrices_wl[training_set,...], axis=0)
+        test_corr = np.mean(prep_signals.corr_matrices_wl[test_set,...], axis=0)    
+
+    ssi_cov_ref = None
+    if os.path.exists(this_result_dir / 'ssi_cov_ref.npz') and skip_existing:
+        try:
+            ssi_cov_ref = BRSSICovRef.load_state(this_result_dir / 'ssi_cov_ref.npz', prep_signals)
+        except Exception as e:
+            # os.remove(this_result_dir / 'measurement.npz')
+            logger.warning(repr(e))
+            
+    if ssi_cov_ref is None:
+        ssi_cov_ref = BRSSICovRef(prep_signals)
+
+        if estimator == 'blackman-tukey':
+            prep_signals.corr_matrix_bt = training_corr
+        elif estimator == 'welch':
+            prep_signals.corr_matrix_wl = training_corr
+            
+        ssi_cov_ref.build_toeplitz_cov() # expensive, should be saved
+        # ssi_cov_ref.save_state(this_result_dir / 'ssi_cov_ref.npz')
+        
+    if estimator == 'blackman-tukey':
+        prep_signals.corr_matrix_bt = test_corr
+    elif estimator == 'welch':
+        prep_signals.corr_matrix_wl = test_corr
+        
+    A_sc, C_sc, G_sc = ssi_cov_ref.estimate_state(model_order)
+    f_sc, d_sc, phi_sc, lamda_sc = ssi_cov_ref.modal_analysis(A_sc, C_sc)
+    _, mc_sc = ssi_cov_ref.synthesize_correlation(A_sc, C_sc, G_sc)  # expensive, last step in analysis: does not have to be saved
+
+    del ssi_cov_ref
+    
+    plscf = None
+    if os.path.exists(this_result_dir / 'plscf.npz') and skip_existing:
+        try:
+            plscf = PLSCF.load_state(this_result_dir / 'plscf.npz', prep_signals)
+        except Exception as e:
+            # os.remove(this_result_dir / 'plscf.npz')
+            logger.warning(repr(e))
+            
+    if plscf is None:
+        plscf = PLSCF(prep_signals)
+        
+        if estimator == 'blackman-tukey':
+            prep_signals.corr_matrix_bt = training_corr
+        elif estimator == 'welch':
+            prep_signals.corr_matrix_wl = training_corr
+            
+        plscf.build_half_spectra() # must not compute psds
+        # plscf.save_state(this_result_dir / 'plscf.npz')
+
+    if estimator == 'blackman-tukey':
+        prep_signals.corr_matrix_bt = test_corr
+    elif estimator == 'welch':
+        prep_signals.corr_matrix_wl = test_corr
+        
+    alpha, beta_l_i = plscf.estimate_model(model_order)  # expensive, but not assigning class variables that could be saved
+    f_cf, d_cf, phi_cf, lamda_cf = plscf.modal_analysis_residuals(alpha, beta_l_i)
+    _, mc_cf = plscf.synthesize_spectrum(alpha, beta_l_i, modal=True)  # expensive, but not assigning class variables that could be saved
+
+    del plscf
+
+    del training_corr
+    del test_corr
+    prep_signals.corr_matrices_bt = None
+    prep_signals.corr_matrices_wl = None
+    
+    ssi_data = None
+    if os.path.exists(this_result_dir / 'ssi_data.npz') and skip_existing:
+        try:
+            ssi_data = SSIDataCV.load_state(this_result_dir / 'ssi_data.npz', prep_signals)
+        except Exception as e:
+            # os.remove(this_result_dir / 'ssi_data.npz')
+            logger.warning(repr(e))
+            
+    if ssi_data is None:
+        ssi_data = SSIDataCV(prep_signals)
+        ssi_data.build_block_hankel(num_block_rows=m_lags // 2, num_blocks=n_blocks, training_blocks=training_set)  # expensive 
+
+        # ssi_data.save_state(this_result_dir / 'ssi_data.npz')
+        
+    A_sd,C_sd,Q_sd,R_sd,S_sd = ssi_data.estimate_state(model_order)
+    f_sd, d_sd, phi_sd, lamda_sd, = ssi_data.modal_analysis(A_sd, C_sd)
+    _, mc_sd = ssi_data.synthesize_signals( A_sd, C_sd, Q_sd, R_sd, S_sd, test_set)  # expensive, but not assigning class variables that could be saved
+
+    del ssi_data
+    
+    return f_sc, d_sc, phi_sc, mc_sc, f_cf, d_cf, phi_cf, mc_cf, f_sd, d_sd, phi_sd, mc_sd, 
 
 def stage2mapping(n_locations,
             DTC, 
@@ -143,7 +398,7 @@ def stage2mapping(n_locations,
             
         acqui.estimate_snr()
         
-        acqui.save(this_result_dir / 'measurement.npz', differential='sampled')
+        # acqui.save(this_result_dir / 'measurement.npz', differential='sampled')
     
     if kwargs.get('chained_mapping', False):
         return np.array(acqui.bits_effective), np.array(acqui.snr_db_est), np.array(np.mean(acqui.snr_db)), acqui
@@ -672,7 +927,7 @@ def vars_definition(stage=2):
     duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60.,), (120.*60.,)], [0.1, 0.2, 0.5, 0.2], primary=True)
     
     tau_max = MassFunction('tau_max', [(20.0,175.0),(60.0,175.0)], [0.5, 0.5], primary=True)
-    m_lags = MassFunction('m_lags', [(20.0,2000.0),(50.0,300.0)], [0.4, 0.6], primary=True)    
+    m_lags = MassFunction('m_lags', [(20,1000),(50,300)], [0.4, 0.6], primary=True)    
     
     model_order = MassFunction('model_order', [(20,200),], [1.0,], primary=True)
     

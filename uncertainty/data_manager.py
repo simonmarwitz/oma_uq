@@ -306,9 +306,9 @@ class DataManager(object):
             else:
                 assert len(ds.coords['ids']) == num_samples
                 if "jid" in names:
-                    raise RuntimeError('The database already exists. Delete/rename/move it first.')
+                    raise RuntimeError(f'The database {os.path.join(self.result_dir,self.dbfile_in)} already exists. Delete/rename/move it first.')
                 if "ids" in names:
-                    raise RuntimeError('The database already exists. Delete/rename/move it first.')
+                    raise RuntimeError(f'The database {os.path.join(self.result_dir,self.dbfile_in)} already exists. Delete/rename/move it first.')
                 ids = ds.coords['ids']
 
             for values, name in zip(arrays, names):

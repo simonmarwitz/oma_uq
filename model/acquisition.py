@@ -1120,15 +1120,15 @@ class Acquire(object):
         if self.is_sampled:
             t_vals = self.t_vals_samp
             signal = self.signal_samp
-            logger.info('Using a sampled signal')
+            logger.debug('Using a sampled signal')
         elif self.is_sensed:
             t_vals = self.t_vals
             signal = self.signal_volt
-            logger.info('Using a sensed signal')
+            logger.debug('Using a sensed signal')
         else:
             t_vals = self.t_vals
             signal = self.signal
-            logger.info('Using a response signal')
+            logger.debug('Using a response signal')
         
         re_shape = np.copy(self.re_shape)
         re_shape[-1] = self.num_timesteps
