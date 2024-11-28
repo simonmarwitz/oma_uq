@@ -28,6 +28,56 @@ global ansys
 
 from uncertainty.polymorphic_uncertainty import MassFunction, RandomVariable, PolyUQ
 
+def stage2n3mapping(n_locations,
+                    DTC, 
+                    sensitivity_nominal, sensitivity_deviation_percent, 
+                    spectral_noise_slope, sensor_noise_rms,
+                    range_estimation_duration, range_estimation_margin,
+                    DAQ_noise_rms,
+                    decimation_factor, anti_aliasing_cutoff_factor,
+                    quant_bit_factor,
+                    duration,
+                    m_lags, estimator, model_order,
+                    jid, result_dir, working_dir, skip_existing=True, **kwargs):
+    
+    bits_effective, snr_db_est, snr_db, channel_defs, acqui = stage2mapping(n_locations,
+                            DTC, 
+                            sensitivity_nominal, sensitivity_deviation_percent, 
+                            spectral_noise_slope, sensor_noise_rms,
+                            range_estimation_duration, range_estimation_margin,
+                            DAQ_noise_rms,
+                            decimation_factor, anti_aliasing_cutoff_factor,
+                            quant_bit_factor,
+                            duration, 
+                            jid=jid, 
+                            result_dir=result_dir, working_dir = working_dir, skip_existing=skip_existing, 
+                            chained_mapping=True)
+    
+    estimator =  ['blackman-tukey','welch'][estimator]
+    
+    f_sc, d_sc, phi_sc, mc_sc, \
+    f_cf, d_cf, phi_cf, mc_cf, \
+    f_sd, d_sd, phi_sd, mc_sd = _stage3mapping(m_lags=m_lags, estimator=estimator,
+                            n_blocks=40, k=10, model_order=model_order, 
+                            jid=jid, 
+                            result_dir=result_dir, working_dir=working_dir, skip_existing=skip_existing, 
+                            acqui_obj=acqui)
+    # create an phi_indexer to re-order modeshapes
+    # assumes, phi_*'s last row to contain np.nan: phi_*[n_locations * 2, :] = np.nan
+    # apply it as phi_*[phi_indexer,:] to get sparse mode shapes in the order of the model's mode shapes
+    
+    n_nodes = 203
+    phi_indexer = np.full((n_nodes,2), n_locations * 2, dtype=int)
+    for chan, (node, dir_, _) in enumerate(channel_defs):
+        phi_indexer[node,dir_] = chan
+    # to save storage, instead of converting all mode shapes, only the phi_indexer is stored for every sample
+
+    return bits_effective, snr_db_est, snr_db,\
+            f_sc, d_sc, phi_sc, mc_sc, \
+            f_cf, d_cf, phi_cf, mc_cf, \
+            f_sd, d_sd, phi_sd, mc_sd, \
+            phi_indexer
+    
 
 def stage3mapping(m_lags, estimator, model_order,
                   jid, result_dir, working_dir, skip_existing=True, **kwargs):
@@ -43,8 +93,8 @@ def _stage3mapping(m_lags, estimator,
                   n_blocks, k, 
                   model_order, 
                   jid, result_dir, working_dir, skip_existing=True, **kwargs):
-    logger = logging.getLogger(__name__)
-    logger.setLevel(level=logging.INFO)
+    # logger = logging.getLogger(__name__)
+    # logger.setLevel(level=logging.INFO)
     
     '''
     p + q = m_lags          -> num_block_rows = m_lags // 2
@@ -134,7 +184,7 @@ def _stage3mapping(m_lags, estimator,
     
     # Set up directories
     id_ale, id_epi = jid.split('_')
-    this_result_dir = result_dir / 'samples' / id_ale
+    this_result_dir = result_dir / id_ale
     this_result_dir = this_result_dir / id_epi
     seed = int.from_bytes(bytes(id_ale, 'utf-8'), 'big')
     assert os.path.exists(this_result_dir) 
@@ -322,8 +372,8 @@ def stage2mapping(n_locations,
             # os.remove(this_result_dir / 'measurement.npz')
             print(e)
     else:
-        logger= logging.getLogger('model.acquisition')
-        logger.setLevel(level=logging.INFO)
+        # logger= logging.getLogger('model.acquisition')
+        # logger.setLevel(level=logging.INFO)
         if not os.path.exists(this_result_dir_ale / 'response.npz'):
             raise RuntimeError(f"Response does not exist at {this_result_dir_ale / 'response.npz'}")
         assert os.path.exists(result_dir / 'mechanical.npz') 
@@ -401,9 +451,9 @@ def stage2mapping(n_locations,
         # acqui.save(this_result_dir / 'measurement.npz', differential='sampled')
     
     if kwargs.get('chained_mapping', False):
-        return np.array(acqui.bits_effective), np.array(acqui.snr_db_est), np.array(np.mean(acqui.snr_db)), acqui
+        return np.array(acqui.bits_effective), np.array(acqui.snr_db_est), np.array(np.mean(acqui.snr_db)), channel_defs, acqui,
     
-    return np.array(acqui.bits_effective), np.array(acqui.snr_db_est), np.array(np.mean(acqui.snr_db))
+    return np.array(acqui.bits_effective), np.array(acqui.snr_db_est), np.array(np.mean(acqui.snr_db)), channel_defs
     
     
     
@@ -929,7 +979,7 @@ def vars_definition(stage=2):
     tau_max = MassFunction('tau_max', [(20.0,175.0),(60.0,175.0)], [0.5, 0.5], primary=True)
     m_lags = MassFunction('m_lags', [(20,1000),(50,300)], [0.4, 0.6], primary=True)    
     
-    model_order = MassFunction('model_order', [(20,200),], [1.0,], primary=True)
+    model_order = MassFunction('model_order', [(10,100),], [1.0,], primary=True)
     
     estimator = MassFunction('estimator', [(0, 1),], [1.0, ]) # 0: welch, 1: blackman-tukey
     
