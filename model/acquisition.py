@@ -1203,7 +1203,7 @@ class Acquire(object):
             out_dict['self.modal_energies'] = self.modal_energies
             out_dict['self.modal_amplitudes'] = self.modal_amplitudes
         else:
-            assert differential in ['sensed', 'sampled']
+            assert differential in ['sensed', 'sampled', 'nosigs']
         
         if differential=='sensed' or (differential is None and self._is_sensed):
             assert self._is_sensed
@@ -1224,6 +1224,15 @@ class Acquire(object):
             out_dict['self.modal_energies_samp'] = self.modal_energies_samp
             out_dict['self.modal_amplitudes_samp'] = self.modal_amplitudes_samp
             out_dict['self.bits_effective'] = self.bits_effective
+            
+        if differential=='nosigs':
+            out_dict['self.modal_frequencies_samp'] = self.modal_frequencies_samp
+            out_dict['self.modal_damping_samp'] = self.modal_damping_samp
+            out_dict['self.mode_shapes_samp'] = self.mode_shapes_samp
+            out_dict['self.modal_energies_samp'] = self.modal_energies_samp
+            out_dict['self.modal_amplitudes_samp'] = self.modal_amplitudes_samp
+            out_dict['self.bits_effective'] = self.bits_effective
+            
             
         np.savez_compressed(fpath, **out_dict)
         
@@ -1275,7 +1284,7 @@ class Acquire(object):
             modal_energies = validate_array(in_dict['self.modal_energies'])
             modal_amplitudes = validate_array(in_dict['self.modal_amplitudes'])
         else:
-            assert differential in ['sensed', 'sampled']
+            assert differential in ['sensed', 'sampled', 'nosigs']
             signal = np.empty(re_shape)
             t_vals = np.empty(re_shape[-1])
             modal_frequencies = None
@@ -1298,7 +1307,7 @@ class Acquire(object):
         acquire._is_sensed = validate_array(in_dict['self._is_sensed'])
         acquire._is_sampled = validate_array(in_dict['self._is_sampled'])
         
-        if (acquire._is_sensed and differential != 'sampled') or differential == 'sensed':
+        if (acquire._is_sensed and differential is None) or differential == 'sensed':
             assert acquire._is_sensed
             acquire.signal_volt = validate_array(in_dict['self.signal_volt'])
             acquire.mode_shapes_sensed = validate_array(in_dict['self.mode_shapes_sensed'])
@@ -1307,7 +1316,7 @@ class Acquire(object):
             acquire.sensor_noise = validate_array(in_dict['self.sensor_noise'])
             acquire.sensor_sensitivity = validate_array(in_dict['self.sensor_sensitivity'])
         
-        if (acquire.is_sampled and differential != 'sensed') or differential == 'sampled':
+        if (acquire.is_sampled and differential is None) or differential == 'sampled':
             assert acquire.is_sampled
             acquire.t_vals_samp = validate_array(in_dict['self.t_vals_samp'])
             acquire.signal_samp = validate_array(in_dict['self.signal_samp'])
@@ -1317,7 +1326,17 @@ class Acquire(object):
             acquire.modal_energies_samp = validate_array(in_dict['self.modal_energies_samp'])
             acquire.modal_amplitudes_samp = validate_array(in_dict['self.modal_amplitudes_samp'])
             acquire.bits_effective = validate_array(in_dict['self.bits_effective'])
-        
+            
+        if differential == 'nosigs':
+            acquire.signal_samp = acquire.signal
+            acquire.t_vals_samp = acquire.t_vals
+            acquire.modal_frequencies_samp = validate_array(in_dict['self.modal_frequencies_samp'])
+            acquire.modal_damping_samp = validate_array(in_dict['self.modal_damping_samp'])
+            acquire.mode_shapes_samp = validate_array(in_dict['self.mode_shapes_samp'])
+            acquire.modal_energies_samp = validate_array(in_dict['self.modal_energies_samp'])
+            acquire.modal_amplitudes_samp = validate_array(in_dict['self.modal_amplitudes_samp'])
+            acquire.bits_effective = validate_array(in_dict['self.bits_effective'])
+            
         return acquire
 
 def sensor_position(num_sensors, num_nodes, method):

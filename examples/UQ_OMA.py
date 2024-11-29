@@ -39,7 +39,12 @@ def stage2n3mapping(n_locations,
                     duration,
                     m_lags, estimator, model_order,
                     jid, result_dir, working_dir, skip_existing=True, **kwargs):
-    
+        
+    modules = ['pyOMA.core.Helper','pyOMA.core.PreProcessingTools','pyOMA.core.SSICovRef','pyOMA.core.SSIData','pyOMA.core.PLSCF','model.mechanical','model.acquisition']
+    for module in modules:
+        logger_ = logging.getLogger(module)
+        logger_.setLevel(logging.WARNING)
+        
     bits_effective, snr_db_est, snr_db, channel_defs, acqui = stage2mapping(n_locations,
                             DTC, 
                             sensitivity_nominal, sensitivity_deviation_percent, 
@@ -66,10 +71,30 @@ def stage2n3mapping(n_locations,
     # assumes, phi_*'s last row to contain np.nan: phi_*[n_locations * 2, :] = np.nan
     # apply it as phi_*[phi_indexer,:] to get sparse mode shapes in the order of the model's mode shapes
     
+    '''
+    nodes_coordinates = [(n1,x1,y1,z1), (n2,x2,y2,z2)]
+    mech.mode_shapes  = [ [(qx1,qy,qz), (qx2,q2y,qz2), ...]_1,
+                          [(qx1,qy,qz), (qx2,q2y,qz2), ...]_2, ]
+    acqui.mode_shapes = [ [qa,qb,qc,...]_1,
+                          [qa,qb,qc,...]_2, ]
+    oma.mode_shapes   = [ [qa,qb,qc,...]_1,
+                          [qa,qb,qc,...]_2, ]
+    channel_defs: maps [(qx1,qy1,qz1), (qx2,qy2,qz2),...] to [qa,qb,...]
+    phi_indexer: maps [qa,qb,...] to [(qx1,qy1,qz1), (qx2,qy2,qz2),...]
+    
+    so phi_indexer is the reverse map of channel_defs
+    
+    for mode comparison mode shapes must be flattened
+    flattening is achieved by reshaping (specifying index order?) and then removing all-nan-rows
+    '''
+    
     n_nodes = 203
+    # phi indexer will lead to modeshapes in y and z coordinate only
+    # to make it compatible with mech.mode_shapes, the x-coordinate has to be removed there
     phi_indexer = np.full((n_nodes,2), n_locations * 2, dtype=int)
     for chan, (node, dir_, _) in enumerate(channel_defs):
-        phi_indexer[node,dir_] = chan
+        node_index = node - 1 # actually, that should be looked up form mech.nodes_coordinates, but should work here
+        phi_indexer[node_index,dir_] = chan
     # to save storage, instead of converting all mode shapes, only the phi_indexer is stored for every sample
 
     return bits_effective, snr_db_est, snr_db,\
@@ -448,7 +473,8 @@ def stage2mapping(n_locations,
             
         acqui.estimate_snr()
         
-        # acqui.save(this_result_dir / 'measurement.npz', differential='sampled')
+        acqui.save(this_result_dir / 'measurement.npz', differential='sampled')
+        # acqui.save(this_result_dir / 'measurement.npz', differential='nosigs')
     
     if kwargs.get('chained_mapping', False):
         return np.array(acqui.bits_effective), np.array(acqui.snr_db_est), np.array(np.mean(acqui.snr_db)), channel_defs, acqui,
