@@ -40,7 +40,7 @@ def stage2n3mapping(n_locations,
                     m_lags, estimator, model_order,
                     jid, result_dir, working_dir, skip_existing=True, **kwargs):
         
-    modules = ['pyOMA.core.Helper','pyOMA.core.PreProcessingTools','pyOMA.core.SSICovRef','pyOMA.core.SSIData','pyOMA.core.PLSCF','model.mechanical','model.acquisition']
+    modules = ['pyOMA.core.Helpers','pyOMA.core.PreProcessingTools','pyOMA.core.SSICovRef','pyOMA.core.SSIData','pyOMA.core.PLSCF','model.mechanical','model.acquisition']
     for module in modules:
         logger_ = logging.getLogger(module)
         logger_.setLevel(logging.WARNING)
@@ -87,7 +87,7 @@ def stage2n3mapping(n_locations,
     for mode comparison mode shapes must be flattened
     flattening is achieved by reshaping (specifying index order?) and then removing all-nan-rows
     '''
-    
+    # print(channel_defs)
     n_nodes = 203
     # phi indexer will lead to modeshapes in y and z coordinate only
     # to make it compatible with mech.mode_shapes, the x-coordinate has to be removed there
@@ -213,30 +213,7 @@ def _stage3mapping(m_lags, estimator,
     this_result_dir = this_result_dir / id_epi
     seed = int.from_bytes(bytes(id_ale, 'utf-8'), 'big')
     assert os.path.exists(this_result_dir) 
-    
-    if 'acqui_obj' in kwargs:
-        acqui = kwargs['acqui_obj']
-    else:
-        assert os.path.exists(this_result_dir / 'measurement.npz')        
-        acqui = Acquire.load(this_result_dir / 'measurement.npz', differential='sampled')
-    
-    pd_kwargs = acqui.to_prep_data()
-    ref_channels=np.where(acqui.channel_defs[:,0]==201)[0]
-    
-    assert ref_channels.shape[0] == 2
-    
-    N = pd_kwargs['signals'].shape[0]
-    if m_lags > N // (n_blocks + 1):
-        raise RuntimeError(f"m_lags > N // (n_blocks + 1): {m_lags} > {N // (n_blocks + 1)}")
-    
-    del acqui
-    
-    rng = np.random.default_rng(seed)
-    cardinality = n_blocks // k
-    block_indices = np.arange(cardinality*k)
-    rng.shuffle(block_indices)
-    
-    
+
     prep_signals = None
     if os.path.exists(this_result_dir / 'prep_signals.npz') and skip_existing:
         try:
@@ -246,6 +223,24 @@ def _stage3mapping(m_lags, estimator,
             print(e)
             
     if prep_signals is None:
+        if 'acqui_obj' in kwargs:
+            acqui = kwargs['acqui_obj']
+        else:
+            assert os.path.exists(this_result_dir / 'measurement.npz')        
+            acqui = Acquire.load(this_result_dir / 'measurement.npz', differential='sampled')
+
+        pd_kwargs = acqui.to_prep_data()
+        ref_channels=np.where(acqui.channel_defs[:,0]==201)[0]
+
+        assert ref_channels.shape[0] == 2
+
+        N = pd_kwargs['signals'].shape[0]
+        if m_lags > N // (n_blocks + 1):
+            raise RuntimeError(f"m_lags > N // (n_blocks + 1): {m_lags} > {N // (n_blocks + 1)}")
+
+        del acqui
+           
+    #if prep_signals is None:
         prep_signals = PreProcessSignals(**pd_kwargs, ref_channels=ref_channels)
         # prep_signals.corr_blackman_tukey(m_lags, num_blocks=n_blocks, refs_only=True)
         if estimator == 'blackman-tukey':
@@ -255,6 +250,11 @@ def _stage3mapping(m_lags, estimator,
         prep_signals.save_state(this_result_dir / 'prep_signals.npz')
     
     
+    
+    rng = np.random.default_rng(seed)
+    cardinality = n_blocks // k
+    block_indices = np.arange(cardinality*k)
+    rng.shuffle(block_indices)
     
     # holdout method, single run with a training and test set 
     i = rng.integers(0,k)
@@ -390,9 +390,29 @@ def stage2mapping(n_locations,
         assert os.path.exists(this_result_dir)
         seed = int.from_bytes(bytes(jid, 'utf-8'), 'big')
     
+    # num_nodes = mech.num_nodes
+    num_nodes = 203
+    
+    setups = sensor_position(n_locations, num_nodes, 'distributed')
+    # select a setup based on a "random" integer modulo the total number of setups
+    i_setup = seed % setups.shape[0]
+    sensor_nodes = setups[i_setup,:]
+    quant = 'a'
+    quant = ['d', 'v', 'a'].index(quant)
+    # list of (node, dof, quant)
+    channel_defs = []
+    for node in sensor_nodes:
+        # We work around the Hack from transient_ifrf, where we omitted the x-axis in the response,
+        # by wrongly definining dofs ux and uy instead of uy and uz
+        
+        for dof in ['ux','uy']:
+            dof = ['ux', 'uy', 'uz'].index(dof)
+            channel_defs.append((node, dof, quant))
+
+    
     if os.path.exists(this_result_dir / 'measurement.npz') and skip_existing:
         try:
-            acqui = Acquire.load(this_result_dir / 'measurement.npz', differential='sampled')
+            acqui = Acquire.load(this_result_dir / 'measurement.npz', differential='nosigs')
         except Exception as e:
             # os.remove(this_result_dir / 'measurement.npz')
             print(e)
@@ -414,18 +434,6 @@ def stage2mapping(n_locations,
         mech.timesteps = mech.t_vals_amb.shape[0]
         mech.state[2] = True
 
-        setups = sensor_position(n_locations, mech.num_nodes, 'distributed')
-        # select a setup based on a "random" integer modulo the total number of setups
-        i_setup = seed % setups.shape[0]
-        sensor_nodes = setups[i_setup,:]
-        quant = 'a'
-        # list of (node, dof, quant)
-        channel_defs = []
-        for node in sensor_nodes:
-            # We work around the Hack from transient_ifrf, where we omitted the x-axis in the response,
-            # by wrongly definining dofs ux and uy instead of uy and uz
-            for dof in ['ux','uy']:
-                channel_defs.append((node, dof, quant))
         
         # the above hack conflicts with the modeshape dof though, 
         # so we have to hack around it as well
@@ -473,8 +481,8 @@ def stage2mapping(n_locations,
             
         acqui.estimate_snr()
         
-        acqui.save(this_result_dir / 'measurement.npz', differential='sampled')
-        # acqui.save(this_result_dir / 'measurement.npz', differential='nosigs')
+        # acqui.save(this_result_dir / 'measurement.npz', differential='sampled')
+        acqui.save(this_result_dir / 'measurement.npz', differential='nosigs')
     
     if kwargs.get('chained_mapping', False):
         return np.array(acqui.bits_effective), np.array(acqui.snr_db_est), np.array(np.mean(acqui.snr_db)), channel_defs, acqui,
