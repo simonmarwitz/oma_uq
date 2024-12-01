@@ -719,9 +719,10 @@ class DataManager(object):
                 try:
                     ret_sets.append(ray.get(obj_ref))
                     finished += 1
-                except ray.exceptions.RayTaskError as e:
+                except ray.exceptions.RayError as e:
                     logger.warning(repr(e))
                     failed +=1
+                    futures.remove(obj_ref)
             # try:
             #     ret_sets = ray.get(ready)
             # except ray.exceptions.RayTaskError as e:
