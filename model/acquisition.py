@@ -1339,6 +1339,69 @@ class Acquire(object):
             
         return acquire
 
+def supylabel2(fig, s, **kwargs):
+    defaults = {
+        "x": 0.98,
+        "y": 0.5,
+        "horizontalalignment": "center",
+        "verticalalignment": "center",
+        "rotation": "vertical",
+        "rotation_mode": "anchor",
+        "size": plt.rcParams["figure.labelsize"],  # matplotlib >= 3.6
+        "weight": plt.rcParams["figure.labelweight"],  # matplotlib >= 3.6
+    }
+    kwargs["s"] = s
+    # kwargs = defaults | kwargs  # python >= 3.9
+    kwargs = {**defaults, **kwargs}
+    fig.text(**kwargs)
+
+def plot_compare_signals(signal_1, signal_2, 
+                         fs, N,
+                         fs2=None, N2=None):
+
+    num_channels, num_timesteps = signal_1.shape
+    _, num_timesteps2 = signal_2.shape
+    
+    if fs2 is None:
+        fs2 = fs
+    if N2 is None:
+        N2 = N
+        
+    t_vals1 = np.linspace(0, num_timesteps/fs, num_timesteps)
+    t_vals2 = np.linspace(0, num_timesteps2/fs2, num_timesteps2)
+    
+    fig, axes = plt.subplots(nrows=num_channels,
+                             ncols=2,
+                             sharey='col',
+                             sharex='col')
+    axest = axes[:, 0]
+    axesf = axes[:, 1]
+    
+
+    for channel in range(num_channels):
+        axt = axest[channel]
+        axt.plot(t_vals1, signal_1[channel,:], alpha=0.5)
+        axt.plot(t_vals2, signal_2[channel, :], alpha=0.5)
+
+
+        axf = axesf[channel]
+        freq_wl1, spec_wl1 = scipy.signal.csd(signal_1[channel,:], signal_1[channel,:], fs, nperseg=N, scaling='density')
+        axf.plot(freq_wl1, 10*np.log10(np.abs(spec_wl1)), alpha=0.5, )
+        freq_wl2, spec_wl2 = scipy.signal.csd(signal_2[channel,:], signal_2[channel,:], fs2, nperseg=N2, scaling='density')
+        axf.plot(freq_wl2, 10*np.log10(np.abs(spec_wl2)), alpha=0.5, )
+        # axf.set_yscale('log')
+        # axf.axvline(1 / (2 * np.pi * DTC), color='grey')
+        axf.yaxis.set_label_position("right")
+        axf.yaxis.tick_right()
+    axt.set_xlim((0, max(num_timesteps/fs, num_timesteps2/fs2)))
+    axf.set_xlim((min(freq_wl1[1],freq_wl2[1]), max(freq_wl1[-1],freq_wl2[-1])))
+    axf.set_xscale('log')
+    axf.set_xlabel('Frequency [\si{\hertz}]')
+    axt.set_xlabel('Time [\si{\second}]')
+    fig.supylabel('Acceleration [\si{\metre\per\second\squared}]')
+    supylabel2(fig, 'PSD [\si{\decibel}]')
+    return fig
+
 def sensor_position(num_sensors, num_nodes, method):
     assert method in ['lumped','distributed']
     

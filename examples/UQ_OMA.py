@@ -97,11 +97,11 @@ def stage2n3mapping(n_locations,
         phi_indexer[node_index,dir_] = chan
     # to save storage, instead of converting all mode shapes, only the phi_indexer is stored for every sample
 
-    return bits_effective, snr_db_est, snr_db,\
-            f_sc, d_sc, phi_sc, mc_sc, \
-            f_cf, d_cf, phi_cf, mc_cf, \
-            f_sd, d_sd, phi_sd, mc_sd, \
-            phi_indexer
+    return bits_effective.astype('float32'), snr_db_est.astype('float32'), snr_db.astype('float32'),\
+            f_sc.astype('float32'), d_sc.astype('float32'), phi_sc.astype('complex64'), mc_sc.astype('float32'), \
+            f_cf.astype('float32'), d_cf.astype('float32'), phi_cf.astype('complex64'), np.abs(mc_cf).astype('float32'), \
+            f_sd.astype('float32'), d_sd.astype('float32'), phi_sd.astype('complex64'), mc_sd.astype('float32'), \
+            phi_indexer.astype('uint8')
     
 
 def stage3mapping(m_lags, estimator, model_order,
@@ -955,6 +955,7 @@ def vars_definition(stage=2):
     c = MassFunction('c_vb',[(5.618, 5.649),(5.91,6.0)],[0.75,0.25], primary=False) # incompleteness
     
     v_b = RandomVariable('weibull_min','v_b', [lamda, c], primary=True) # meter per second
+    # rotation of structure (ignored to reduce computational load (one structure for all ale samples)
     alpha = RandomVariable('uniform', 'alpha', [0., 180.], primary=True) # degreee
     
     n_locations = MassFunction('n_locations', [(4,), (8,), (12,)], [0.2, 0.5, 0.3], primary=True)
@@ -1005,7 +1006,7 @@ def vars_definition(stage=2):
 
     anti_aliasing_cutoff_factor = MassFunction('anti_aliasing_cutoff_factor', [(0.4, 0.45), (0.45, 0.49), (0.5,)], [0.7, 0.2, 0.1], primary=True)
     
-    
+    # will be multiplied by 4 to enable sampling 12,16,24 and nothing in between
     quant_bit_factor = MassFunction('quant_bit_factor', [(3,), (4,), (6,)], [0.1, 0.3, 0.6], primary=True)
     
     duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60.,), (120.*60.,)], [0.1, 0.2, 0.5, 0.2], primary=True)
