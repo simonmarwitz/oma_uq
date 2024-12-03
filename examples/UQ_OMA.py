@@ -450,7 +450,8 @@ def stage2mapping(n_locations,
         sensitivity_deviation = sensitivity_deviation_percent / 100 * sensitivity_nominal
         acqui.apply_sensor(DTC=DTC, 
                              sensitivity_nominal=sensitivity_nominal, sensitivity_deviation=sensitivity_deviation, 
-                             spectral_noise_slope=spectral_noise_slope, noise_rms=sensor_noise_rms)
+                             spectral_noise_slope=spectral_noise_slope, noise_rms=sensor_noise_rms, 
+                             seed=seed)
         logger.debug(acqui.snr)
         
         if logger.isEnabledFor(logging.DEBUG):
@@ -459,7 +460,9 @@ def stage2mapping(n_locations,
                 axes[i_location,0].plot(t_vals, signal[i_location * 2,:], alpha=0.5)
                 axes[i_location,1].plot(t_vals, signal[i_location * 2 + 1,:], alpha=0.5)
                 
-        meas_range = acqui.estimate_meas_range(sample_dur=range_estimation_duration, margin=range_estimation_margin)
+        meas_range = acqui.estimate_meas_range(sample_dur=range_estimation_duration, 
+                                               margin=range_estimation_margin,
+                                               seed=seed)
         
         quantization_bits = quant_bit_factor * 4
         anti_aliasing_cutoff = anti_aliasing_cutoff_factor * acqui.sampling_rate / decimation_factor
@@ -469,7 +472,7 @@ def stage2mapping(n_locations,
         # add noise here, because sampling (decimation) removes all noise again
         logger.debug(acqui.snr)
         
-        acqui.add_noise(noise_power=DAQ_noise_rms**2)
+        acqui.add_noise(noise_power=DAQ_noise_rms**2, seed=seed)
         
         logger.debug(acqui.snr)
         if logger.isEnabledFor(logging.DEBUG):
@@ -1012,6 +1015,7 @@ def vars_definition(stage=2):
     duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60.,), (120.*60.,)], [0.1, 0.2, 0.5, 0.2], primary=True)
     
     tau_max = MassFunction('tau_max', [(20.0,175.0),(60.0,175.0)], [0.5, 0.5], primary=True)
+    # actually the minimal m_lags seems to be 83 with the available samples (duration, decimation_factor, n_blocks)
     m_lags = MassFunction('m_lags', [(20,1000),(50,300)], [0.4, 0.6], primary=True)    
     
     model_order = MassFunction('model_order', [(10,100),], [1.0,], primary=True)

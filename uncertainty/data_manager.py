@@ -620,6 +620,7 @@ class DataManager(object):
         with self.get_database(database='in') as in_ds, self.get_database(database='out', rw=False) as out_ds:
             in_ds.load()
             in_ds.close()
+
             if not chwdir:
                 os.chdir(self.working_dir)
                 logger.debug(f'current working directory {self.working_dir}')
@@ -653,11 +654,14 @@ class DataManager(object):
             if scramble_evaluation: # if scramble sample evaluation
                 keyfun = lambda _: np.random.random()
             else:
+                
                 keyfun = None
             
-            for jid_ind in sorted(range(ids.size),
-                                  key=keyfun):
-                
+            # for jid_ind in sorted(range(ids.size),
+            #                       key=keyfun):
+            logger.warning('Dataset is sorted by m_lags. Remove this line asap')
+
+            for jid_ind in np.argsort(in_ds.m_lags).data:
                 jid=ids[jid_ind].item()
                 
                 this_ds = in_ds.sel(ids=jid).copy()
