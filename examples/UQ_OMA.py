@@ -44,7 +44,7 @@ def stage2n3mapping(n_locations,
     for module in modules:
         logger_ = logging.getLogger(module)
         logger_.setLevel(logging.WARNING)
-        
+
     bits_effective, snr_db_est, snr_db, channel_defs, acqui = stage2mapping(n_locations,
                             DTC, 
                             sensitivity_nominal, sensitivity_deviation_percent, 
@@ -219,7 +219,11 @@ def _stage3mapping(m_lags, estimator,
         try:
             prep_signals = PreProcessSignals.load_state(this_result_dir / 'prep_signals.npz')
         except Exception as e:
-            # os.remove(this_result_dir / 'measurement.npz')
+            os.remove(this_result_dir / 'prep_signals.npz')
+            # also remove measurement.npz to force recalculation of signal
+            # otherwise only a dummy signal is "loaded" in acquisition
+            os.remove(this_result_dir / 'measurement.npz')
+            
             print(e)
             
     if prep_signals is None:

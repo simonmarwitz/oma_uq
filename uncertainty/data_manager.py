@@ -635,7 +635,9 @@ class DataManager(object):
                 # ids=in_ds.ids
                 done_ids = (~out_ds['_runtimes'].isnull()) & (out_ds['_exceptions']=='')
                 # done_ids = (~out_ds['damp_freqs'].isnull().all(dim='modes')) & (out_ds['_exceptions']=='')
-                ids = in_ds.ids[~done_ids]
+                
+                in_ds = in_ds.isel(ids=~done_ids)
+                ids = in_ds.ids
             
             futures = []
 
@@ -654,16 +656,31 @@ class DataManager(object):
             if scramble_evaluation: # if scramble sample evaluation
                 keyfun = lambda _: np.random.random()
             else:
-                
                 keyfun = None
+            
+            ####################################################################
             
             # for jid_ind in sorted(range(ids.size),
             #                       key=keyfun):
+            #    jid=ids[jid_ind].item()
+            
+            ####################################################################
             logger.warning('Dataset is sorted by m_lags. Remove this line asap')
-
+            first=True
+            '''
+            that is wrong
+            because we apply the boolean indexer to sorted data, but it belongs to unsorted data
+            we must apply the boolean indexer to the whole dataset here, but not earlier
+            as the indexes will not match out_ds anaymore
+            '''
+            
             for jid_ind in np.argsort(in_ds.m_lags).data:
-                jid=ids[jid_ind].item()
-                
+                jid=in_ds.ids[jid_ind].item()
+                if first:
+                    print(in_ds.sel(ids=jid).m_lags)
+                    first=False
+            ####################################################################
+            
                 this_ds = in_ds.sel(ids=jid).copy()
                 
 
@@ -672,6 +689,7 @@ class DataManager(object):
                     if not isinstance(var, str):
                         logger.warning(f'The variable name that was passed for argument {arg} should be a string but is a {type(var)}')
                     fun_kwargs[arg] = this_ds[var].item()
+                    
 
                 if chwdir:
                     working_dir = os.path.join(self.working_dir, jid)
@@ -700,7 +718,11 @@ class DataManager(object):
                     futures.append(worker_ref)
                     
                 if len(futures)>= chunks_submit:
+            ####################################################################
+                    print(in_ds.sel(ids=jid).m_lags)
+            ####################################################################
                     break
+        
         
         if not distributed:
             save_samples(futures, ret_names, total_num_samples, default_len)
