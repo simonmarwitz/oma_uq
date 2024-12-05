@@ -638,6 +638,14 @@ class DataManager(object):
                 
                 in_ds = in_ds.isel(ids=~done_ids)
                 ids = in_ds.ids
+                
+                
+                filter_string = kwargs.pop('id_filter',None)
+                if filter_string is not None:
+                    ids_filter = np.char.array(ids).startswith(filter_string)
+                    in_ds = in_ds.isel(ids=ids_filter)
+                    ids = in_ds.ids
+                    logger.info(f'Ids have been filtered by {filter_string}. Final length: {len(ids)}')
             
             futures = []
 
@@ -667,12 +675,6 @@ class DataManager(object):
             ####################################################################
             logger.warning('Dataset is sorted by m_lags. Remove this line asap')
             first=True
-            '''
-            that is wrong
-            because we apply the boolean indexer to sorted data, but it belongs to unsorted data
-            we must apply the boolean indexer to the whole dataset here, but not earlier
-            as the indexes will not match out_ds anaymore
-            '''
             
             for jid_ind in np.argsort(in_ds.m_lags).data:
                 jid=in_ds.ids[jid_ind].item()
@@ -703,7 +705,6 @@ class DataManager(object):
                     
                     logger.info(f"Finished another sample out of {in_ds.ids.size}.")
                 else:
-                    #print(fun_kwargs)
                     # that would be nice, but produces huge overhead, due to the remote
                     # function being defined multiple times and having to be pickled-transfered-unpickled
                     # remote_kwargs['name'] = str(jid)

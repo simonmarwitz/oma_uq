@@ -348,6 +348,14 @@ def _stage3mapping(m_lags, estimator,
             
     if ssi_data is None:
         ssi_data = SSIDataCV(prep_signals)
+        
+        free = int(os.popen('free -t -g').readlines()[-1].split()[-1])
+        factor = 2
+        while free < 0.044 * m_lags / factor :
+            time.sleep(5)
+            free = int(os.popen('free -t -g').readlines()[-1].split()[-1])
+            factor -= 0.01
+            
         ssi_data.build_block_hankel(num_block_rows=m_lags // 2, num_blocks=n_blocks, training_blocks=training_set)  # expensive 
 
         # ssi_data.save_state(this_result_dir / 'ssi_data.npz')
@@ -413,14 +421,14 @@ def stage2mapping(n_locations,
             dof = ['ux', 'uy', 'uz'].index(dof)
             channel_defs.append((node, dof, quant))
 
-    
+    acqui = None
     if os.path.exists(this_result_dir / 'measurement.npz') and skip_existing:
         try:
             acqui = Acquire.load(this_result_dir / 'measurement.npz', differential='nosigs')
         except Exception as e:
             # os.remove(this_result_dir / 'measurement.npz')
-            print(e)
-    else:
+            logger.warning(repr(e))
+    if acqui is None:
         # logger= logging.getLogger('model.acquisition')
         # logger.setLevel(level=logging.INFO)
         if not os.path.exists(this_result_dir_ale / 'response.npz'):
