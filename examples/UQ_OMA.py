@@ -351,7 +351,7 @@ def _stage3mapping(m_lags, estimator,
         
         free = int(os.popen('free -t -g').readlines()[-1].split()[-1])
         factor = 2
-        while free < 0.044 * m_lags / factor :
+        while free < 0.044 * m_lags * factor :
             time.sleep(5)
             free = int(os.popen('free -t -g').readlines()[-1].split()[-1])
             factor -= 0.01

@@ -676,7 +676,11 @@ class DataManager(object):
             logger.warning('Dataset is sorted by m_lags. Remove this line asap')
             first=True
             
-            for jid_ind in np.argsort(in_ds.m_lags).data:
+            jid_inds = np.argsort(in_ds.m_lags).data[:chunks_submit]
+            np.random.shuffle(jid_inds)
+            
+            
+            for jid_ind in jid_inds:
                 jid=in_ds.ids[jid_ind].item()
                 if first:
                     print(in_ds.sel(ids=jid).m_lags)
