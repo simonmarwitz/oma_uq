@@ -44,7 +44,8 @@ def stage2n3mapping(n_locations,
     for module in modules:
         logger_ = logging.getLogger(module)
         logger_.setLevel(logging.WARNING)
-
+    
+    
     bits_effective, snr_db_est, snr_db, channel_defs, acqui = stage2mapping(n_locations,
                             DTC, 
                             sensitivity_nominal, sensitivity_deviation_percent, 
@@ -58,15 +59,6 @@ def stage2n3mapping(n_locations,
                             result_dir=result_dir, working_dir = working_dir, skip_existing=skip_existing, 
                             chained_mapping=True)
     
-    estimator =  ['blackman-tukey','welch'][estimator]
-    
-    f_sc, d_sc, phi_sc, mc_sc, \
-    f_cf, d_cf, phi_cf, mc_cf, \
-    f_sd, d_sd, phi_sd, mc_sd = _stage3mapping(m_lags=m_lags, estimator=estimator,
-                            n_blocks=40, k=10, model_order=model_order, 
-                            jid=jid, 
-                            result_dir=result_dir, working_dir=working_dir, skip_existing=skip_existing, 
-                            acqui_obj=acqui)
     # create an phi_indexer to re-order modeshapes
     # assumes, phi_*'s last row to contain np.nan: phi_*[n_locations * 2, :] = np.nan
     # apply it as phi_*[phi_indexer,:] to get sparse mode shapes in the order of the model's mode shapes
@@ -96,6 +88,17 @@ def stage2n3mapping(n_locations,
         node_index = node - 1 # actually, that should be looked up form mech.nodes_coordinates, but should work here
         phi_indexer[node_index,dir_] = chan
     # to save storage, instead of converting all mode shapes, only the phi_indexer is stored for every sample
+        
+    estimator =  ['blackman-tukey','welch'][estimator]
+    
+    f_sc, d_sc, phi_sc, mc_sc, \
+    f_cf, d_cf, phi_cf, mc_cf, \
+    f_sd, d_sd, phi_sd, mc_sd = _stage3mapping(m_lags=m_lags, estimator=estimator,
+                            n_blocks=40, k=10, model_order=model_order, 
+                            jid=jid, 
+                            result_dir=result_dir, working_dir=working_dir, skip_existing=skip_existing, 
+                            acqui_obj=acqui)
+
 
     return bits_effective.astype('float32'), snr_db_est.astype('float32'), snr_db.astype('float32'),\
             f_sc.astype('float32'), d_sc.astype('float32'), phi_sc.astype('complex64'), mc_sc.astype('float32'), \
@@ -213,6 +216,27 @@ def _stage3mapping(m_lags, estimator,
     this_result_dir = this_result_dir / id_epi
     seed = int.from_bytes(bytes(id_ale, 'utf-8'), 'big')
     assert os.path.exists(this_result_dir) 
+    
+    if os.path.exists(this_result_dir / 'modal.npz') and skip_existing:
+        arr = np.load(this_result_dir / 'modal.npz')
+        f_sc = arr['f_sc']
+        d_sc = arr['d_sc']
+        phi_sc = arr['phi_sc']
+        mc_sc = arr['mc_sc']
+        f_cf = arr['f_cf']
+        d_cf = arr['d_cf']
+        phi_cf = arr['phi_cf']
+        mc_cf = arr['mc_cf']
+        f_sd = arr['f_sd']
+        d_sd = arr['d_sd']
+        phi_sd = arr['phi_sd']
+        mc_sd = arr['mc_sd']
+        
+        return f_sc, d_sc, phi_sc, mc_sc, \
+                f_cf, d_cf, phi_cf, mc_cf, \
+                f_sd, d_sd, phi_sd, mc_sd, \
+        
+    
 
     prep_signals = None
     if os.path.exists(this_result_dir / 'prep_signals.npz') and skip_existing:
@@ -224,7 +248,7 @@ def _stage3mapping(m_lags, estimator,
             # otherwise only a dummy signal is "loaded" in acquisition
             os.remove(this_result_dir / 'measurement.npz')
             
-            print(e)
+            raise(e)
             
     if prep_signals is None:
         if 'acqui_obj' in kwargs:
@@ -365,6 +389,20 @@ def _stage3mapping(m_lags, estimator,
     _, mc_sd = ssi_data.synthesize_signals( A_sd, C_sd, Q_sd, R_sd, S_sd, test_set)  # expensive, but not assigning class variables that could be saved
 
     del ssi_data
+        
+    np.savez(this_result_dir / 'modal.npz',
+            f_sc=f_sc.astype('float32'), 
+            d_sc=d_sc.astype('float32'), 
+            phi_sc=phi_sc.astype('complex64'), 
+            mc_sc=mc_sc.astype('float32'),
+            f_cf=f_cf.astype('float32'), 
+            d_cf=d_cf.astype('float32'), 
+            phi_cf=phi_cf.astype('complex64'), 
+            mc_cf=np.abs(mc_cf).astype('float32'),
+            f_sd=f_sd.astype('float32'), 
+            d_sd=d_sd.astype('float32'), 
+            phi_sd=phi_sd.astype('complex64'), 
+            mc_sd=mc_sd.astype('float32'))
     
     return f_sc, d_sc, phi_sc, mc_sc, f_cf, d_cf, phi_cf, mc_cf, f_sd, d_sd, phi_sd, mc_sd, 
 
