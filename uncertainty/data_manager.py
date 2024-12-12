@@ -673,18 +673,22 @@ class DataManager(object):
             #    jid=ids[jid_ind].item()
             
             ####################################################################
-            logger.warning('Dataset is sorted by m_lags. Remove this line asap')
-            first=True
+            # logger.warning('Dataset is sorted by m_lags. Remove this line asap')
+            # first=True
             
-            jid_inds = np.argsort(in_ds.m_lags).data[:chunks_submit]
+            # jid_inds = np.argsort(in_ds.m_lags).data[:chunks_submit]
+            jid_inds = np.arange(chunks_submit)
             np.random.shuffle(jid_inds)
             
+            m_lags_steps = [50,150,250,350,450,550,650,750,850,950,1001]
+            factor = 0.035
+            tasks = [setup_eval.options(memory=num*factor*1024*1024*1024, name= f'{num*factor} GB {self.title}') for num in m_lags_steps]
             
             for jid_ind in jid_inds:
                 jid=in_ds.ids[jid_ind].item()
-                if first:
-                    print(in_ds.sel(ids=jid).m_lags)
-                    first=False
+                # if first:
+                #     print(in_ds.sel(ids=jid).m_lags)
+                #     first=False
             ####################################################################
             
                 this_ds = in_ds.sel(ids=jid).copy()
@@ -716,15 +720,27 @@ class DataManager(object):
                     #     func, jid, fun_kwargs, working_dir=working_dir, 
                     #     check_diskspace=check_diskspace, **kwargs)
                     
-                    worker_ref = setup_eval.remote(
+                    
+                    m_lags = in_ds.sel(ids=jid).m_lags
+                    
+                    for worker, m_lag_step in zip(tasks, m_lags_steps):
+                        if m_lags < m_lag_step:
+                            break
+                    
+                    worker_ref = worker.remote(
                         func, jid, fun_kwargs, self.result_dir, working_dir=working_dir, 
                         check_diskspace=check_diskspace, use_lock=use_lock, **kwargs)
+                    
+                    
+                    # worker_ref = setup_eval.remote(
+                    #     func, jid, fun_kwargs, self.result_dir, working_dir=working_dir, 
+                    #     check_diskspace=check_diskspace, use_lock=use_lock, **kwargs)
                     
                     futures.append(worker_ref)
                     
                 if len(futures)>= chunks_submit:
             ####################################################################
-                    print(in_ds.sel(ids=jid).m_lags)
+                    # print(in_ds.sel(ids=jid).m_lags)
             ####################################################################
                     break
         
