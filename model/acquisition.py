@@ -1285,8 +1285,8 @@ class Acquire(object):
             modal_amplitudes = validate_array(in_dict['self.modal_amplitudes'])
         else:
             assert differential in ['sensed', 'sampled', 'nosigs']
-            signal = np.empty(re_shape)
-            t_vals = np.empty(re_shape[-1])
+            signal = np.full(re_shape,fill_value=np.nan)
+            t_vals = np.full(re_shape[-1],fill_value=np.nan)
             modal_frequencies = None
             modal_damping= None
             mode_shapes= None
