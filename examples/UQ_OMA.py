@@ -218,24 +218,28 @@ def _stage3mapping(m_lags, estimator,
     assert os.path.exists(this_result_dir) 
     
     if os.path.exists(this_result_dir / 'modal.npz') and skip_existing:
-        arr = np.load(this_result_dir / 'modal.npz')
-        f_sc = arr['f_sc']
-        d_sc = arr['d_sc']
-        phi_sc = arr['phi_sc']
-        mc_sc = arr['mc_sc']
-        f_cf = arr['f_cf']
-        d_cf = arr['d_cf']
-        phi_cf = arr['phi_cf']
-        mc_cf = arr['mc_cf']
-        f_sd = arr['f_sd']
-        d_sd = arr['d_sd']
-        phi_sd = arr['phi_sd']
-        mc_sd = arr['mc_sd']
-        
-        return f_sc, d_sc, phi_sc, mc_sc, \
-                f_cf, d_cf, phi_cf, mc_cf, \
-                f_sd, d_sd, phi_sd, mc_sd, \
-        
+        try:
+            arr = np.load(this_result_dir / 'modal.npz')
+            f_sc = arr['f_sc']
+            d_sc = arr['d_sc']
+            phi_sc = arr['phi_sc']
+            mc_sc = arr['mc_sc']
+            f_cf = arr['f_cf']
+            d_cf = arr['d_cf']
+            phi_cf = arr['phi_cf']
+            mc_cf = arr['mc_cf']
+            f_sd = arr['f_sd']
+            d_sd = arr['d_sd']
+            phi_sd = arr['phi_sd']
+            mc_sd = arr['mc_sd']
+            
+            return f_sc, d_sc, phi_sc, mc_sc, \
+                    f_cf, d_cf, phi_cf, mc_cf, \
+                    f_sd, d_sd, phi_sd, mc_sd, \
+                    
+        except Exception as e:
+            os.remove(this_result_dir /'modal.npz')
+            
     
 
     prep_signals = None
