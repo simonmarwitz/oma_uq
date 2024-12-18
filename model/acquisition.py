@@ -473,7 +473,7 @@ class Acquire(object):
         f_c = 1 / (2 * np.pi * DTC) 
         nyq = self.sampling_rate / 2
         
-        logger.info(f'Applying a {sensitivity_nominal:1.2f} Vm^-1s^2 sensor with a high-pass cutoff at {f_c:1.3f} Hz and spectral noise of {noise_rms:1.3e} ms^-2')
+        logger.info(f'Applying a {sensitivity_nominal:1.2f} Vm^-1s^2 sensor with a high-pass cutoff at {f_c:1.3f} Hz and spectral noise of {noise_rms} ms^-2')
         
         b, a = scipy.signal.butter(1, f_c / nyq, 'high')
         meas_sig = scipy.signal.lfilter(b, a, self.signal, axis=1)
