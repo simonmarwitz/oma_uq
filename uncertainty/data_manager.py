@@ -784,7 +784,8 @@ class DataManager(object):
             logger.info(f'Finished {finished}, failed {failed} samples in {comp_time:1.2f} s')    
             
             now=time.time()
-            save_samples(ret_sets, ret_names, total_num_samples, default_len)
+            if finished:
+                save_samples(ret_sets, ret_names, total_num_samples, default_len)
             sav_time = int(max(time.time() - now, sav_time))
             
             if len(wait) == 0:
