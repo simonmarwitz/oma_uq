@@ -38,7 +38,7 @@ def stage2n3mapping(n_locations,
                     quant_bit_factor,
                     duration,
                     m_lags, estimator, model_order,
-                    jid, result_dir, working_dir, skip_existing=True, **kwargs):
+                    jid, result_dir, working_dir, skip_existing=False, **kwargs):
         
     modules = ['pyOMA.core.Helpers','pyOMA.core.PreProcessingTools','pyOMA.core.SSICovRef','pyOMA.core.SSIData','pyOMA.core.PLSCF','model.mechanical','model.acquisition']
     for module in modules:
