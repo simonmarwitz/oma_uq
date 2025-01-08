@@ -2341,10 +2341,10 @@ class PolyUQ(object):
             X = np.array(arrays_grid).T
             Y = out_samp[inds_ale, inds_epi]
             names = names_ale + names_epi
-            logger.warning("Hack for uq_modal_beam must be removed...")
-            ind_occ = names.index('ice_occ')
-            ind_mass = names.index('ice_mass')
-            X[:,ind_mass] *= X[:,ind_occ] 
+            # logger.warning("Hack for uq_modal_beam must be removed...")
+            # ind_occ = names.index('ice_occ')
+            # ind_mass = names.index('ice_mass')
+            # X[:,ind_mass] *= X[:,ind_occ] 
             
         
         logger.debug(f"Shapes: X {X.shape}, Y {Y.shape}, y_resamples {y_resamples}, N_mcs_ale {N_mcs_ale}, N_mcs_epi {N_mcs_epi}")
