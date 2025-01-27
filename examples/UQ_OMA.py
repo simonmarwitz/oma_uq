@@ -1007,11 +1007,21 @@ def animate_response(nodes_coordinates, d_time=None, d_freq_time=None, Fu_time=N
 
 
 def vars_definition(stage=2):
+    # Original wrongly labeled definition
+#     lamda = MassFunction('lambda_vb',[(2.267, 2.3),(1.96, 2.01)],[0.75,0.25], primary=False) # incompleteness
+#     c = MassFunction('c_vb',[(5.618, 5.649),(5.91,6.0)],[0.75,0.25], primary=False) # incompleteness
     
-    lamda = MassFunction('lambda_vb',[(2.267, 2.3),(1.96, 2.01)],[0.75,0.25], primary=False) # incompleteness
-    c = MassFunction('c_vb',[(5.618, 5.649),(5.91,6.0)],[0.75,0.25], primary=False) # incompleteness
+#     v_b = RandomVariable('weibull_min','v_b', [lamda, c], primary=True) # meter per second
     
-    v_b = RandomVariable('weibull_min','v_b', [lamda, c], primary=True) # meter per second
+    
+    # corrected label definition
+    c = MassFunction('c_vb',[(2.267, 2.3),(1.96, 2.01)],[0.75,0.25], primary=False) # incompleteness
+    lamda = MassFunction('lamda_vb',[(5.618, 5.649),(5.91,6.0)],[0.75,0.25], primary=False) # incompleteness
+    # whats left is to exchange columns in input samples
+    logger.warning("Variables 'c_vb' and 'lamda_vb' have been wrongly labeled. Input rows must be exchanged prior to incompleteness evaluation")
+    
+    v_b = RandomVariable('weibull_min','v_b', [c, lamda], primary=True) # meter per second
+    
     # rotation of structure (ignored to reduce computational load (one structure for all ale samples)
     alpha = RandomVariable('uniform', 'alpha', [0., 180.], primary=True) # degreee
     
