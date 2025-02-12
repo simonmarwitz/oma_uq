@@ -435,7 +435,7 @@ class MechanicalDummy(object):
         
         return nodes, lines, chan_dofs
     
-    def export_geometry(self, save_dir='/usr/scratch4/sima9999/work/modal_uq/datasets/'):
+    def export_geometry(self, save_dir='/scratch/sima9999/modal_uq/datasets/'):
         'save under jid_folder, nodes_file, lines_file, chan_dofs_file'
         os.makedirs(save_dir, exist_ok=True)
     

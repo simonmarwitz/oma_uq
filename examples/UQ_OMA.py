@@ -1152,14 +1152,14 @@ def vars_definition(stage=2):
 def main():
     import glob
     
-    result_dir = Path('/usr/scratch4/sima9999/work/modal_uq/uq_oma_a/samples')
+    result_dir = Path('/scratch/sima9999/modal_uq/uq_oma_a/samples')
     working_dir = Path('/dev/shm/womo1998/')
     
     mech = MechanicalDummy.load(fpath=result_dir / f'mechanical.npz')
 
     
-    flist = glob.glob('/usr/scratch4/sima9999/work/modal_uq/uq_oma_a/samples/*/*')
-    flist = glob.glob('/usr/scratch4/sima9999/work/modal_uq/uq_oma_a/samples/*/*')
+    flist = glob.glob('/scratch/sima9999/modal_uq/uq_oma_a/samples/*/*')
+    flist = glob.glob('/scratch/sima9999/modal_uq/uq_oma_a/samples/*/*')
     todolist = []
     for file in flist:
         if not os.path.exists(file+'/response.npz'):
@@ -1182,7 +1182,7 @@ def main():
     
     
     # default_mapping(jid='8a2a343d_e3f6077f',
-    #                 result_dir=Path('/usr/scratch4/sima9999/work/modal_uq/uq_oma_a/samples/'),
+    #                 result_dir=Path('/scratch/sima9999/modal_uq/uq_oma_a/samples/'),
     #                 skip_existing=True)
     print('exit')
     
