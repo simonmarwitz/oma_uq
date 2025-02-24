@@ -3,4 +3,5 @@ encoding//examples/UQ_OMA.py=utf-8
 encoding//model/stability_symbolic.py=utf-8
 encoding//model/turbulent_wind.py=utf-8
 encoding//pyOMA/pyOMA/core/PreProcessingTools.py=utf-8
+encoding//pyOMA/pyOMA/core/SSICovRef.py=utf-8
 encoding//pyOMA/pyOMA/core/SSIData.py=utf-8
