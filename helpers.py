@@ -26,7 +26,7 @@ def get_pcd(purpose='print'):
     elif purpose=='print_half_hor':
         print_context_dict['figure.figsize'] = (5.906 , 5.906 / 1.618 / 2)
     elif purpose=='beamer':
-        print_context_dict['figure.figsize'] = (5.53/2,2.96)
+        print_context_dict['figure.figsize'] = (5.53,2.96)
     elif purpose=='beamer_half':
         print_context_dict['figure.figsize'] = (5.53/2,2.96)        
         print_context_dict['font.size'] = 9
