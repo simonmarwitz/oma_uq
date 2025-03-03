@@ -64,6 +64,7 @@ class UncertainVariable(object):
     def __init__(self, name, children, primary=True):
         self.value = None
         self.name = name
+        self.pretty_name = name
         self.primary = primary
 
         for child in children:
@@ -2751,11 +2752,11 @@ class PolyUQ(object):
             out_dict['self.S_conf'] = self.S_conf
             out_dict['self.S_meth'] = self.S_meth
 
-        with open(fname + '.tmp', 'wb') as f:
+        with open(str(fname) + '.tmp', 'wb') as f:
             np.savez_compressed(f, **out_dict)
         if os.path.exists(fname):
             os.remove(fname)
-        os.rename(fname + '.tmp', fname)
+        os.rename(str(fname) + '.tmp', fname)
 
     def load_state(self, fname, differential=None):
 

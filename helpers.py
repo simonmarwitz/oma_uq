@@ -1,6 +1,7 @@
 def get_pcd(purpose='print'):
     print_context_dict = {'text.usetex':True,
-                     'text.latex.preamble':r"\usepackage{siunitx}\usepackage{xfrac}\usepackage{amssymb, amsfonts}", # on preamble related errors, make sure to show plot within rc context-manager
+                          'pgf.texsystem': 'lualatex',
+                    'text.latex.preamble':r"\usepackage{siunitx}\usepackage{xfrac}\usepackage{amssymb, amsfonts}\usepackage{eufrak}\usepackage{unicode-math}\setmathfont[range=\mathfrak]{Old English Text MT}",  # on preamble related errors, make sure to show plot within rc context-manager
                      'font.size':10,
                      'legend.fontsize':10,
                      'xtick.labelsize':10,
@@ -18,49 +19,52 @@ def get_pcd(purpose='print'):
                      # 'figure.figsize':(5.53/2,2.96),#beamer
                      # 'figure.figsize':(5.53/2*2,2.96*2),#beamer
                      'figure.dpi':100}
-    
-    if purpose=='print':#150 mm \columnwidth
+
+    if purpose == 'print':  # 150 mm \columnwidth
         print_context_dict['figure.figsize'] = (5.906, 5.906 / 1.618)
-    elif purpose=='print_half':
+    elif purpose == 'print_half':
         print_context_dict['figure.figsize'] = (5.906 / 2, 5.906 / 1.618)
-    elif purpose=='print_half_hor':
+    elif purpose == 'print_half_hor':
         print_context_dict['figure.figsize'] = (5.906 , 5.906 / 1.618 / 2)
-    elif purpose=='beamer':
-        print_context_dict['figure.figsize'] = (5.53,2.96)
-    elif purpose=='beamer_half':
-        print_context_dict['figure.figsize'] = (5.53/2,2.96)        
+    elif purpose == 'beamer':
+        print_context_dict['figure.figsize'] = (5.53, 2.96)
+    elif purpose == 'beamer_half':
+        print_context_dict['figure.figsize'] = (5.53 / 2, 2.96)
         print_context_dict['font.size'] = 9
         print_context_dict['legend.fontsize'] = 9
         print_context_dict['xtick.labelsize'] = 9
         print_context_dict['ytick.labelsize'] = 9
         print_context_dict['axes.labelsize'] = 9
-    elif purpose=='BB15':
-        #print_context_dict['figure.figsize'] = (130/25.4, 44/25.4)   # schmale version
-        print_context_dict['figure.figsize'] = (511/100, 316/100)                      
+    elif purpose == 'BB15':
+        # print_context_dict['figure.figsize'] = (130/25.4, 44/25.4)   # schmale version
+        print_context_dict['figure.figsize'] = (511 / 100, 316 / 100)
         print_context_dict['font.size'] = 9
         print_context_dict['legend.fontsize'] = 9
         print_context_dict['xtick.labelsize'] = 9
         print_context_dict['ytick.labelsize'] = 9
         print_context_dict['axes.labelsize'] = 9
-        
+
     # figsize=(5.53,2.96)#beamer 16:9
     # figsize=(3.69,2.96)#beamer 16:9
     # plot.rc('axes.formatter',use_locale=True) #german months
     return print_context_dict
 
+
 def test():
     import matplotlib
     import matplotlib.pyplot as plt
     with matplotlib.rc_context(get_pcd()):
-    
+
         plt.figure()
-        plt.plot([1,2,3],[1,4,1])
+        plt.plot([1, 2, 3], [1, 4, 1])
         plt.xlabel('$\sfrac{x}{b}$')
         plt.ylabel('Nano [\si{\metre}]')
         plt.show()
 
+
 import re
-        
+
+
 def tex_escape(text):
     """
         :param text: a plain text message
@@ -80,12 +84,9 @@ def tex_escape(text):
         '<': r'\textless{}',
         '>': r'\textgreater{}',
     }
-    regex = re.compile('|'.join(re.escape(str(key)) for key in sorted(conv.keys(), key = lambda item: - len(item))))
+    regex = re.compile('|'.join(re.escape(str(key)) for key in sorted(conv.keys(), key=lambda item:-len(item))))
     return regex.sub(lambda match: conv[match.group()], text)
 
 
-    
-    
-    
-if __name__ =='__main__':
+if __name__ == '__main__':
     test()
