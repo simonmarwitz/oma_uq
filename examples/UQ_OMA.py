@@ -36,6 +36,7 @@ def multi_sensi(vars_ale, vars_epi, result_dir, ret_names, method, **kwargs):
     ret_ind = {}
 
     s_vals = []
+    pretty_names = []
     for ret_name in ret_names:
         poly_uq = PolyUQ(vars_ale, vars_epi, dim_ex=dim_ex)
         ret_dir = f'{ret_name}-{".".join(str(e) for e in ret_ind.values())}'
@@ -55,7 +56,11 @@ def multi_sensi(vars_ale, vars_epi, result_dir, ret_names, method, **kwargs):
         else:
             S, _, names = poly_uq.estimate_sensi(method=method, y_resamples=kwargs.get('y_resamples', 1000))
             poly_uq.save_state(sens_path, differential='sens')
-
+        if poly_uq.pretty_out_name is not None:
+            pretty_names.append(poly_uq.pretty_out_name)
+        else:
+            pretty_names.append(ret_name)
+        print(poly_uq.pretty_out_name)
         s_vals.append(S)
 
     s_vals = np.array(s_vals)
@@ -67,13 +72,12 @@ def multi_sensi(vars_ale, vars_epi, result_dir, ret_names, method, **kwargs):
     with matplotlib.rc_context(pcd):
     # if True:
         plt.figure()
-        print(s_vals)
         plt.imshow(s_vals,
                    # vmin=0, vmax=1,
                   cmap='Greys')
         plt.colorbar(fraction=0.0465 * im_ratio, pad=0.04, label='Sensitivity $S_1$')
         if len(ret_names) > 1:
-            plt.gca().set_yticks(np.arange(len(ret_names)), ret_names)
+            plt.gca().set_yticks(np.arange(len(pretty_names)), pretty_names)
 
         # names_dict = {'N_wire':'$N_\mathrm{cbl}$',
         #               'dD':'$d_\mathrm{D}$',
@@ -90,6 +94,9 @@ def multi_sensi(vars_ale, vars_epi, result_dir, ret_names, method, **kwargs):
         plt.ylabel('Output parameter')
         plt.xlabel('Input parameter')
         plt.subplots_adjust(top=0.97, bottom=0.6, left=0.2, right=0.9, hspace=0.05)
+
+        plt.savefig('/home/sima9999/2019_OMA_UQ/tex/figures/uncertainty/sensi_uq_oma.pdf', backend='pgf')
+        plt.savefig('/home/sima9999/2019_OMA_UQ/tex/figures/uncertainty/sensi_uq_oma.png', backend='pgf')
     return
 
 
@@ -1099,30 +1106,30 @@ def vars_definition(stage=2):
 
     # corrected label definition
     c = MassFunction('c_vb', [(2.267, 2.3), (1.96, 2.01)], [0.75, 0.25], primary=False)  # incompleteness
-    c.pretty_name = '$k_\{\\mathfrak\{v\}\}$'
+    c.pretty_name = r'$k_{\mathfrak{v}}$'
 
     lamda = MassFunction('lamda_vb', [(5.618, 5.649), (5.91, 6.0)], [0.75, 0.25], primary=False)  # incompleteness
-    lamda.pretty_name = '$\\lambda_\{\\mathfrak\{v\}\}$'
+    lamda.pretty_name = r'$\lambda_{\mathfrak{v}}$'
     # whats left is to exchange columns in input samples
     logger.warning("Variables 'c_vb' and 'lamda_vb' have been wrongly labeled. Input rows must be exchanged prior to incompleteness evaluation")
 
     v_b = RandomVariable('weibull_min', 'v_b', [c, lamda], primary=True)  # meter per second
-    v_b.pretty_name = '$\\mathfrak\{v\}_\\mathrm\{b\}$'
+    v_b.pretty_name = r'$\mathfrak{v}_\mathrm{b}$'
     # rotation of structure (ignored to reduce computational load (one structure for all ale samples)
     alpha = RandomVariable('uniform', 'alpha', [0., 180.], primary=True)  # degreee
-    alpha.pretty_name = '$\\phi$'
+    alpha.pretty_name = r'$\phi$'
     n_locations = MassFunction('n_locations', [(4,), (8,), (12,)], [0.2, 0.5, 0.3], primary=True)
-    n_locations.pretty_name = '$n_\\mathrm\{loc\}$'
+    n_locations.pretty_name = r'$n_\mathrm{loc}$'
 
     DTC = MassFunction('DTC', [(1.6, 30), (0.8, 1.6), (0.4, 0.8)], [0.7, 0.2, 0.1], primary=True)
-    DTC.pretty_name = '$T_\\mathrm\{RC\}$'
+    DTC.pretty_name = r'$T_\mathrm{RC}$'
     # = MassFunction('', [(,), ], [], primary=True)
 
     sensitivity_nominal = MassFunction('sensitivity_nominal', [(1.02,), (0.102, 1.02), (0.01, 0.51)], [0.5, 0.3, 0.2], primary=False)
-    sensitivity_nominal.pretty_name = '$\\mu_\{\\overline\{\\mathcal\{H\}\}\}$'
+    sensitivity_nominal.pretty_name = r'$\mu_{\overline{\mathcal{H}}}$'
     # ..TODO:: actually, the last mass should be 0.1, but that requires several modifications to include the open-world assumption
     sensitivity_deviation = MassFunction('sensitivity_deviation', [(5.,), (10.,), (2., 20.)], [0.4, 0.4, 0.2, ], primary=False)
-    sensitivity_deviation.pretty_name = '$\\Delta \\overline\{\\mathcal\{H\}\}$'
+    sensitivity_deviation.pretty_name = r'$\Delta \overline{\mathcal{H}}$'
     # Formal definition of sensitivity would result in a sample of n_channels x N_mcs_epi, where n_channels changes for each n_epi
     # Actual implementation is in Acquire.apply_sensor, using a seed, derived from the sample ID
     # sensitivity = RandomVariable('Uniform', 'sensitivity',
@@ -1132,9 +1139,9 @@ def vars_definition(stage=2):
     sensitivity_deviation.primary = True
 
     spectral_noise_slope = MassFunction('spectral_noise_slope', [(-0.8, -0.3), ], [1.0, ], primary=True)
-    spectral_noise_slope.pretty_name = '$\\Delta \\overline\{\\mathcal\{S\}\}$'
+    spectral_noise_slope.pretty_name = r'$\Delta \overline{\mathcal{S}}$'
     sensor_noise_rms = MassFunction('sensor_noise_rms', [(1e-6, 1e-2,), ], [1.0, ], primary=True)
-    sensor_noise_rms.pretty_name = '$ \\sigma_\{\\eta_\{\\mathcal\{S\}\}\}$'
+    sensor_noise_rms.pretty_name = r'$ \sigma_{\eta_{\mathcal{S}}}$'
     # Formal definition of spectral_noise would result in a sample of n_channels x num_timesteps x N_mcs_epi, where n_channels, num_timesteps changes for each n_epi
     # Actual implementation is in Acquire.apply_sensor, using a seed, derived from the sample ID
     # spectral_noise = RandomVariable('normal', 'spectral_noise', [...], primary=True)
@@ -1143,9 +1150,9 @@ def vars_definition(stage=2):
     sensor_noise_rms.primary = True
 
     range_estimation_duration = MassFunction('range_estimation_duration', [(30.,), (60, 120), (300,)], [0.2, 0.5, 0.3], primary=False)
-    range_estimation_duration.pretty_name = '$d$'
+    range_estimation_duration.pretty_name = r'$d$'
     range_estimation_margin = MassFunction('range_estimation_margin', [(2., 5.), (5., 10.)], [0.6, 0.4], primary=False)
-    range_estimation_margin.pretty_name = '$\\sfrac\{U_\\mathrm\{q\}\}\{U_\\mathrm\{q,eff\}\}$'
+    range_estimation_margin.pretty_name = r'$\sfrac{U_\mathrm{q}}{U_\mathrm{q,eff}}$'
     # Formal definition of meas_range is based on the signal itself and cannot be done using simple RandomVariabls
     # Actual implementation is in Acquire.estimate_meas_range, using a seed, derived from the sample ID
     # meas_range = RandomVariable(..., primary=True)
@@ -1154,7 +1161,7 @@ def vars_definition(stage=2):
     range_estimation_margin.primary = True
 
     DAQ_noise_rms = MassFunction('DAQ_noise_rms', [(2.5e-6, 3e-3), ], [1.0, ], primary=False)
-    DAQ_noise_rms.pretty_name = '$\\sigma_\{\\eta_\\mathrm\{D\}\}$'
+    DAQ_noise_rms.pretty_name = r'$\sigma_{\eta_\mathrm{D}}$'
     # Formal definition of DAQ_noise would result in a sample of n_channels x num_timesteps x N_mcs_epi, where n_channels, num_timesteps changes for each n_epi
     # Actual implementation is in Acquire.add_noise, using a seed, derived from the sample ID
     # DAQ_noise = RandomVariable('DAQ_noise', 'normal', [0, DAQ_noise_rms, (n_channels, num_timesteps)], primary=True)
@@ -1164,29 +1171,29 @@ def vars_definition(stage=2):
     # sampling_rate = MassFunction('sampling_rate', [(50.,100.), (10.,50.), (4.,10.)], [0.5, 0.3, 0.2], primary=True)
     # logger.warning('The decimation factors are too high for a final estimation up to 3.5 Hz (numerical pre-study). Consider modifications')
     decimation_factor = MassFunction('decimation_factor', [(1, 2), (2, 7), (7, 18)], [0.5, 0.3, 0.2], primary=True)
-    decimation_factor.pretty_name = '$f_\mathrm{s}$'
+    decimation_factor.pretty_name = r'$f_\mathrm{s}$'
 
     anti_aliasing_cutoff_factor = MassFunction('anti_aliasing_cutoff_factor', [(0.4, 0.45), (0.45, 0.49), (0.5,)], [0.7, 0.2, 0.1], primary=True)
-    anti_aliasing_cutoff_factor.pretty_name = '$\\sfrac\{f_\\mathrm\{c,AA\}\}\{f_\\mathrm\{s\}\}$'
+    anti_aliasing_cutoff_factor.pretty_name = r'$\sfrac{f_\mathrm{c,AA}}{f_\mathrm{s}}$'
 
     # will be multiplied by 4 to enable sampling 12,16,24 and nothing in between
     quant_bit_factor = MassFunction('quant_bit_factor', [(3,), (4,), (6,)], [0.1, 0.3, 0.6], primary=True)
-    quant_bit_factor.pretty_name = '$b$'
+    quant_bit_factor.pretty_name = r'$b$'
 
     duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60.,), (120.*60.,)], [0.1, 0.2, 0.5, 0.2], primary=True)
-    duration.pretty_name = '$T$'
+    duration.pretty_name = r'$T$'
 
     tau_max = MassFunction('tau_max', [(20.0, 175.0), (60.0, 175.0)], [0.5, 0.5], primary=True)
-    tau_max.pretty_name = '$\\tau_\\mathrm\{max\}$'
+    tau_max.pretty_name = r'$\tau_\mathrm{max}$'
     # actually the minimal m_lags seems to be 83 with the available samples (duration, decimation_factor, n_blocks)
     m_lags = MassFunction('m_lags', [(20, 1000), (50, 300)], [0.4, 0.6], primary=True)
-    m_lags.pretty_name = '$M$'
+    m_lags.pretty_name = r'$M$'
 
     model_order = MassFunction('model_order', [(10, 100), ], [1.0, ], primary=True)
-    model_order.pretty_name = '$n_\\mathrm\{ord\} $'
+    model_order.pretty_name = r'$n_\mathrm{ord} $'
 
     estimator = MassFunction('estimator', [(1,), (0,)], [0.6, 0.4])  # 0: welch, 1: blackman-tukey
-    estimator.pretty_name = '$\\Phi(\\omega)$'
+    estimator.pretty_name = r'$\Phi(\omega)$'
 
     if stage == 1:
         vars_epi = [lamda, c]

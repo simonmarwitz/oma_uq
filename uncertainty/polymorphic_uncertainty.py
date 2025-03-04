@@ -562,6 +562,7 @@ class PolyUQ(object):
         self.loop_ale = None
         self.loop_epi = None
         self.out_name = None
+        self.pretty_out_name = None
         self.out_samp = None
         self.out_valid = [-np.infty, np.infty]
 
@@ -885,7 +886,7 @@ class PolyUQ(object):
 
         return manager_grid, manager_ale, manager_epi
 
-    def from_data_manager(self, manager=None, ret_name=None, ret_ind=None, out_ds=None):
+    def from_data_manager(self, manager=None, ret_name=None, ret_ind=None, out_ds=None, pretty_out_name=None):
         '''
         May be called repeatedly when new samples have been propagated to update
         out_samp and subsequently update imp, inc and so on
@@ -955,6 +956,9 @@ class PolyUQ(object):
         if self.out_name is not None:
             assert self.out_name == f'{ret_name}-{".".join(str(e) for e in ret_ind.values())}'
         self.out_name = f'{ret_name}-{".".join(str(e) for e in ret_ind.values())}'
+        if pretty_out_name is None:
+            logger.info("You might want to set a pretty_out_name, that will be used for labeling plots, etc.")
+        self.pretty_out_name = pretty_out_name
         self.out_samp = out_grid
         self.out_valid = [out_flat_all.min(skipna=True).item(), out_flat_all.max(skipna=True).item()]
 
@@ -2729,6 +2733,7 @@ class PolyUQ(object):
         if differential is None or differential == 'prop':
             out_dict['self.fcount'] = self.fcount
             out_dict['self.out_name'] = self.out_name
+            out_dict['self.pretty_out_name'] = self.pretty_out_name
             out_dict['self.out_samp'] = self.out_samp
             out_dict['self.out_valid'] = self.out_valid
 
@@ -2818,6 +2823,7 @@ class PolyUQ(object):
         if differential is None or differential == 'prop':
             self.fcount = validate_array(in_dict['self.fcount'])
             self.out_name = validate_array(in_dict.get('self.out_name'))
+            self.pretty_out_name = validate_array(in_dict.get('self.pretty_out_name'))
             self.out_samp = validate_array(in_dict['self.out_samp'])
             self.out_valid = validate_array(in_dict.get('self.out_valid'))
 

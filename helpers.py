@@ -1,7 +1,33 @@
+import matplotlib
+import re
+
+# usage
+'''
+# plot may be generated prior or within rc_context
+
+from helpers import get_pcd
+pcd = get_pcd('print')
+with plt.rc_context(pcd):
+    plt.show()
+    plt.savefig('/home/sima9999/test.pdf', backend='pgf')
+'''
+
+
 def get_pcd(purpose='print'):
-    print_context_dict = {'text.usetex':True,
-                          'pgf.texsystem': 'lualatex',
-                    'text.latex.preamble':r"\usepackage{siunitx}\usepackage{xfrac}\usepackage{amssymb, amsfonts}\usepackage{eufrak}\usepackage{unicode-math}\setmathfont[range=\mathfrak]{Old English Text MT}",  # on preamble related errors, make sure to show plot within rc context-manager
+    # https://github.com/matplotlib/matplotlib/issues/17931
+    matplotlib.rcParams.update({
+#     'text.usetex':True,
+#     'pgf.texsystem':'lualatex',
+#     'pgf.rcfonts': False,
+#     "pgf.preamble": r"\usepackage{siunitx}\usepackage{xfrac}\usepackage{unicode-math}\setmathfont{latinmodern-math.otf}\setmathfont[range=\mathfrak]{Old English Text MT}",
+    'text.latex.preamble':r"\usepackage{siunitx}\usepackage{xfrac}\usepackage{amssymb, amsfonts, amsmath}\usepackage{eufrak}",  # on preamble related errors, make sure to show plot within rc context-manager
+
+    })
+    print_context_dict = {'text.usetex':True,  # for interactive plotting
+                    # 'text.latex.preamble':r"\usepackage{siunitx}\usepackage{xfrac}\usepackage{amssymb, amsfonts}\usepackage{eufrak}",  # on preamble related errors, make sure to show plot within rc context-manager
+                          'pgf.texsystem': 'lualatex',  # for saving figures with lualatex, use ...savefig('.. .pdf', backend='pgf')
+                          'pgf.rcfonts': False,
+                          'pgf.preamble': r"\usepackage{siunitx}\usepackage{xfrac}\usepackage{amsmath}\usepackage{unicode-math}\setmathfont{latinmodern-math.otf}\setmathfont[range=\mathfrak]{Old English Text MT}\setmathfont[range=\mathbb]{texgyrepagella-math.otf}",
                      'font.size':10,
                      'legend.fontsize':10,
                      'xtick.labelsize':10,
@@ -51,18 +77,17 @@ def get_pcd(purpose='print'):
 
 
 def test():
-    import matplotlib
     import matplotlib.pyplot as plt
-    with matplotlib.rc_context(get_pcd()):
-
+    pcd = get_pcd('print')
+    with matplotlib.rc_context(pcd):
         plt.figure()
-        plt.plot([1, 2, 3], [1, 4, 1])
-        plt.xlabel('$\sfrac{x}{b}$')
-        plt.ylabel('Nano [\si{\metre}]')
+        plt.title(r'$n_\mathrm{ord} \mathfrak{k} \mathcal{h}$ \si{\metre\per\second\squared}')
+        # plt.title(r'$\si{\metre}$')
+        plt.savefig('/home/sima9999/test.pdf', backend='pgf')
         plt.show()
-
-
-import re
+        print('\nInside context:')
+        print(f"  'text.usetex': {mpl.rcParams['text.usetex']}")
+        print(f"  'text.latex.preamble': {mpl.rcParams['text.latex.preamble']}")
 
 
 def tex_escape(text):
