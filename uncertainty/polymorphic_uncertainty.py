@@ -2355,11 +2355,18 @@ class PolyUQ(object):
 
             pbar = simplePbar(num_resamples)
             res = scipy.stats.bootstrap(np.arange(y_resamples)[np.newaxis,:], bootstr_wrap,
-                                        method='basic',
+                                        method='percentile',
                                         n_resamples=num_resamples, vectorized=False,
                                         )
-            S1 = (res.confidence_interval.low + res.confidence_interval.high) / 2
             conf = [res.confidence_interval.low, res.confidence_interval.high]
+            if np.any(conf[0] < 0):
+                logger.warning(f'Lower bound of confidence interval {conf[0]} < 0. Try lowering confidence_level.')
+                # conf[0][conf[0] < 0] = 0
+            if np.any(conf[1]) > 1:
+                logger.warning(f'Upper bound of confidence interval {conf[1]} < 1. Try lowering confidence_level.')
+                # conf[1][conf[1] > 1] = 1
+            S1 = np.mean(res.bootstrap_distribution, axis=-1)
+
         elif method == 'dens':
             if num_subdivisions is not None:
                 logger.warning('The number of subdivisions can not be provided for density based estimation.')
@@ -2369,7 +2376,12 @@ class PolyUQ(object):
             SA_S = delta.analyze(problem, X, Y, y_resamples=y_resamples, num_resamples=num_resamples)
             S1 = SA_S['delta']
             conf = [SA_S['delta'] - SA_S['delta_conf'], SA_S['delta'] + SA_S['delta_conf']]
-
+            if np.any(conf[0]) < 0:
+                logger.warning(f'Lower bound of confidence interval {conf[0]} < 0. Try lowering conf_level.')
+                # conf[0][conf[0] < 0] = 0
+            if np.any(conf[1]) > 1:
+                logger.warning(f'Upper bound of confidence interval {conf[1]} < 1. Try lowering conf_level.')
+                # conf[1][conf[1] > 1] = 1
         self.S_point = S1
         self.S_conf = conf
         self.S_meth = method
