@@ -64,7 +64,7 @@ def multi_sensi(vars_ale, vars_epi, result_dir, ret_names, method, **kwargs):
         s_vals.append(S)
 
     s_vals = np.array(s_vals)
-    print(s_vals)
+    # print(s_vals)
 
     im_ratio = s_vals.shape[0] / s_vals.shape[1]
     pcd = get_pcd('print')
@@ -74,9 +74,12 @@ def multi_sensi(vars_ale, vars_epi, result_dir, ret_names, method, **kwargs):
     # if True:
         plt.figure()
         plt.imshow(s_vals,
-                   # vmin=1e-3, 
-                   vmax=1,
-                  cmap='Greys', norm='log')
+                   vmin=0, 
+                   # vmax=0.4,
+                  cmap='Greys', 
+                   # norm='log'
+                  )
+        
         plt.colorbar(fraction=0.0465 * im_ratio, pad=0.04, label='Sensitivity $\hat{S}_1$')
         if len(ret_names) > 1:
             plt.gca().set_yticks(np.arange(len(pretty_names)), pretty_names)
