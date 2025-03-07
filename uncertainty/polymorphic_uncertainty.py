@@ -1912,9 +1912,9 @@ class PolyUQ(object):
                     if np.any(out_of_bounds):
                         logger.warning(f'Minimum out of bounds at sample {n_ale} hypercube {i_hyc} for variable nr {np.where(out_of_bounds)[1]}')
 
-                    out_low = interp(temp_x)
+                    out_low = np.squeeze(interp(temp_x))
                     if out_low < out_min:
-                        err = np.abs(out_min - out_low)[0]
+                        err = np.abs(out_min - out_low)
                         intp_undershot[0] += 1
                         intp_undershot[1] += err
                         out_low = out_min
@@ -1933,9 +1933,9 @@ class PolyUQ(object):
                     if np.any(out_of_bounds):
                         logger.warning(f'Maximum out of bounds at sample {n_ale} hypercube {i_hyc} for variable nr {np.where(out_of_bounds)[1]}')
 
-                    out_up = interp(temp_x)
+                    out_up = np.squeeze(interp(temp_x))
                     if out_up > out_max:
-                        err = np.abs((out_up - out_max))[0]
+                        err = np.abs((out_up - out_max))
                         intp_exceed[0] += 1
                         intp_exceed[1] += err
                         out_up = out_max
