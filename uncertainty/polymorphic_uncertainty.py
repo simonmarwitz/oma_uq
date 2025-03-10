@@ -1668,24 +1668,27 @@ class PolyUQ(object):
             intp_errors = self.intp_errors
             assert len(intp_errors) >= N_mcs_ale
 
+        iter_ale = range(kwargs.pop('start_ale', 0), kwargs.pop('end_ale', N_mcs_ale))
+
         if n_imp_hyc == 1:
             '''
             What does no-imp imply?
-            The N_mcs_imp = 1 (only a single column in the hypothetical sample grid)
+            
+            Option A: The N_mcs_imp = 1 (only a single column in the hypothetical sample grid)
             So there is nothing to be optimized, simply copy the out_samp to imp_foc
             However, we need the full output to be present. The method runs as such, but
             considering that it just copies data, it is super slow.
+            
+            Option B: Only a single hypercube exists but is sampled.
             
             Here's a shortcut:
             '''
             logger.info("There are no imprecise variables. Skipping interval optimization")
 
-            imp_foc[:,:, 0] = out_samp
-            imp_foc[:,:, 1] = out_samp
+            imp_foc[iter_ale, 0, 0] = np.min(out_samp[iter_ale,:], axis=1)
+            imp_foc[iter_ale, 0, 1] = np.max(out_samp[iter_ale,:], axis=1)
 
             iter_ale = []
-        else:
-            iter_ale = range(kwargs.pop('start_ale', 0), kwargs.pop('end_ale', N_mcs_ale))
 
         # pbar = simplePbar(n_imp_hyc * len(iter_ale))
         if 'RAY_JOB_ID' in os.environ or plot_res:
@@ -2009,33 +2012,6 @@ class PolyUQ(object):
                         s += f'{out_max:1.2g}'
                         logger.info(s)
 
-                    # arg_vars = kwargs.get('arg_vars', None)
-                    # mapping_function = kwargs.get('mapping_function', None)
-                    # if arg_vars is not None and mapping_function is not None:
-                    #
-                    #     opt_var=0
-                    #     for focal, var, b in zip(focals, vars_imp, vars_opt):
-                    #         for arg,var_ in arg_vars.items():
-                    #             if var_ == var:
-                    #                 if b:
-                    #                     arg_vals_l[arg] = unit_x_low[opt_var]
-                    #                     arg_vals_h[arg] = unit_x_up[opt_var]
-                    #                     opt_var+=1
-                    #                 else:
-                    #                     arg_vals_l[arg] = focal[0]
-                    #                     arg_vals_h[arg] = focal[1]
-                    #                 break
-                    #         else:
-                    #             print(f'could not find {var} in {arg_vars}')
-                    #
-                    #     fmin_true = mapping_function(**arg_vals_l, working_dir='/dev/shm/womo1998',result_dir='/dev/shm/womo1998', skip_existing=False)
-                    #     fmax_true = mapping_function(**arg_vals_h, working_dir='/dev/shm/womo1998',result_dir='/dev/shm/womo1998', skip_existing=False)
-                    #     logger.debug(f'Approximated: /t {out_low:1.3f}...{out_up:1.3f}')
-                    #     logger.debug(f'True: /t {fmin_true:1.3f}...{fmax_true:1.3f}')
-                    #
-                    #     imp_foc[n_ale, i_hyc, :] = fmin_true, fmax_true
-
-                    # next(pbar)
                     pbar()
                     if plot_res:
                         from IPython import display
