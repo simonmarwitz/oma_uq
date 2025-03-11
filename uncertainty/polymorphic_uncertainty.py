@@ -1694,7 +1694,7 @@ class PolyUQ(object):
         if 'RAY_JOB_ID' in os.environ or plot_res:
             bar_kwargs = {
                 'force_tty':True,
-                'refresh_secs':240,  # every four minutes
+                'refresh_secs':60,  # every four minutes
                 'bar':None,
                 'spinner':None,
                 'enrich_print':False}
@@ -2122,7 +2122,7 @@ class PolyUQ(object):
         if 'RAY_JOB_ID' in os.environ:
             bar_kwargs = {
                 'force_tty':True,
-                'refresh_secs':240,  # every four minutes
+                'refresh_secs':60,  # every  minute
                 'bar':None,
                 'spinner':None,
                 'enrich_print':False}
@@ -2135,7 +2135,7 @@ class PolyUQ(object):
                 for i_inc_hyc, hypercube in enumerate(inc_hyc_foc_inds):
                     i_hyc = i_imp_hyc * n_inc_hyc + i_inc_hyc
                     if hypercube:
-                        focals = np.vstack([focals[ind,:] for focals, ind in zip(numeric_focals, hypercube)])
+                        focals = np.vstack([focals[ind,:] for focals, ind in zip(numeric_focals, hypercube)])  # (n_vars_inc, 2)
                     else:
                         focals = np.empty((0, 2))
                     # TODO: reduce number of optimization variables if focal set is a singleton (see estimate_imp)
@@ -2143,9 +2143,9 @@ class PolyUQ(object):
                     # n_vars_opt = np.sum(vars_opt)
 
                     # print(focals, vars_inc)
-                    bounds = focals
+                    bounds = focals  # (n_vars_inc, 2)
                     # bounds = [focs[ind] for focs, ind in zip(numeric_focals, inc_hyc_foc_inds[i_inc_hyc])]
-                    init = np.mean(bounds, axis=1, keepdims=True)
+                    init = np.mean(bounds, axis=1, keepdims=True)  # (n_vars_inc, 1)
 
                     sort_ind = np.argsort(imp_foc[:N_mcs_ale, i_imp_hyc,:], axis=0)
                     # remove nans from array by removing respective indices
@@ -2160,7 +2160,7 @@ class PolyUQ(object):
 
                         logging.disable(logging.INFO)
                         if n_inc_hyc > 1:
-                            resl = scipy.optimize.minimize(fun=interval_range, x0=np.vstack((init, init)),
+                            resl = scipy.optimize.minimize(fun=interval_range, x0=np.squeeze(np.vstack((init, init))),  # (2 * n_vars_inc, 1)
                                                 args=(stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_inc, n_vars_inc, stat_fun_kwargs),
                                                 bounds=np.vstack((bounds, bounds)))
                             if not resl.success:

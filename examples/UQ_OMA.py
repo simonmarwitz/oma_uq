@@ -30,6 +30,65 @@ global ansys
 from uncertainty.polymorphic_uncertainty import MassFunction, RandomVariable, PolyUQ
 
 
+def est_imp(poly_uq, result_dir, ret_name, ret_ind):
+    # from SciPy Docs: approximate average distance between nodes (which is a good start)
+    epsilon_dict = {'snr_db':3.5,
+                 'snr_db_est':2,
+                 'f_sc':2,
+                 'f_cf':2,
+                 'f_sd':2,
+                 'd_sd':2,
+                 'sum_mc_sc':5.5,
+                 'sum_mc_cf':5.5,
+                 'sum_mc_sd':5.5}
+
+    ret_dir = f'{ret_name}-{".".join(str(e) for e in ret_ind.values())}'
+
+    samp_path = os.path.join(result_dir, 'polyuq_samp.npz')
+    prop_path = os.path.join(result_dir, 'estimations', f'{ret_dir}/polyuq_prop.npz')
+    imp_path = os.path.join(result_dir, 'estimations', f'{ret_dir}/polyuq_imp.npz')
+
+    poly_uq.load_state(samp_path, differential='samp')
+    poly_uq.load_state(prop_path, differential='prop')
+    # poly_uq.N_mcs_ale = 13717
+
+    start_ale = 0
+
+    if os.path.exists(imp_path):
+        poly_uq.load_state(imp_path, differential='imp')
+
+        samp_fin = np.nonzero(
+                np.any(
+                    np.isnan(poly_uq.imp_foc[:,:, 0]),
+                    axis=1)
+            )[0]
+
+        samp_fin = samp_fin[samp_fin > start_ale]
+
+        if len(samp_fin) > 0:
+            start_ale = np.min(samp_fin)
+        else:
+            start_ale = poly_uq.imp_foc.shape[0]
+
+    while start_ale < poly_uq.N_mcs_ale:
+        print(f'restarting {ret_dir} at sample {start_ale}')
+        end_ale = min(start_ale + 100, poly_uq.N_mcs_ale)
+        poly_uq.estimate_imp(
+            interp_fun='rbf',
+            opt_meth='genetic',
+            plot_res=False,
+            plot_intp=False,
+            intp_err_warn=20,
+            extrp_warn=10,
+            start_ale=start_ale,
+            end_ale=end_ale,
+            kernel='gaussian',
+            epsilon=epsilon_dict[ret_name]
+        )
+        poly_uq.save_state(imp_path, differential='imp')
+        start_ale = end_ale
+
+
 def multi_sensi(vars_ale, vars_epi, result_dir, ret_names, method, **kwargs):
 
     dim_ex = 'cartesian'
@@ -74,12 +133,12 @@ def multi_sensi(vars_ale, vars_epi, result_dir, ret_names, method, **kwargs):
     # if True:
         plt.figure()
         plt.imshow(s_vals,
-                   vmin=0, 
+                   vmin=0,
                    # vmax=0.4,
-                  cmap='Greys', 
+                  cmap='Greys',
                    # norm='log'
                   )
-        
+
         plt.colorbar(fraction=0.0465 * im_ratio, pad=0.04, label='Sensitivity $\hat{S}_1$')
         if len(ret_names) > 1:
             plt.gca().set_yticks(np.arange(len(pretty_names)), pretty_names)
