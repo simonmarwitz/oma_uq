@@ -205,7 +205,7 @@ def stage2n3mapping(n_locations,
     modules = ['pyOMA.core.Helpers', 'pyOMA.core.PreProcessingTools', 'pyOMA.core.SSICovRef', 'pyOMA.core.SSIData', 'pyOMA.core.PLSCF', 'model.mechanical', 'model.acquisition']
     for module in modules:
         logger_ = logging.getLogger(module)
-        logger_.setLevel(logging.WARNING)
+        logger_.setLevel(logging.INFO)
 
     bits_effective, snr_db_est, snr_db, channel_defs, acqui = stage2mapping(n_locations,
                             DTC,
@@ -262,7 +262,7 @@ def stage2n3mapping(n_locations,
 
     return bits_effective.astype('float32'), snr_db_est.astype('float32'), snr_db.astype('float32'), \
             f_sc.astype('float32'), d_sc.astype('float32'), phi_sc.astype('complex64'), mc_sc.astype('float32'), \
-            f_cf.astype('float32'), d_cf.astype('float32'), phi_cf.astype('complex64'), np.abs(mc_cf).astype('float32'), \
+            f_cf.astype('float32'), d_cf.astype('float32'), phi_cf.astype('complex64'), mc_cf.astype('complex64'), \
             f_sd.astype('float32'), d_sd.astype('float32'), phi_sd.astype('complex64'), mc_sd.astype('float32'), \
             phi_indexer.astype('uint8')
 
@@ -401,6 +401,8 @@ def _stage3mapping(m_lags, estimator,
         except Exception as e:
             os.remove(this_result_dir / 'modal.npz')
 
+    logger.warning('Signals are not offset corrected.')
+
     prep_signals = None
     if os.path.exists(this_result_dir / 'prep_signals.npz') and skip_existing:
         try:
@@ -434,11 +436,13 @@ def _stage3mapping(m_lags, estimator,
     # if prep_signals is None:
         prep_signals = PreProcessSignals(**pd_kwargs, ref_channels=ref_channels)
         # prep_signals.corr_blackman_tukey(m_lags, num_blocks=n_blocks, refs_only=True)
-        if estimator == 'blackman-tukey':
-            prep_signals.corr_blackman_tukey(m_lags, num_blocks=n_blocks)
-        elif estimator == 'welch':
-            prep_signals.corr_welch(m_lags, n_segments=n_blocks)
-        prep_signals.save_state(this_result_dir / 'prep_signals.npz')
+
+    prep_signals.filter_signals(highpass=0.01)
+    if estimator == 'blackman-tukey':
+        prep_signals.corr_blackman_tukey(m_lags, num_blocks=n_blocks)
+    elif estimator == 'welch':
+        prep_signals.corr_welch(m_lags, n_segments=n_blocks)
+    # prep_signals.save_state(this_result_dir / 'prep_signals.npz')
 
     rng = np.random.default_rng(seed)
     cardinality = n_blocks // k
@@ -485,7 +489,8 @@ def _stage3mapping(m_lags, estimator,
     A_sc, C_sc, G_sc = ssi_cov_ref.estimate_state(model_order)
     f_sc, d_sc, phi_sc, lamda_sc = ssi_cov_ref.modal_analysis(A_sc, C_sc)
     _, mc_sc = ssi_cov_ref.synthesize_correlation(A_sc, C_sc, G_sc)  # expensive, last step in analysis: does not have to be saved
-
+    # from pyOMA.core.SSICovRef import plot_corr_synth
+    # plot_corr_synth(ssi_cov_ref)
     del ssi_cov_ref
 
     plscf = None
@@ -559,7 +564,8 @@ def _stage3mapping(m_lags, estimator,
             f_cf=f_cf.astype('float32'),
             d_cf=d_cf.astype('float32'),
             phi_cf=phi_cf.astype('complex64'),
-            mc_cf=np.abs(mc_cf).astype('float32'),
+            # mc_cf=np.abs(mc_cf).astype('float32'),
+            mc_cf=mc_cf.astype('complex64'),
             f_sd=f_sd.astype('float32'),
             d_sd=d_sd.astype('float32'),
             phi_sd=phi_sd.astype('complex64'),
