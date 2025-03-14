@@ -205,7 +205,7 @@ def stage2n3mapping(n_locations,
     modules = ['pyOMA.core.Helpers', 'pyOMA.core.PreProcessingTools', 'pyOMA.core.SSICovRef', 'pyOMA.core.SSIData', 'pyOMA.core.PLSCF', 'model.mechanical', 'model.acquisition']
     for module in modules:
         logger_ = logging.getLogger(module)
-        logger_.setLevel(logging.INFO)
+        logger_.setLevel(logging.WARNING)
 
     bits_effective, snr_db_est, snr_db, channel_defs, acqui = stage2mapping(n_locations,
                             DTC,
@@ -401,8 +401,6 @@ def _stage3mapping(m_lags, estimator,
         except Exception as e:
             os.remove(this_result_dir / 'modal.npz')
 
-    logger.warning('Signals are not offset corrected.')
-
     prep_signals = None
     if os.path.exists(this_result_dir / 'prep_signals.npz') and skip_existing:
         try:
@@ -437,7 +435,9 @@ def _stage3mapping(m_lags, estimator,
         prep_signals = PreProcessSignals(**pd_kwargs, ref_channels=ref_channels)
         # prep_signals.corr_blackman_tukey(m_lags, num_blocks=n_blocks, refs_only=True)
 
-    prep_signals.filter_signals(highpass=0.01)
+    # logger.warning('Signals are not offset corrected.')
+    # Fix transients resulting from close-to-DC components in spectral noise  (sensor noise)
+    prep_signals.filter_signals(highpass=0.1)
     if estimator == 'blackman-tukey':
         prep_signals.corr_blackman_tukey(m_lags, num_blocks=n_blocks)
     elif estimator == 'welch':
@@ -512,12 +512,15 @@ def _stage3mapping(m_lags, estimator,
         plscf.build_half_spectra()  # must not compute psds
         # plscf.save_state(this_result_dir / 'plscf.npz')
 
+    alpha, beta_l_i = plscf.estimate_model(model_order)  # expensive, but not assigning class variables that could be saved
+    
     if estimator == 'blackman-tukey':
         prep_signals.corr_matrix_bt = test_corr
     elif estimator == 'welch':
         prep_signals.corr_matrix_wl = test_corr
-
-    alpha, beta_l_i = plscf.estimate_model(model_order)  # expensive, but not assigning class variables that could be saved
+    
+    logger.warning(f'Half-Spectra with validation sets untested')
+    plscf.build_half_spectra()
     f_cf, d_cf, phi_cf, lamda_cf = plscf.modal_analysis_residuals(alpha, beta_l_i)
     _, mc_cf = plscf.synthesize_spectrum(alpha, beta_l_i, modal=True)  # expensive, but not assigning class variables that could be saved
 
