@@ -30,6 +30,41 @@ global ansys
 from uncertainty.polymorphic_uncertainty import MassFunction, RandomVariable, PolyUQ
 
 
+def sensitive_vars(ret_name, vars_epi):
+    sensitive_names = {'snr_db':['sensor_noise_rms',
+                       'spectral_noise_slope',
+                      'range_estimation_margin',
+                      'anti_aliasing_cutoff_factor',
+                      'quant_bit_factor', ],
+            'snr_db_est':['sensor_noise_rms',
+                       'spectral_noise_slope'],
+            'f_sc':[],  # 2
+            'f_cf':[],  # 3
+            'f_sd':[],  # 4
+            'd_sd':[],  # 5
+            'sum_mc_sc':['decimation_factor',
+                       'm_lags',
+                       'model_order',
+                       'sensor_noise_rms',
+                       'spectral_noise_slope'],  # 6
+            'sum_mc_cf':['decimation_factor',
+                       'm_lags',
+                       'model_order',
+                       'sensor_noise_rms',
+                       'spectral_noise_slope'],  # 7
+            'sum_mc_sd':['decimation_factor',
+                       'm_lags',
+                       'model_order',
+                       'sensor_noise_rms',
+                       'spectral_noise_slope']}[ret_name]
+    sensitive_names.append('c_vb')
+    sensitive_names.append('lamda_vb')
+
+    sensitive_vars = [var for var in vars_epi if var.name in sensitive_names]
+
+    return sensitive_vars
+
+
 def est_imp(poly_uq, result_dir, ret_name, ret_ind):
     # from SciPy Docs: approximate average distance between nodes (which is a good start)
     epsilon_dict = {'snr_db':3.5,
@@ -513,12 +548,12 @@ def _stage3mapping(m_lags, estimator,
         # plscf.save_state(this_result_dir / 'plscf.npz')
 
     alpha, beta_l_i = plscf.estimate_model(model_order)  # expensive, but not assigning class variables that could be saved
-    
+
     if estimator == 'blackman-tukey':
         prep_signals.corr_matrix_bt = test_corr
     elif estimator == 'welch':
         prep_signals.corr_matrix_wl = test_corr
-    
+
     logger.warning(f'Half-Spectra with validation sets untested')
     plscf.build_half_spectra()
     f_cf, d_cf, phi_cf, lamda_cf = plscf.modal_analysis_residuals(alpha, beta_l_i)

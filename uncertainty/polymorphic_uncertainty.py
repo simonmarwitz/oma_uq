@@ -1572,7 +1572,8 @@ class PolyUQ(object):
         def scale(x):
             # subtraction always along the last axis (?)
             # x.shape = (n_obs, n_vars)
-            return np.squeeze((x - x_supp[:, 0]) / (x_supp[:, 1] - x_supp[:, 0]))
+            # return np.squeeze((x - x_supp[:, 0]) / (x_supp[:, 1] - x_supp[:, 0]))
+            return (x - x_supp[:, 0]) / (x_supp[:, 1] - x_supp[:, 0])
 
         def unscale(x):
             return x * (x_supp[:, 1] - x_supp[:, 0]) + x_supp[:, 0]
@@ -1713,6 +1714,9 @@ class PolyUQ(object):
                 else:
                     this_out = out_samp[0,:N_mcs_imp]
 
+                sparse_inds = ~np.isnan(this_out)
+                N_mcs_sparse = np.sum(sparse_inds)
+
                 this_inp_suppl = inp_suppl_ale.iloc[n_ale]
                 this_inp_prim = inp_samp_prim.iloc[n_ale]
                 #
@@ -1742,20 +1746,20 @@ class PolyUQ(object):
                 #         else:
                 #             pass
 
-                out_max = np.max(this_out)
-                out_min = np.min(this_out)
+                out_max = np.max(this_out[sparse_inds])
+                out_min = np.min(this_out[sparse_inds])
                 out_range = out_max - out_min
 
-                x_out_max = x_samp[np.argmax(this_out),:]
-                x_out_min = x_samp[np.argmin(this_out),:]
+                # x_out_max = x_samp[np.argmax(this_out[sparse_inds]),:]
+                # x_out_min = x_samp[np.argmin(this_out[sparse_inds]),:]
 
                 if plot_res:
-                    df = inp_samp_prim[[var.name for var in vars_imp]].iloc[:N_mcs_imp,:]
-                    df[self.out_name] = this_out
+                    df = inp_samp_prim[[var.name for var in vars_imp]].iloc[sparse_inds,:]
+                    df[self.out_name] = this_out[sparse_inds]
                     grid = plot_grid(df, self.out_name)
 
                 now = time.time()
-                interp = interp_fun(scale(x_samp), this_out, **kwargs)
+                interp = interp_fun(scale(x_samp[sparse_inds]), this_out[sparse_inds], **kwargs)
                 # if isinstance(interp, scipy.interpolate.NearestNDInterpolator):
                 #     interp.neighbor_dist = neighbor_dist
                 #     print(interp.neighbor_dist)
@@ -1770,24 +1774,24 @@ class PolyUQ(object):
                     # finally use all samples for the interpolator
                     # k = np.arange(N_mcs) #loo
                     # k = np.random.randint(0, N_mcs, int(N_mcs//10)) # 10 % num sample runs of loo
-                    k = np.random.randint(0, N_mcs_imp, min(N_mcs_imp, 100))  # 100 sample runs of loo
+                    k = np.random.randint(0, N_mcs_sparse, min(N_mcs_sparse, 100))  # 100 sample runs of loo
                     val_errs = []
-                    ind = np.ones(N_mcs_imp, dtype=bool)
-                    if 1 < N_mcs_imp < 10 * len(k):  # do loo
+                    ind = np.ones(N_mcs_sparse, dtype=bool)
+                    if 1 < N_mcs_sparse < 10 * len(k):  # do loo
                         for k_i in k:
                             ind[k_i] = False
-                            interp_loo = interp_fun(scale(x_samp[ind,:]), this_out[ind], **kwargs)
-                            err = interp_loo(scale(x_samp[~ind,:])) - this_out[~ind]
+                            interp_loo = interp_fun(scale(x_samp[sparse_inds,:][ind,:]), this_out[sparse_inds][ind], **kwargs)
+                            err = interp_loo(scale(x_samp[sparse_inds,:][~ind,:])) - this_out[sparse_inds][~ind]
                             val_errs.append(err)
                             ind[k_i] = True
 
                         intp_err = np.sqrt(np.nanmean(np.power(val_errs, 2))) / out_range
                         if intp_err * 100 > intp_err_warn:
                             logger.warning(f'RMSE of interpolator using {len(k)} runs of leave-one-out cross-validation: {intp_err*100:1.3f} percent')
-                    elif 1 < N_mcs_imp:  # do lko
+                    elif 1 < N_mcs_sparse:  # do lko
                         ind[k] = False
-                        interp_lko = interp_fun(scale(x_samp[ind,:]), this_out[ind], **kwargs)
-                        val_errs = interp_lko(scale(x_samp[~ind,:])) - this_out[~ind]
+                        interp_lko = interp_fun(scale(x_samp[sparse_inds,:][ind,:]), this_out[sparse_inds][ind], **kwargs)
+                        val_errs = interp_lko(scale(x_samp[sparse_inds,:][~ind,:])) - this_out[sparse_inds][~ind]
 
                         intp_err = np.sqrt(np.nanmean(np.power(val_errs, 2))) / out_range
                         if intp_err * 100 > intp_err_warn:
@@ -1926,7 +1930,7 @@ class PolyUQ(object):
 
                     if isinstance(interp, scipy.interpolate.NearestNDInterpolator):
                         i, _ = interp.neighbor_dist(temp_x)
-                        x_low = x_samp[i,:]
+                        x_low = x_samp[sparse_inds,:][i,:]
                     else:
                         x_low = unscale(temp_x)
 
@@ -1947,7 +1951,7 @@ class PolyUQ(object):
 
                     if isinstance(interp, scipy.interpolate.NearestNDInterpolator):
                         i, _ = interp.neighbor_dist(temp_x)
-                        x_up = x_samp[i,:]
+                        x_up = x_samp[sparse_inds,:][i,:]
                     else:
                         x_up = unscale(temp_x)
 
@@ -2289,13 +2293,6 @@ class PolyUQ(object):
         elif samp_sel == 'all' or samp_sel == 'rand':  # select all, flat; only variance-based is fast enough for this
             # logger.warning("Indexing flat arrays untested. Results may be wrong!")
 
-            if samp_sel == 'all':
-                if y_resamples is not None:
-                    logger.warning(f"All sample selection. y_resamples has been reset: y_resamples={y_resamples}")
-                y_resamples = N_mcs_ale * N_mcs_epi
-            elif y_resamples is None:
-                raise ValueError('y_resamples must be specified when using random selection.')
-
             inds_ale, inds_epi = np.mgrid[0:N_mcs_ale, 0:N_mcs_epi]
             inds_ale, inds_epi = inds_ale.ravel(), inds_epi.ravel()
 
@@ -2307,6 +2304,23 @@ class PolyUQ(object):
 
             X = np.array(arrays_grid).T
             Y = out_samp[inds_ale, inds_epi]
+
+            sparse_inds = ~np.isnan(Y)
+            N_mcs_sparse = np.sum(sparse_inds)
+
+            print(N_mcs_sparse, N_mcs_ale, N_mcs_epi)
+
+            X = X[sparse_inds]
+            Y = Y[sparse_inds]
+
+            if samp_sel == 'all':
+                if y_resamples is not None:
+                    logger.warning(f"All sample selection. y_resamples has been reset: y_resamples={y_resamples}")
+                y_resamples = N_mcs_sparse
+                # y_resamples = N_mcs_ale * N_mcs_epi
+            elif y_resamples is None:
+                raise ValueError('y_resamples must be specified when using random selection.')
+
             names = names_ale + names_epi
             # logger.warning("Hack for uq_modal_beam must be removed...")
             # ind_occ = names.index('ice_occ')
