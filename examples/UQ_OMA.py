@@ -32,31 +32,40 @@ from uncertainty.polymorphic_uncertainty import MassFunction, RandomVariable, Po
 
 def sensitive_vars(ret_name, vars_epi):
     sensitive_names = {'snr_db':['sensor_noise_rms',
-                       'spectral_noise_slope',
-                      'range_estimation_margin',
-                      'anti_aliasing_cutoff_factor',
-                      'quant_bit_factor', ],
-            'snr_db_est':['sensor_noise_rms',
-                       'spectral_noise_slope'],
-            'f_sc':[],  # 2
-            'f_cf':[],  # 3
-            'f_sd':[],  # 4
-            'd_sd':[],  # 5
-            'sum_mc_sc':['decimation_factor',
-                       'm_lags',
-                       'model_order',
-                       'sensor_noise_rms',
-                       'spectral_noise_slope'],  # 6
-            'sum_mc_cf':['decimation_factor',
-                       'm_lags',
-                       'model_order',
-                       'sensor_noise_rms',
-                       'spectral_noise_slope'],  # 7
-            'sum_mc_sd':['decimation_factor',
-                       'm_lags',
-                       'model_order',
-                       'sensor_noise_rms',
-                       'spectral_noise_slope']}[ret_name]
+                                 'spectral_noise_slope',
+                                 'range_estimation_margin',
+                                 'anti_aliasing_cutoff_factor',
+                                 'quant_bit_factor', ],
+                       'snr_db_est':['sensor_noise_rms',
+                                   'spectral_noise_slope'],
+                       'f_sc':[],  # 2
+                       'f_cf':[],  # 3
+                       'f_sd':[],  # 4
+                       'd_sd':[],  # 5
+                       'sum_mc_sc':['spectral_noise_slope',
+                                    'sensor_noise_rms',
+                                    'DAQ_noise_rms',
+                                    'decimation_factor',
+                                    'duration',
+                                    'm_lags',
+                                    'estimator',
+                                    'model_order'],  # 6
+                       'sum_mc_cf':['spectral_noise_slope',
+                                    'sensor_noise_rms',
+                                    'DAQ_noise_rms',
+                                    'decimation_factor',
+                                    'duration',
+                                    'm_lags',
+                                    'estimator',
+                                    'model_order'],  # 7
+                       'sum_mc_sd':['spectral_noise_slope',
+                                    'sensor_noise_rms',
+                                    'DAQ_noise_rms',
+                                    'decimation_factor',
+                                    'duration',
+                                    'm_lags',
+                                    'estimator',
+                                    'model_order'],}[ret_name]
     sensitive_names.append('c_vb')
     sensitive_names.append('lamda_vb')
 
@@ -194,8 +203,8 @@ def multi_sensi(vars_ale, vars_epi, result_dir, ret_names, method, **kwargs):
         plt.xlabel('Input variable')
         plt.subplots_adjust(top=0.97, bottom=0.6, left=0.2, right=0.9, hspace=0.05)
 
-        plt.savefig('/home/sima9999/2019_OMA_UQ/tex/figures/uncertainty/sensi_uq_oma.pdf', backend='pgf')
-        plt.savefig('/home/sima9999/2019_OMA_UQ/tex/figures/uncertainty/sensi_uq_oma.png', backend='pgf')
+        plt.savefig('/home/sima9999/2019_OMA_UQ/tex/figures/examples/uq_oma_a/sensi_all.pdf', backend='pgf')
+        plt.savefig('/home/sima9999/2019_OMA_UQ/tex/figures/examples/uq_oma_a/sensi_all.png', backend='pgf')
     return
 
 
@@ -1249,7 +1258,9 @@ def vars_definition(stage=2):
 
     spectral_noise_slope = MassFunction('spectral_noise_slope', [(-0.8, -0.3), ], [1.0, ], primary=True)
     spectral_noise_slope.pretty_name = r'$\Delta \overline{\mathcal{S}}$'
-    sensor_noise_rms = MassFunction('sensor_noise_rms', [(1e-6, 1e-2,), ], [1.0, ], primary=True)
+    # sensor_noise_rms = MassFunction('sensor_noise_rms', [(1e-6, 1e-2,), ], [1.0, ], primary=True)
+    # verly low noise seismic, low noise seismic, seismic, regular
+    sensor_noise_rms = MassFunction('sensor_noise_rms', [(1e-6,1e-5), (1e-5,5e-5), (5e-5,5e-4), (5e-4,1e-2), ], [0.4, 0.3, 0.2,0.1], primary=True)
     sensor_noise_rms.pretty_name = r'$ \sigma_{\eta_{\mathcal{S}}}$'
     # Formal definition of spectral_noise would result in a sample of n_channels x num_timesteps x N_mcs_epi, where n_channels, num_timesteps changes for each n_epi
     # Actual implementation is in Acquire.apply_sensor, using a seed, derived from the sample ID
@@ -1289,7 +1300,9 @@ def vars_definition(stage=2):
     quant_bit_factor = MassFunction('quant_bit_factor', [(3,), (4,), (6,)], [0.1, 0.3, 0.6], primary=True)
     quant_bit_factor.pretty_name = r'$b$'
 
-    duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60.,), (120.*60.,)], [0.1, 0.2, 0.5, 0.2], primary=True)
+    # duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60.,), (120.*60.,)], [0.1, 0.2, 0.5, 0.2], primary=True)
+    duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60.,120.*60.)], [0.1, 0.4, 0.5], primary=True)
+
     duration.pretty_name = r'$T$'
 
     tau_max = MassFunction('tau_max', [(20.0, 175.0), (60.0, 175.0)], [0.5, 0.5], primary=True)
