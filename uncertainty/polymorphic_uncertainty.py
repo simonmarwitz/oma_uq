@@ -2168,7 +2168,7 @@ class PolyUQ(object):
                                                 args=(stat_fun, imp_foc, i_imp_hyc, sort_ind, i_stat, vars_inc, n_vars_inc, stat_fun_kwargs),
                                                 bounds=np.vstack((bounds, bounds)))
                             if not resl.success:
-                                logger.warning(f'Optimizer failed for hypercube {i_hyc} at i_stat {i_stat}. Breaking here.')
+                                logger.warning(f'Optimizer failed for hypercube {i_hyc} at i_stat {i_stat} with message {resl.message}. Breaking here.')
                                 break
                             x_low = resl.x[:n_vars_inc]
                             x_up = resl.x[n_vars_inc:]

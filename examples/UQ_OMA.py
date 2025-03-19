@@ -35,9 +35,12 @@ def sensitive_vars(ret_name, vars_epi):
                                  'spectral_noise_slope',
                                  'range_estimation_margin',
                                  'anti_aliasing_cutoff_factor',
-                                 'quant_bit_factor', ],
+                                 'quant_bit_factor', ],  # 72 hypercubes
                        'snr_db_est':['sensor_noise_rms',
-                                   'spectral_noise_slope'],
+                                 'spectral_noise_slope',
+                                 'range_estimation_margin',
+                                 'anti_aliasing_cutoff_factor',
+                                 'quant_bit_factor', ],  # 72 hypercubes
                        'f_sc':[],  # 2
                        'f_cf':[],  # 3
                        'f_sd':[],  # 4
@@ -49,7 +52,7 @@ def sensitive_vars(ret_name, vars_epi):
                                     'duration',
                                     'm_lags',
                                     'estimator',
-                                    'model_order'],  # 6
+                                    'model_order'],  #  144 hypercubes
                        'sum_mc_cf':['spectral_noise_slope',
                                     'sensor_noise_rms',
                                     'DAQ_noise_rms',
@@ -57,7 +60,7 @@ def sensitive_vars(ret_name, vars_epi):
                                     'duration',
                                     'm_lags',
                                     'estimator',
-                                    'model_order'],  # 7
+                                    'model_order'],  #  144 hypercubes
                        'sum_mc_sd':['spectral_noise_slope',
                                     'sensor_noise_rms',
                                     'DAQ_noise_rms',
@@ -65,7 +68,8 @@ def sensitive_vars(ret_name, vars_epi):
                                     'duration',
                                     'm_lags',
                                     'estimator',
-                                    'model_order'],}[ret_name]
+                                    'model_order'],  # 144 hypercubes
+                       }[ret_name]
     sensitive_names.append('c_vb')
     sensitive_names.append('lamda_vb')
 
@@ -1229,7 +1233,8 @@ def vars_definition(stage=2):
     lamda = MassFunction('lamda_vb', [(5.618, 5.649), (5.91, 6.0)], [0.75, 0.25], primary=False)  # incompleteness
     lamda.pretty_name = r'$\lambda_{\mathfrak{v}}$'
     # whats left is to exchange columns in input samples
-    logger.warning("Variables 'c_vb' and 'lamda_vb' have been wrongly labeled. Input rows must be exchanged prior to incompleteness evaluation")
+    # logger.warning("Variables 'c_vb' and 'lamda_vb' have been wrongly labeled. Input rows must be exchanged prior to incompleteness evaluation")
+    # Done: 19.3.2025
 
     v_b = RandomVariable('weibull_min', 'v_b', [c, lamda], primary=True)  # meter per second
     v_b.pretty_name = r'$\mathfrak{v}_\mathrm{b}$'
@@ -1260,7 +1265,7 @@ def vars_definition(stage=2):
     spectral_noise_slope.pretty_name = r'$\Delta \overline{\mathcal{S}}$'
     # sensor_noise_rms = MassFunction('sensor_noise_rms', [(1e-6, 1e-2,), ], [1.0, ], primary=True)
     # verly low noise seismic, low noise seismic, seismic, regular
-    sensor_noise_rms = MassFunction('sensor_noise_rms', [(1e-6,1e-5), (1e-5,5e-5), (5e-5,5e-4), (5e-4,1e-2), ], [0.4, 0.3, 0.2,0.1], primary=True)
+    sensor_noise_rms = MassFunction('sensor_noise_rms', [(1e-6, 1e-5), (1e-5, 5e-5), (5e-5, 5e-4), (5e-4, 1e-2), ], [0.4, 0.3, 0.2, 0.1], primary=True)
     sensor_noise_rms.pretty_name = r'$ \sigma_{\eta_{\mathcal{S}}}$'
     # Formal definition of spectral_noise would result in a sample of n_channels x num_timesteps x N_mcs_epi, where n_channels, num_timesteps changes for each n_epi
     # Actual implementation is in Acquire.apply_sensor, using a seed, derived from the sample ID
@@ -1301,7 +1306,7 @@ def vars_definition(stage=2):
     quant_bit_factor.pretty_name = r'$b$'
 
     # duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60.,), (120.*60.,)], [0.1, 0.2, 0.5, 0.2], primary=True)
-    duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60.,120.*60.)], [0.1, 0.4, 0.5], primary=True)
+    duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60., 120.*60.)], [0.1, 0.4, 0.5], primary=True)
 
     duration.pretty_name = r'$T$'
 
