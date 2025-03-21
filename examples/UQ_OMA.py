@@ -248,7 +248,7 @@ def stage2n3mapping(n_locations,
                     quant_bit_factor,
                     duration,
                     m_lags, estimator, model_order,
-                    jid, result_dir, working_dir, skip_existing=False, **kwargs):
+                    jid, result_dir, working_dir, skip_existing=True, **kwargs):
 
     modules = ['pyOMA.core.Helpers', 'pyOMA.core.PreProcessingTools', 'pyOMA.core.SSICovRef', 'pyOMA.core.SSIData', 'pyOMA.core.PLSCF', 'model.mechanical', 'model.acquisition']
     for module in modules:
@@ -299,6 +299,7 @@ def stage2n3mapping(n_locations,
     # to save storage, instead of converting all mode shapes, only the phi_indexer is stored for every sample
 
     estimator = ['blackman-tukey', 'welch'][estimator]
+    
 
     f_sc, d_sc, phi_sc, mc_sc, \
     f_cf, d_cf, phi_cf, mc_cf, \
@@ -426,7 +427,7 @@ def _stage3mapping(m_lags, estimator,
     seed = int.from_bytes(bytes(id_ale, 'utf-8'), 'big')
     assert os.path.exists(this_result_dir)
 
-    if os.path.exists(this_result_dir / 'modal.npz') and skip_existing:
+    if False:#os.path.exists(this_result_dir / 'modal.npz') and skip_existing:
         try:
             arr = np.load(this_result_dir / 'modal.npz')
             f_sc = arr['f_sc']
@@ -567,7 +568,7 @@ def _stage3mapping(m_lags, estimator,
     elif estimator == 'welch':
         prep_signals.corr_matrix_wl = test_corr
 
-    logger.warning(f'Half-Spectra with validation sets untested')
+    # logger.warning(f'Half-Spectra with validation sets untested')
     plscf.build_half_spectra()
     f_cf, d_cf, phi_cf, lamda_cf = plscf.modal_analysis_residuals(alpha, beta_l_i)
     _, mc_cf = plscf.synthesize_spectrum(alpha, beta_l_i, modal=True)  # expensive, but not assigning class variables that could be saved

@@ -642,7 +642,12 @@ class DataManager(object):
                 
                 filter_string = kwargs.pop('id_filter',None)
                 if filter_string is not None:
-                    ids_filter = np.char.array(ids).startswith(filter_string)
+                    if isinstance(filter_string, list):
+                        ids_filter = np.char.array(ids).startswith(filter_string[0])
+                        for fs in filter_string[1:]:
+                            ids_filter = ids_filter | (np.char.array(ids).startswith(fs))
+                    else:
+                        ids_filter = np.char.array(ids).startswith(filter_string)
                     in_ds = in_ds.isel(ids=ids_filter)
                     ids = in_ds.ids
                     logger.info(f'Ids have been filtered by {filter_string}. Final length: {len(ids)}')

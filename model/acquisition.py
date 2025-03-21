@@ -1281,7 +1281,7 @@ class Acquire(object):
             modal_energies = validate_array(in_dict['self.modal_energies'])
             modal_amplitudes = validate_array(in_dict['self.modal_amplitudes'])
         else:
-            if not differential in ['sensed', 'sampled', 'nosigs']:
+            if not differential in ['sensed', 'sampled', 'nosigs','blablabla']:
                 logger.warning(f'Unsupported value passed for differential={differential}')
             signal = np.full(re_shape, fill_value=np.nan)
             t_vals = np.full(re_shape[-1], fill_value=np.nan)
