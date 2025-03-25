@@ -691,7 +691,7 @@ class DataManager(object):
             # factor = 0.05
             # tasks = [setup_eval.options(memory=num*factor*1024*1024*1024, name= f'{num*factor} GB {self.title}') for num in m_lags_steps]
             factors = (0.0000875, -0.01125, 2.3475)
-            tasks = [setup_eval.options(memory=(num**2*factors[0]+num*factors[1] + factors[2])*1024*1024*1024, name= f'{(num**2*factors[0]+num*factors[1] + factors[2])} GB {self.title}') for num in m_lags_steps]
+            tasks = [setup_eval.options(memory=(num**2*factors[0]+num*factors[1] + factors[2])*1024*1024*1024, name= f'{(num**2*factors[0]+num*factors[1] + factors[2]):1.2f} GB {self.title}') for num in m_lags_steps]
             
             
             for jid_ind in jid_inds:
