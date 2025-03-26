@@ -255,6 +255,13 @@ def stage2n3mapping(n_locations,
         logger_ = logging.getLogger(module)
         logger_.setLevel(logging.WARNING)
 
+    id_ale, id_epi = jid.split('_')
+    this_result_dir = result_dir / id_ale / id_epi
+
+    if os.path.exists(this_result_dir / 'measurement.npz') and (not os.path.exists(this_result_dir / 'prep_signals.npz')):
+        logger.warning(f"Deleting {this_result_dir / 'measurement.npz'}")
+        os.remove(this_result_dir / 'measurement.npz')
+
     bits_effective, snr_db_est, snr_db, channel_defs, acqui = stage2mapping(n_locations,
                             DTC,
                             sensitivity_nominal, sensitivity_deviation_percent,
@@ -299,7 +306,6 @@ def stage2n3mapping(n_locations,
     # to save storage, instead of converting all mode shapes, only the phi_indexer is stored for every sample
 
     estimator = ['blackman-tukey', 'welch'][estimator]
-    
 
     f_sc, d_sc, phi_sc, mc_sc, \
     f_cf, d_cf, phi_cf, mc_cf, \
@@ -427,7 +433,7 @@ def _stage3mapping(m_lags, estimator,
     seed = int.from_bytes(bytes(id_ale, 'utf-8'), 'big')
     assert os.path.exists(this_result_dir)
 
-    if False:#os.path.exists(this_result_dir / 'modal.npz') and skip_existing:
+    if os.path.exists(this_result_dir / 'modal.npz') and skip_existing:
         try:
             arr = np.load(this_result_dir / 'modal.npz')
             f_sc = arr['f_sc']
@@ -452,6 +458,8 @@ def _stage3mapping(m_lags, estimator,
 
     prep_signals = None
     if os.path.exists(this_result_dir / 'prep_signals.npz') and skip_existing:
+        if id_ale.startswith(('1', '2', '3', '4')):
+            logger.warning(f'The saved PreProcessSignals for {jid} belongs to the errorneous first run!')
         try:
             prep_signals = PreProcessSignals.load_state(this_result_dir / 'prep_signals.npz')
         except Exception as e:
@@ -491,7 +499,8 @@ def _stage3mapping(m_lags, estimator,
         prep_signals.corr_blackman_tukey(m_lags, num_blocks=n_blocks)
     elif estimator == 'welch':
         prep_signals.corr_welch(m_lags, n_segments=n_blocks)
-    # prep_signals.save_state(this_result_dir / 'prep_signals.npz')
+
+    prep_signals.save_state(this_result_dir / 'prep_signals.npz')
 
     rng = np.random.default_rng(seed)
     cardinality = n_blocks // k
@@ -683,7 +692,7 @@ def stage2mapping(n_locations,
     if os.path.exists(this_result_dir / 'measurement.npz') and skip_existing:
         try:
             # acqui = Acquire.load(this_result_dir / 'measurement.npz', differential='nosigs')
-            acqui = Acquire.load(this_result_dir / 'measurement.npz', differential='blablaba')
+            acqui = Acquire.load(this_result_dir / 'measurement.npz', differential='blablabla')
         except Exception as e:
             # os.remove(this_result_dir / 'measurement.npz')
             logger.warning(repr(e))
