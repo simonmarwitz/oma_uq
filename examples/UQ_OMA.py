@@ -458,7 +458,7 @@ def _stage3mapping(m_lags, estimator,
 
     prep_signals = None
     if os.path.exists(this_result_dir / 'prep_signals.npz') and skip_existing:
-        if id_ale.startswith(('1', '2', '3', '4')):
+        if id_ale.startswith(('1', '2', '3')):
             logger.warning(f'The saved PreProcessSignals for {jid} belongs to the errorneous first run!')
         try:
             prep_signals = PreProcessSignals.load_state(this_result_dir / 'prep_signals.npz')
