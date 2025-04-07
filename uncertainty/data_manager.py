@@ -7,7 +7,7 @@ import time
 from datetime import date
 import simpleflock
 import psutil
-#import ray
+# import ray
 import logging
 from contextlib import contextmanager, nullcontext
 import uuid
@@ -28,7 +28,6 @@ import matplotlib
 import matplotlib.colors
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
-
 
 import seaborn as sns
 import scipy.stats
@@ -53,7 +52,9 @@ lsrun ray start --address=$IPADDRESS:6379 --redis-password='5241590000000000' --
 
 '''
 
+
 class HiddenPrints:
+
     def __enter__(self):
         self._original_stdout = sys.stdout
         sys.stdout = open(os.devnull, 'w')
@@ -61,7 +62,8 @@ class HiddenPrints:
     def __exit__(self, exc_type, exc_val, exc_tb):
         sys.stdout.close()
         sys.stdout = self._original_stdout
-        
+
+
 def simplePbar(total):
     '''
     Divide the range of total in 100 discrete steps
@@ -82,16 +84,17 @@ def simplePbar(total):
         while ncalls * stepsize // 1 > last:
             if 'RAY_JOB_ID' in os.environ:
                 now = time.time()
-                if now - prev_time > 240: # every four minutes should be enough
+                if now - prev_time > 240:  # every four minutes should be enough
                     print(f'Progress: {ncalls / total * 100:1.3f} %')
                     prev_time = now
             else:
                 print('.', end='', flush=True)
             last += 1
-        if ncalls == total:#np.isclose(step, 100):
+        if ncalls == total:  # np.isclose(step, 100):
             print('', end='\n', flush=True)
         yield
-        
+
+
 class MultiLock():
     '''
     dbpath = '/vegas/scratch/womo1998/locktest.nc'
@@ -144,8 +147,9 @@ class MultiLock():
 
 
 class DataManager(object):
+
     def __init__(self, title, dbfile_in=None, dbfile_out=None,
-                 result_dir=None, working_dir=None, overwrite=False, 
+                 result_dir=None, working_dir=None, overwrite=False,
                  entropy=None):
         '''
         initializes the object and checks all the provided directories and filenames
@@ -195,11 +199,11 @@ class DataManager(object):
                 logger.warning(
                     f'Output database file {os.path.join(result_dir, dbfile_out)} already exists and will be overwritten')
                 os.remove(os.path.join(result_dir, dbfile_out))
-        
+
         if entropy is None:
             entropy = np.random.randint(np.iinfo(np.int32).max)
         self.entropy = entropy
-        
+
         if not os.path.exists(os.path.join(result_dir, dbfile_in)):
             # initialize database file
             with self.get_database(database='in', rw=True) as ds:
@@ -232,8 +236,8 @@ class DataManager(object):
         assert len(names) == num_variables
 
         for dist_type, dist_params in distributions:
-            #assert dist_type in np.random.__all__
-            #print(dist_params)
+            # assert dist_type in np.random.__all__
+            # print(dist_params)
             assert isinstance(dist_params, (tuple, list))
 
         with self.get_database(database='in', rw=True) as ds:
@@ -247,7 +251,7 @@ class DataManager(object):
                 # necessary
                 ids = [str(uuid.uuid4()).split('-')[-1]
                        for i in range(num_samples)]
-                #num_params= 3
+                # num_params= 3
                 ds.coords['ids'] = ids
             else:
                 assert len(ds.coords['ids']) == num_samples
@@ -314,7 +318,7 @@ class DataManager(object):
             for values, name in zip(arrays, names):
 
                 ds[name] = ('ids', values, {})
-                #ds['samples'][ds.names==name,:] = values
+                # ds['samples'][ds.names==name,:] = values
 
         # populate output db with the ids at least
         with self.get_database(database='out', rw=True) as ds:
@@ -344,7 +348,7 @@ class DataManager(object):
 
             ids = [str(uuid.uuid4()).split('-')[-1]
                    for i in range(num_existing_samples, total_samples)]
-            #num_params= 3
+            # num_params= 3
             new_ds.coords['ids'] = ids
 
             for seed, name in zip(seeds, ds.data_vars):
@@ -361,14 +365,14 @@ class DataManager(object):
                 new_ds[name] = ('ids', values[num_existing_samples:])
                 # print(name, dist_type, dist_params, values)
                 # print('new',new_ds[name], 'old',ds[name])
-            #ds_new = ds.combine_first(new_ds)
-            ds_new = xr.concat([ds,new_ds], dim='ids')
+            # ds_new = ds.combine_first(new_ds)
+            ds_new = xr.concat([ds, new_ds], dim='ids')
             # for name in ds_new.data_vars:
                 # print('comb',ds_new[name])
-            
+
         dbpath = os.path.join(self.result_dir, self.dbfile_in)
         ds_new.to_netcdf(dbpath, engine='h5netcdf')
-        
+
         # populate output db with the ids at least
         with self.get_database(database='out', rw=False) as ds:
             new_ds = xr.Dataset()
@@ -380,17 +384,17 @@ class DataManager(object):
             for name in ds:
                 new_ds[name] = (['ids'], np.full(
                     shape=(num_samples,), fill_value=np.nan))
-            #ds_new = ds.combine_first(new_ds)
-            
-            ds_new = xr.concat([ds,new_ds], dim='ids')
-            
+            # ds_new = ds.combine_first(new_ds)
+
+            ds_new = xr.concat([ds, new_ds], dim='ids')
+
         dbpath = os.path.join(self.result_dir, self.dbfile_out)
         ds_new.to_netcdf(dbpath, engine='h5netcdf')
 
-    def evaluate_samples(self, func, arg_vars, ret_names, default_len=30, 
-                         distributed= True, dry_run=False, re_eval_sample=False,
+    def evaluate_samples(self, func, arg_vars, ret_names, default_len=30,
+                         distributed=True, dry_run=False, re_eval_sample=False,
                          chwdir=True, use_lock=True, check_diskspace=False,
-                         chunks_submit=None, chunks_save=1000, scramble_evaluation=True, 
+                         chunks_submit=None, chunks_save=1000, scramble_evaluation=True,
                          remote_kwargs={'num_cpus':1}, **kwargs):
         '''
 
@@ -427,40 +431,47 @@ class DataManager(object):
         '''
         if distributed and not ray.is_initialized():
             if os.path.exists(os.path.expanduser('~/ipaddress.txt')):
-                address = open(os.path.expanduser('~/ipaddress.txt'),'rt').read().splitlines()[0]+':6379'
+                address = open(os.path.expanduser('~/ipaddress.txt'), 'rt').read().splitlines()[0] + ':6379'
             else:
                 address = 'auto'
             ray.init(address=address, _redis_password='5241590000000000')
-            
+            self.futures = []
+
+        elif not distributed:
+            self.futures = []
+
+        else:
+            self.futures = list(self.futures)
+
         remote_kwargs['name'] = self.title
-        
+
         @ray.remote(**remote_kwargs)
         def setup_eval(func, jid, fun_kwargs,
-                       result_dir, working_dir, 
+                       result_dir, working_dir,
                        check_diskspace, use_lock, **kwargs):
-            return _setup_eval(func, jid, fun_kwargs, result_dir, working_dir, 
+            return _setup_eval(func, jid, fun_kwargs, result_dir, working_dir,
                                check_diskspace, use_lock)
-            
+
         def _setup_eval(func, jid, fun_kwargs,
-                       result_dir, working_dir, 
+                       result_dir, working_dir,
                        check_diskspace, use_lock):
             # lock files will stay there, make sure to delete them afterwards
             now = time.time()
-            
+
             with simpleflock.SimpleFlock(os.path.join(result_dir, f'{jid}.lock'), timeout=1) if use_lock else nullcontext():
                 logger.debug(f'start computing sample {jid}')
-                
+
                 # create the working directory
 
                 if not os.path.exists(result_dir):
                     os.makedirs(result_dir, exist_ok=True)
-                
+
                 if working_dir is True:
-                    try: #  to get LSF temporary working directory
+                    try:  #  to get LSF temporary working directory
                         working_dir = os.path.join(f'/usr/tmp/{os.environ["LSB_JOBID"]}.tmpdir', jid)
                     except KeyError:
                         working_dir = os.path.join('/dev/shm/womo1998/', jid)
-                
+
                 if working_dir is not None:
                     cwd = os.getcwd()
                     if not os.path.exists(working_dir):
@@ -506,53 +517,50 @@ class DataManager(object):
                         else:
                             logger.warning(
                                 f"Cannot remove working_dir {working_dir} (contains subdirectories)")
-                        
+
                         if check_diskspace:
-                            base_dir,_ = os.path.split(working_dir)
-                            freedisk=shutil.disk_usage(base_dir).free/(1024**3)
+                            base_dir, _ = os.path.split(working_dir)
+                            freedisk = shutil.disk_usage(base_dir).free / (1024 ** 3)
                             nblock = 0
-                            while freedisk < 1 and nblock < 30: # other mysterious errors are caused by a full RAM disk (which we use as a working dir)
+                            while freedisk < 1 and nblock < 30:  # other mysterious errors are caused by a full RAM disk (which we use as a working dir)
                                 logger.warning(f'Working dir disk is almost full: {freedisk} GB free. Blocking for 30 s.')
                                 time.sleep(30)
-                                freedisk=shutil.disk_usage(base_dir).free/(1024**3)
-                                nblock+=1
-                            
+                                freedisk = shutil.disk_usage(base_dir).free / (1024 ** 3)
+                                nblock += 1
+
                     if error:
                         free = int(os.popen('free -t -g').readlines()[-1].split()[-1])
                         nblock = 0
-                        while free < 2 and nblock < 30: # the cause of mysterious RuntimeError("") is OutOfMemory, when pexpect fails to startup ANSYS properly
+                        while free < 2 and nblock < 30:  # the cause of mysterious RuntimeError("") is OutOfMemory, when pexpect fails to startup ANSYS properly
                             logger.warning(f"System memory low: {free} GB. Blocking further execution for 30 s.")
                             time.sleep(30)
                             free = int(os.popen('free -t -g').readlines()[-1].split()[-1])
-                            nblock+=1
-                    
-            runtime = time.time() - now        
+                            nblock += 1
+
+            runtime = time.time() - now
             logger.debug(f'done computing sample {jid}. Runtime was {runtime} s')
-                    
-                    
+
             return jid, ret_vals, runtime
-            
+
         def save_samples(ret_sets, ret_names, total_num_samples, default_len):
-            
-            if dry_run: rw=False
-            else: rw=True
+
+            if dry_run: rw = False
+            else: rw = True
             # rw=True
             # now=time.time()
             with self.get_database(database='out', rw=rw) as out_ds:
                 # print(f'Cum runtime get_database {time.time() - now :1.3f}')
-                
-                
-                
+
                 if not ret_sets:
                     return
-                
+
                 for jid, ret_vals, runtime in ret_sets:  # first may have thrown an exception, then len() fails
                     if isinstance(ret_vals, (list, tuple)):
                         num_variables = len(ret_vals)
                         break
                 else:
                     logger.warning(f"All ret_sets are empty {ret_sets}")
-                    #return
+                    # return
                 # initialize arrays in output database
                 for (name, dims), value in zip(ret_names.items(), ret_vals):
                     if not isinstance(value, np.ndarray):
@@ -561,30 +569,30 @@ class DataManager(object):
                     if name not in out_ds.data_vars:
                         ndims = len(dims)
                         dtype = value.dtype
-                        if isinstance(default_len,(int,float)):
+                        if isinstance(default_len, (int, float)):
                             shape = (total_num_samples, *[default_len] * ndims)
                         elif isinstance(default_len, (dict)):  # dict of {dim:len,...}
                             shape = [total_num_samples]
                             for dim in dims:
                                 shape.append(default_len[dim])
-                            
+
                         out_ds[name] = (('ids', *dims), np.full(
                             shape=shape, fill_value=np.nan, dtype=dtype))
-                
+
                 if '_exceptions' not in out_ds.data_vars:
                     out_ds['_exceptions'] = (['ids'], np.full(
                         shape=(total_num_samples,), fill_value=''))
-                    
+
                 for jid, ret_vals, runtime in ret_sets:
-                    
-                    # avoid multiple coordinate lookups, 
-                    # careful handling of copies vs. view is required, 
+
+                    # avoid multiple coordinate lookups,
+                    # careful handling of copies vs. view is required,
                     # e.g. assign single values to index: [{}] otherwise it is a copy
                     this_ds = out_ds.loc[dict(ids=jid)]
-                    
-                    if logger.isEnabledFor(logging.DEBUG): 
+
+                    if logger.isEnabledFor(logging.DEBUG):
                         logger.debug(this_ds)
-                        
+
                     if isinstance(ret_vals, str):  # exception repr
                         this_ds['_exceptions'][{}] = ret_vals
                         continue
@@ -598,24 +606,22 @@ class DataManager(object):
                         if not isinstance(value, np.ndarray):
                             logger.warning(f'Output for {name} should be a (0- or higher-dimensional) numpy array.')
                             value = np.array(value)
-                        
+
                         pos_dict = {dim: slice(None, siz) for dim, siz in zip(dims, value.shape)}
-                            
+
                         this_ds[name][pos_dict] = value
 
                         # logger.debug(out_ds[name].loc[jid])
 
                     this_ds['_runtimes'][{}] = runtime
-                    
-                    if logger.isEnabledFor(logging.DEBUG): 
+
+                    if logger.isEnabledFor(logging.DEBUG):
                         logger.debug(out_ds.loc[dict(ids=jid)])
-                
-                
+
                 # print(f'Cum runtime: loop over samples {time.time() - now :1.3f}')
-            
+
             # print(f'Cum runtime: save/close database {time.time() - now :1.3f}')
-              
-                     
+
         # open database read-only, without locking
         with self.get_database(database='in') as in_ds, self.get_database(database='out', rw=False) as out_ds:
             in_ds.load()
@@ -626,21 +632,20 @@ class DataManager(object):
                 logger.debug(f'current working directory {self.working_dir}')
 
             total_num_samples = in_ds.ids.size
-            
+
             if re_eval_sample:
                 if isinstance(re_eval_sample, str):
                     in_ds = in_ds.sel(ids=[re_eval_sample])
                 ids = in_ds.ids
             else:
                 # ids=in_ds.ids
-                done_ids = (~out_ds['_runtimes'].isnull()) & (out_ds['_exceptions']=='')
+                done_ids = (~out_ds['_runtimes'].isnull()) & (out_ds['_exceptions'] == '')
                 # done_ids = (~out_ds['damp_freqs'].isnull().all(dim='modes')) & (out_ds['_exceptions']=='')
-                
+
                 in_ds = in_ds.isel(ids=~done_ids)
                 ids = in_ds.ids
-                
-                
-                filter_string = kwargs.pop('id_filter',None)
+
+                filter_string = kwargs.pop('id_filter', None)
                 if filter_string is not None:
                     if isinstance(filter_string, list):
                         ids_filter = np.char.array(ids).startswith(filter_string[0])
@@ -651,8 +656,8 @@ class DataManager(object):
                     in_ds = in_ds.isel(ids=ids_filter)
                     ids = in_ds.ids
                     logger.info(f'Ids have been filtered by {filter_string}. Final length: {len(ids)}')
-            
-            futures = []
+
+            # futures = []
 
             # TODO: Improvement: Estimate job size and submit big jobs first,
             # i.e. sort key = jobsize, but also add some of the smallest jobs
@@ -661,114 +666,112 @@ class DataManager(object):
                 chunks_submit = ids.size
             if chunks_submit > ids.size:
                 chunks_submit = ids.size
-            
+
             logger.info(f'{len(ids)} samples out of {total_num_samples} to be done . Submitting at most {chunks_submit}.')
-            
-            now=time.time()
-            
-            if scramble_evaluation: # if scramble sample evaluation
+
+            now = time.time()
+
+            if scramble_evaluation:  # if scramble sample evaluation
                 keyfun = lambda _: np.random.random()
             else:
                 keyfun = None
-            
+
             ####################################################################
-            
+
             # for jid_ind in sorted(range(ids.size),
             #                       key=keyfun):
             #    jid=ids[jid_ind].item()
-            
+
             ####################################################################
             # logger.warning('Dataset is sorted by m_lags. Remove this line asap')
             # first=True
-            
+
             # jid_inds = np.argsort(in_ds.m_lags).data[:chunks_submit]
             jid_inds = np.arange(chunks_submit)
             np.random.shuffle(jid_inds)
-            
+
             # m_lags_steps = [50,150,250,350,450,550,650,750,850,950,1001]
             m_lags_steps = [245, 285, 330, 365, 430, 485, 575, 625, 725, 800, 900, 1001]
+            factors = (0.0000875, -0.01125, 2.3475)
+            mems = [num ** 2 * factors[0] + num * factors[1] + factors[2] for num in m_lags_steps]
+            cpus = [int(np.ceil(mem / 250 * 64)) for mem in mems]
+            # print(mems, cpus)t
 
             # factor = 0.05
             # tasks = [setup_eval.options(memory=num*factor*1024*1024*1024, name= f'{num*factor} GB {self.title}') for num in m_lags_steps]
-            factors = (0.0000875, -0.01125, 2.3475)
-            tasks = [setup_eval.options(memory=(num**2*factors[0]+num*factors[1] + factors[2])*1024*1024*1024, name= f'{(num**2*factors[0]+num*factors[1] + factors[2]):1.2f} GB {self.title}') for num in m_lags_steps]
-            
-            
+
+            tasks = [setup_eval.options(memory=mem * 1024 * 1024 * 1024, num_cpus=cpu, name=f'{mem:1.2f} GB {self.title}') for cpu, mem in zip(cpus, mems)]
+
             for jid_ind in jid_inds:
-                jid=in_ds.ids[jid_ind].item()
+                jid = in_ds.ids[jid_ind].item()
                 # if first:
                 #     print(in_ds.sel(ids=jid).m_lags)
                 #     first=False
             ####################################################################
-            
+
                 this_ds = in_ds.sel(ids=jid).copy()
-                
 
                 fun_kwargs = {}
                 for arg, var in arg_vars.items():
                     if not isinstance(var, str):
                         logger.warning(f'The variable name that was passed for argument {arg} should be a string but is a {type(var)}')
                     fun_kwargs[arg] = this_ds[var].item()
-                    
 
                 if chwdir:
                     working_dir = os.path.join(self.working_dir, jid)
                 else:
                     working_dir = None
-                
+
                 if not distributed:
                     # evaluates samples in the regular way, i.e. one at a time
-                    futures.append(_setup_eval(func, jid, fun_kwargs, self.result_dir, working_dir=working_dir,
+                    self.futures.append(_setup_eval(func, jid, fun_kwargs, self.result_dir, working_dir=working_dir,
                                             check_diskspace=check_diskspace, use_lock=use_lock, **kwargs))
-                    
+
                     logger.info(f"Finished another sample out of {in_ds.ids.size}.")
                 else:
                     # that would be nice, but produces huge overhead, due to the remote
                     # function being defined multiple times and having to be pickled-transfered-unpickled
                     # remote_kwargs['name'] = str(jid)
                     # worker_ref = ray.remote(**remote_kwargs)(_setup_eval).remote(
-                    #     func, jid, fun_kwargs, working_dir=working_dir, 
+                    #     func, jid, fun_kwargs, working_dir=working_dir,
                     #     check_diskspace=check_diskspace, **kwargs)
-                    
-                    
+
                     m_lags = in_ds.sel(ids=jid).m_lags
-                    
+
                     for worker, m_lag_step in zip(tasks, m_lags_steps):
                         if m_lags < m_lag_step:
                             break
-                    
+
                     worker_ref = worker.remote(
-                        func, jid, fun_kwargs, self.result_dir, working_dir=working_dir, 
+                        func, jid, fun_kwargs, self.result_dir, working_dir=working_dir,
                         check_diskspace=check_diskspace, use_lock=use_lock, **kwargs)
-                    
-                    
+
                     # worker_ref = setup_eval.remote(
-                    #     func, jid, fun_kwargs, self.result_dir, working_dir=working_dir, 
+                    #     func, jid, fun_kwargs, self.result_dir, working_dir=working_dir,
                     #     check_diskspace=check_diskspace, use_lock=use_lock, **kwargs)
-                    
-                    futures.append(worker_ref)
-                    
-                if len(futures)>= chunks_submit:
+
+                    self.futures.append(worker_ref)
+
+                if len(self.futures) >= chunks_submit:
             ####################################################################
                     # print(in_ds.sel(ids=jid).m_lags)
             ####################################################################
                     break
-        
-        
+
         if not distributed:
-            save_samples(futures, ret_names, total_num_samples, default_len)
+            save_samples(self.futures, ret_names, total_num_samples, default_len)
             return len(ids) - chunks_submit
-        
-        futures = set(futures)
-        logger.info(f'{len(futures)} jobs have been submitted for evaluation in {time.time() - now:1.2f} s.')
-        
+
+        self.futures = set(self.futures)
+        logger.info(f'{len(self.futures)} jobs have been submitted for evaluation in {time.time() - now:1.2f} s.')
+
         sav_time = 480
         while True:
             ready, wait = ray.wait(
-                list(futures), num_returns=min(len(futures), chunks_save), timeout=sav_time)
-            
+                list(self.futures), num_returns=min(len(self.futures), chunks_save), timeout=sav_time)
+
             comp_time = time.time() - now
-                
+
             finished = 0
             failed = 0
             ret_sets = []
@@ -778,40 +781,40 @@ class DataManager(object):
                     finished += 1
                 except ray.exceptions.RayError as e:
                     logger.warning(repr(e))
-                    failed +=1
-                    futures.remove(obj_ref)
+                    failed += 1
+                    self.futures.remove(obj_ref)
             # try:
             #     ret_sets = ray.get(ready)
             # except ray.exceptions.RayTaskError as e:
             #     traceback.print_exc()
             #     logger.warning(repr(e))
             #     ret_sets = []
-            logger.info(f'Finished {finished}, failed {failed} samples in {comp_time:1.2f} s')    
-            
-            now=time.time()
+            logger.info(f'Finished {finished}, failed {failed} samples in {comp_time:1.2f} s')
+
+            now = time.time()
             if finished:
                 save_samples(ret_sets, ret_names, total_num_samples, default_len)
             sav_time = int(max(time.time() - now, sav_time))
-            
+
             if len(wait) == 0:
-                logger.info(                
+                logger.info(
                     f"Finished all remaining {finished} samples in {comp_time:1.2f} s (async. save time: {time.time() - now:1.2f} s).")
 
                 break
-            
-            futures.difference_update(ready)
+
+            self.futures.difference_update(ready)
             logger.info(
-                f"Finished {finished} samples in {comp_time:1.2f} s (async. save time: {time.time() - now:1.2f} s). Remaining {len(futures)} samples.")
+                f"Finished {finished} samples in {comp_time:1.2f} s (async. save time: {time.time() - now:1.2f} s). Remaining {len(self.futures)} samples.")
         # ray.shutdown()
         return len(ids) - chunks_submit
 
-    def post_process_samples(self, db='merged', func=None, 
+    def post_process_samples(self, db='merged', func=None,
                              names=None, labels=None,
                              max_categories=30, draft=True, **kwargs):
         '''
         drawing scatterplot matrices, bar charts, box plots etc.
         '''
-        
+
         def categorize_data(datax, datay, categories):
             categories = np.array(categories)
             num_categories = len(categories)
@@ -864,13 +867,13 @@ class DataManager(object):
             Additional keyword arguments are
             passed on to matplotlib's "plot" command. Returns the matplotlib figure
             object containg the subplot grid."""
-            
+
             numdata, numvars = data.shape
             names = data.keys()
-            #print(numdata,numvars,names)
-            
+            # print(numdata,numvars,names)
+
             fig, axes = plt.subplots(nrows=numvars, ncols=numvars, figsize=
-                                     kwargs.pop('figsize',(10, 10)), sharex='col', sharey='row', squeeze=False)
+                                     kwargs.pop('figsize', (10, 10)), sharex='col', sharey='row', squeeze=False)
 
             for ax in axes.flat:
                 # Hide all ticks and labels
@@ -886,9 +889,9 @@ class DataManager(object):
                     ax.xaxis.set_visible(True)
 
             data_limits = {}
-            
-            all_bins={}
-            
+
+            all_bins = {}
+
             if scales is not None:
                 assert len(scales) == numvars
 
@@ -902,9 +905,9 @@ class DataManager(object):
                 axes[ij, ij] = ax
                 ax.xaxis.set_visible(False)
                 ax.yaxis.set_visible(False)
-                
+
                 name = names[ij]
-                
+
                 logger.debug(f'hist {name}')
                 if name in all_categories:
                     bin_centers = all_categories[name]
@@ -914,27 +917,25 @@ class DataManager(object):
                     range_ = None
                 else:
                     data_limits[name] = np.nanquantile(data[name], [0.02, 0.98])
-                    bin_centers=None
+                    bin_centers = None
                     bins = nbins
                     range_ = data_limits[name]
-                    
+
                 sample_counts, bins_gen, _ = ax.hist(
                     data[name], bins=bins, range=range_, density=False, zorder=-10, facecolor='lightgrey', edgecolor='dimgrey', alpha=.5)
                 # sns.distplot may be another alternative to hist
-                #print(name,sample_counts, bin_centers)
+                # print(name,sample_counts, bin_centers)
                 # save for later to assign boxplot widths
                 all_bins[name] = bins_gen
                 # ax.set_ylim((0,max(sample_counts)))
 
-                
-
             # Plot the data.
             for x, y in zip(*np.triu_indices_from(axes, k=1)):
-                
+
                 namex = names[x]
                 namey = names[y]
                 logger.debug(f'scatter {namex},{namey}')
-                
+
                 this_data = data[[namex, namey]].dropna()
                 # categorical (i.e. integer) data should be displayed as box
                 # plots rather than scatter plots
@@ -964,17 +965,17 @@ class DataManager(object):
                         pos = all_categories[namex]
                         bp_data = categorize_data(
                             this_data[namex], this_data[namey], pos)
-                        vert=True
-                        
+                        vert = True
+
                     elif namey in all_categories:
                         widths = np.diff(all_bins[namey]) * 0.75
                         pos = all_categories[namey]
                         bp_data = categorize_data(
                             this_data[namey], this_data[namex], pos)
-                        vert=False
-                    
+                        vert = False
+
                     if True:
-                        
+
                         axes[y, x].boxplot(bp_data,
                                            positions=pos,
                                            vert=vert,
@@ -990,43 +991,42 @@ class DataManager(object):
                         # meaning that the placement along the "categorical" axis will respect the numeric values of that variable.
                         # Fixed scaling will remain the default behavior.
                         sns.stripplot(
-                            x=namex, y=namey, ax=axes[y, x], data=this_data, orient=('h','v')[vert], color='dimgrey', jitter=0.2,size=1)
+                            x=namex, y=namey, ax=axes[y, x], data=this_data, orient=('h', 'v')[vert], color='dimgrey', jitter=0.2, size=1)
 
                 else:  # draw hexbin plots
-                    
-                    #axes[y, x].plot(data[x], data[y], ls='none', marker='.', color='dimgrey', **kwargs)
+
+                    # axes[y, x].plot(data[x], data[y], ls='none', marker='.', color='dimgrey', **kwargs)
                     color_s = matplotlib.colors.to_rgba('dimgrey', alpha=0)
                     color_e = matplotlib.colors.to_rgba('dimgrey', alpha=1)
 
-
                     cmap = LinearSegmentedColormap.from_list(
                         'CustomCmap', colors=[color_s, color_e])  # fff white with alpha
-                    
+
                     if scales is not None:
                         xscale = scales[x]
                         yscale = scales[y]
                     else:
-                        xscale='linear'
-                        yscale='linear'
-                    
+                        xscale = 'linear'
+                        yscale = 'linear'
+
                     limsx = data_limits[namex]
                     limsy = data_limits[namey]
-                    
+
                     selx = np.logical_and(this_data[namex] >= limsx[0], this_data[namex] <= limsx[1])
                     sely = np.logical_and(this_data[namey] >= limsy[0], this_data[namey] <= limsy[1])
                     sel = np.logical_and(selx, sely)
-                    
+
                     if draft:
-                        axes[y, x].scatter(this_data[namex][sel], this_data[namey][sel],marker='.', c='dimgrey', edgecolors='none',s=1, )
+                        axes[y, x].scatter(this_data[namex][sel], this_data[namey][sel], marker='.', c='dimgrey', edgecolors='none', s=1,)
                     else:
                         axes[y, x].hexbin(this_data[namex][sel], this_data[namey][sel], gridsize=200, bins='log', cmap=cmap,
                                       xscale=xscale, yscale=yscale,
                                       edgecolors='face')
 
                 rho, pval = scipy.stats.spearmanr(this_data[namex], this_data[namey])
-                #corr_coef = np.corrcoef(x,y)
-                #rho = corr_coef[1,0]
-                #corr_coef = rho
+                # corr_coef = np.corrcoef(x,y)
+                # rho = corr_coef[1,0]
+                # corr_coef = rho
                 axes[x, y].annotate('${:1.3f}$'.format(rho), (0.5, 0.5),
                                     xycoords='axes fraction',
                                     ha='center', va='center')
@@ -1046,20 +1046,19 @@ class DataManager(object):
                     # lims = data_limits[name]
                     # axes[-1, i].set_xlim(lims)
                     # axes[i, 0].set_ylim(lims)
-                
 
             if scales is not None:
                 for i, scale in enumerate(scales):
                     axes[0, i].set_xscale(scale)
                     if i > 0:  # skip yscale on first row, there are just correlation coefficients anyway
                         axes[i, 0].set_yscale(scale)
-            
+
             fig.subplots_adjust(hspace=0.05, wspace=0.05, top=0.98, bottom=0.05, left=0.05, right=0.98)
-            
+
             return fig
-        
+
         with self.get_database(database=db, rw=False) as ds:
-            
+
             '''
             we might consider seaborn for statistical visualizaztion:
                 pairgrid instead of scatterplotmatrix
@@ -1095,14 +1094,14 @@ class DataManager(object):
             '''
             if func is not None:
                 ds = self.apply_func(ds, func, **kwargs)
-            
+
             if '_exceptions' in ds.data_vars:
-                ind = ds._exceptions=='' # no exception
-                ds = ds.isel(ids=ind)    
+                ind = ds._exceptions == ''  # no exception
+                ds = ds.isel(ids=ind)
             print(f"number of samples {len(ds.ids)}")
             if names is None:
                 names = [name for name in ds.data_vars]
-            
+
             # Sort out 3D data
             try:
                 for i in reversed(range(len(names))):
@@ -1119,7 +1118,7 @@ class DataManager(object):
                         del names[i]
                     elif ds[name].dtype == np.dtype('O'):
                         logger.warning(f'DataArray {name} is an object dtype, must be preprocessed!')
-                        #continue
+                        # continue
                         del names[i]
                     elif np.isnan(ds[name].data).all():
                         logger.warning(f'DataArray {name} is empty. Try to remove it from names!')
@@ -1127,8 +1126,7 @@ class DataManager(object):
             except:
                 print(name)
                 raise
-            
-            
+
             logger.info(f'Categorizing data arrays ...')
             categorical_dists = ['integers', 'choice', 'binomial',
                                  'hypergeometric', 'geometric', 'poisson']
@@ -1146,23 +1144,19 @@ class DataManager(object):
                             categories = dist_params[0]
                         else:
                             raise NotImplementedError(f'Category generation for the {dist_type} distribution is currently not implemented.')
-                        
+
                         if len(categories) <= max_categories:
                             all_categories[name] = categories
                         else:
                             logger.warning(f'Number of categories exceeds max_categories {max_categories} for parameter {name}')
-            
-           
-        
+
             numvars = len(names)
-            
+
             # TODO: might have to remove empty coordinates before
-            #df = ds.reset_coords(['ids_','modes'])[names].to_dataframe()
+            # df = ds.reset_coords(['ids_','modes'])[names].to_dataframe()
             df = ds[names].to_dataframe()
-            #print(ds)
-            
-            
-            
+            # print(ds)
+
         # g = sns.PairGrid(df, diag_sharey=True, despine=False)
         #
         # #g.map_diag(sns.histplot)
@@ -1181,37 +1175,36 @@ class DataManager(object):
             # elif names[x] in all_categories or names[y] in all_categories: #categorical data
                 # g._map_bivariate(sns.stripplot, [indices])
         #
-        #g.map_diag(sns.kdeplot)
-        #g.map_offdiag(sns.stripplot)
-        #g._map_bivariate(func, indices) # for categorical data
+        # g.map_diag(sns.kdeplot)
+        # g.map_offdiag(sns.stripplot)
+        # g._map_bivariate(func, indices) # for categorical data
         # plt.show()
         logger.info(f'Creating the scatterplot matrix... ')
-        #logger.debug(f'{df}')
-        #logger.debug(f'{all_categories}')
-        #logger.debug(f'{kwargs.get("scales",None)}{draft}')
+        # logger.debug(f'{df}')
+        # logger.debug(f'{all_categories}')
+        # logger.debug(f'{kwargs.get("scales",None)}{draft}')
         if labels is None:
-            labels=names
+            labels = names
         else:
-            assert len(labels)==len(names)
-            
+            assert len(labels) == len(names)
+
         fig = scatterplot_matrix(data=df,
                            all_categories=all_categories,
                            scales=kwargs.pop('scales', None),
                            draft=draft,
                            labels=labels,
                            **kwargs)
-        
+
         return fig
-    
+
     def process_samples(self, ds, func, **kwargs):
         rw = kwargs.pop('rw', False)
         logger.info(f'Applying user-supplied function {func.__name__} to dataset and save results ({rw})...')
-            
-            
+
         ds = func(ds, **kwargs)
         if ds is None:
             logger.warning(f'{func} did not return a dataset. Exiting!')
-        
+
         # workaround, since func may have returned a new object of ds, also with new indices etc.
         # adding a underscore to be on the safe side
         if rw:
@@ -1223,9 +1216,9 @@ class DataManager(object):
             ds.to_netcdf(dbpath, engine='h5netcdf')
             ds.close
             logger.info('The database was saved outside the safe loop, ensure to load the "processed" db for future use')
-        
+
         return ds
-        
+
     @classmethod
     def from_existing(cls, dbfile_in,
                       result_dir='/usr/scratch4/sima9999/work/modal_uq/',
@@ -1240,17 +1233,17 @@ class DataManager(object):
             if not os.path.exists(working_dir):
                 logger.warning(f'Working directory {working_dir} does not exist. Creating!')
                 os.makedirs(working_dir)
-                
+
             cls.working_dir = working_dir
 
             title = ds.attrs['title']
             cls.title = title
-            
+
             entropy = ds.attrs['entropy']
-            cls.entropy = entropy 
-            
+            cls.entropy = entropy
+
             result_dir_ = ds.attrs['result_dir']
-            if str(result_dir_ )!= str(result_dir):
+            if str(result_dir_) != str(result_dir):
                 logger.warning(
                     f'result dir from db {result_dir_} differs from given result_dir {result_dir}')
 
@@ -1261,8 +1254,7 @@ class DataManager(object):
 
             dbfile_out = ds.attrs['dbfile_out']
             cls.dbfile_out = dbfile_out
-            
-            
+
             # create and  populate output db with the ids at least
             if not os.path.exists(os.path.join(result_dir, dbfile_out)):
                 logger.info(
@@ -1330,7 +1322,7 @@ class DataManager(object):
                     ds.attrs['title'] = self.title
                     ds.attrs['entropy'] = self.entropy
                     ds.to_netcdf(dbpath, engine='h5netcdf')
-                    #ds.to_netcdf(dbpath, format='netcdf4')
+                    # ds.to_netcdf(dbpath, format='netcdf4')
                     ds.close()
         else:
             logger.debug(f'opening existing file {dbfile} with write-mode {rw}')
@@ -1339,7 +1331,7 @@ class DataManager(object):
             try:
                 # open database
                 ds = xr.open_dataset(dbpath, engine='h5netcdf')
-                #ds = xr.open_dataset(dbpath)
+                # ds = xr.open_dataset(dbpath)
                 # ds.load()
                 # ds.close()
                 # yield database
@@ -1357,7 +1349,7 @@ class DataManager(object):
                     # print(f'open database {dbpath}')
                     # open database
                     ds = xr.open_dataset(dbpath, engine='h5netcdf')
-                    #ds = xr.open_dataset(dbpath)
+                    # ds = xr.open_dataset(dbpath)
                     ds.load()
                     # ds.close()
                     # yield database
@@ -1601,7 +1593,7 @@ def student_manager(ambient, nonlinear, friction):
         data_manager = DataManager.from_existing(dbfile_in="".join(
             i for i in title if i not in "\\/:*?<>|") + '.nc', result_dir=result_dir)
 
-        #data_manager.evaluate_samples(func=manipulate_student_fun, arg_vars={'snr_db':'snr'}, ret_names=['signal_power', 'noise_power','deltat'], chwdir = True, readfolder=savefolder)
+        # data_manager.evaluate_samples(func=manipulate_student_fun, arg_vars={'snr_db':'snr'}, ret_names=['signal_power', 'noise_power','deltat'], chwdir = True, readfolder=savefolder)
         data_manager.evaluate_samples(func=mechanical.student_data_part2, arg_vars={'omega': 'omega',
                                                                                     'zeta': 'zeta',
                                                                                     'dt_fact': 'dt_fact',
@@ -1614,7 +1606,7 @@ def student_manager(ambient, nonlinear, friction):
                                       ret_names=[
                                           'k', 'c', 'd_max', 'fsl', 'signal_power', 'noise_power', 'deltat'],
                                       chwdir=True, dry_run=True)
-        #mechanical.student_data_part2(jid, result_dir, omega, zeta, dt_fact,num_cycles, f_scale, d_scale, nl_ity, fric_visc_rat, snr_db, **kwargs)
+        # mechanical.student_data_part2(jid, result_dir, omega, zeta, dt_fact,num_cycles, f_scale, d_scale, nl_ity, fric_visc_rat, snr_db, **kwargs)
         #
     elif True:
         data_manager = DataManager.from_existing(dbfile_in="".join(
@@ -1637,23 +1629,23 @@ def manipulate_student_fun(jid, snr_db, readfolder, result_dir):
 
     do_plot = False
 
-    snr = 10**(snr_db / 10)
+    snr = 10 ** (snr_db / 10)
 
     file = readfolder + jid + '.csv'
     array = np.loadtxt(file)
 
-    power = np.mean(array[:, 1]**2)
+    power = np.mean(array[:, 1] ** 2)
     if do_plot:
         fig, axes = plt.subplots(3, 1, sharex=True)
         axes[0].psd(array[:, 1], Fs=array.shape[0] /
                     (array[-1, 0] - array[0, 0]))
     # decimate
-    array = array[1::6, :]
+    array = array[1::6,:]
     N = array.shape[0]
     # add noise
     noise_power = power / snr
     noise = np.random.normal(0, np.sqrt(noise_power), N)
-    power_noise = np.mean(noise**2)
+    power_noise = np.mean(noise ** 2)
 
     snr_actual = power / power_noise
     snr_actual_db = 10 * np.log10(snr_actual)
@@ -1696,14 +1688,14 @@ def test_categorical():
                                                    'dec_fact',
                                                    'numtap_fact',
                                                    'nyq_rat'],
-                                            distributions=[('choice', [2**np.arange(5, 18)]),
+                                            distributions=[('choice', [2 ** np.arange(5, 18)]),
                                                            ('integers', (2, 15)),
                                                            ('integers', (5, 61)),
                                                            ('uniform', (2, 4)),
                                                            ],
                                             num_samples=1000)
 
-        data_manager.post_process_samples(db='in', names=['N','dec_fact','numtap_fact','nyq_rat'], scales = ['log','linear','linear','linear',])
+        data_manager.post_process_samples(db='in', names=['N', 'dec_fact', 'numtap_fact', 'nyq_rat'], scales=['log', 'linear', 'linear', 'linear', ])
 
     elif False:
         # add_samples
@@ -1716,48 +1708,45 @@ def test_categorical():
             i for i in title if i not in "\\/:*?<>|") + '.nc', result_dir=result_dir)
         data_manager.post_process_samples(db='merged')
         data_manager.clear_locks()
-        
 
 
-    
 def test_imports():
-    #import ray
+
+    # import ray
     def import_tester_fun(**kwargs):
         # The following imports must be on top of the file before import ray
         import scipy.linalg, scipy.integrate, scipy.optimize, scipy.signal
         import PyQt5.QtCore, PyQt5.QtGui
-        #from ansys.mapdl.core import launch_mapdl
-        #from ansys.dpf.core import Model
+        # from ansys.mapdl.core import launch_mapdl
+        # from ansys.dpf.core import Model
         from model.mechanical import Mechanical, MechanicalDummy
         import pyansys
         import seaborn
-        
-        
-        
+
         return (1,)
 
     title = 'test_imports'
     savefolder = '/usr/scratch4/sima9999/work/modal_uq/'
     result_dir = '/usr/scratch4/sima9999/work/modal_uq/'
-    #ray.init(address='auto', _redis_password='5241590000000000')
+    # ray.init(address='auto', _redis_password='5241590000000000')
     #
-    #ray.shutdown()
+    # ray.shutdown()
     if not os.path.exists(result_dir + title + '.nc') or True:
         data_manager = DataManager(title=title, working_dir='/dev/shm/womo1998/',
                                    result_dir=result_dir,
                                    overwrite=True)
-        data_manager.generate_sample_inputs(names=['N',],
+        data_manager.generate_sample_inputs(names=['N', ],
                                             distributions=[('uniform', (2, 4)),
                                                            ],
                                             num_samples=1)
-                                            
-        data_manager.evaluate_samples(func=import_tester_fun, 
+
+        data_manager.evaluate_samples(func=import_tester_fun,
                                       arg_vars={'N':'N'},
                                       ret_names=['snrs'],
                                       chwdir=True, dry_run=False)
     data_manager = DataManager.from_existing(result_dir + title + '.nc', result_dir)
     data_manager.post_process_samples()
-   
+
 
 def test():
 
@@ -1786,8 +1775,8 @@ def test():
             'c', 'laitnenopxe')], ret_names=['test_res', 'res_test'], chwdir=False, factor=10)
         #
     else:
-        #data_manager = DataManager.from_existing(dbfile_in=dbfile_in,result_dir = result_dir)
-        #data_manager=DataManager.from_existing(dbfile_in='model_perf.nc', result_dir='/usr/scratch4/sima9999/work/modal_uq/')
+        # data_manager = DataManager.from_existing(dbfile_in=dbfile_in,result_dir = result_dir)
+        # data_manager=DataManager.from_existing(dbfile_in='model_perf.nc', result_dir='/usr/scratch4/sima9999/work/modal_uq/')
         data_manager = DataManager.from_existing(
             dbfile_in='model_perf2.nc', result_dir='/usr/scratch4/sima9999/work/modal_uq/')
         with data_manager.get_database('merged') as ds:
@@ -1813,29 +1802,31 @@ def test():
         # data_manager.clear_failed(dryrun=False)
         # data_manager.clear_locks()
         # data_manager.clear_wdirs(delnonempty=False)
-        #data_manager.post_process_samples(db='merged', func=process_model_perf)
+        # data_manager.post_process_samples(db='merged', func=process_model_perf)
         # data_manager.clear_locks()
-        
-        
+
+
 def test2():
     np.array(None)
+
     def dummy(**kwargs):
         print(kwargs.get('jid'))
         return (np.array(None),)
+
     result_dir = '/usr/scratch4/sima9999/work/modal_uq/poly-dm-test'
     dm = DataManager.from_existing('example.nc', result_dir, '/dev/shm/womo1998/')
     logger.setLevel(logging.DEBUG)
     dm.evaluate_samples(dummy, {}, {'dummy':()}, use_lock=False, remote_kwargs={})
-    
+
 
 def main():
     logger.setLevel(level=logging.INFO)
     result_dir = '/usr/scratch4/sima9999/work/modal_uq/uq_modal_beam/samples/'
-    
-    dm_grid = DataManager.from_existing('uq_modal_beam.nc', result_dir, 
+
+    dm_grid = DataManager.from_existing('uq_modal_beam.nc', result_dir,
                                         working_dir='/dev/shm/womo1998/')
     dm_grid.dbfile_out = os.path.join(dm_grid.result_dir, 'uq_modal_beam_valid.nc')
-    
+
     from UQ_Modal_Beam import mapping_validate
     arg_vars = {'b':'b',
             't':'t',
@@ -1845,8 +1836,8 @@ def main():
             'zeta':'zeta',
             'dD':'dD',
             'ice_occ':'ice_occ',
-            'ice_mass':'ice_mass',}
-    
+            'ice_mass':'ice_mass', }
+
     # populate output db with the ids at least
     # with dm_grid.get_database(database='out', rw=True) as out_ds, dm_grid.get_database(database='in', rw=False) as in_ds:
     #     ids = in_ds.coords['ids']
@@ -1856,9 +1847,9 @@ def main():
     #         shape=(num_samples,), fill_value=np.nan))
     #     out_ds['_exceptions'] = (['ids'], np.full(
     #         shape=(num_samples,), fill_value=''))
-    
-    dm_grid.evaluate_samples(mapping_validate, arg_vars, ret_names={'valid':(),'time':()}, chwdir=False, dry_run=True, chunks_submit=100000)
-    
+
+    dm_grid.evaluate_samples(mapping_validate, arg_vars, ret_names={'valid':(), 'time':()}, chwdir=False, dry_run=True, chunks_submit=100000)
+
     # with dm_grid.get_database('in') as in_ds:
     #     res=True
     #     n=0
@@ -1877,10 +1868,11 @@ def main():
     #         print(res)
     #         break
 
+
 if __name__ == '__main__':
-    
+
     test2()
-        
+
     # test_imports()
-    
-    #test_categorical()
+
+    # test_categorical()
