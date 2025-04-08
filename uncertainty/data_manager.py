@@ -796,15 +796,15 @@ class DataManager(object):
                 save_samples(ret_sets, ret_names, total_num_samples, default_len)
             sav_time = int(max(time.time() - now, sav_time))
 
+            self.futures.difference_update(ready)
+
             if len(wait) == 0:
                 logger.info(
                     f"Finished all remaining {finished} samples in {comp_time:1.2f} s (async. save time: {time.time() - now:1.2f} s).")
-
                 break
-
-            self.futures.difference_update(ready)
-            logger.info(
-                f"Finished {finished} samples in {comp_time:1.2f} s (async. save time: {time.time() - now:1.2f} s). Remaining {len(self.futures)} samples.")
+            else:
+                logger.info(
+                    f"Finished {finished} samples in {comp_time:1.2f} s (async. save time: {time.time() - now:1.2f} s). Remaining {len(self.futures)} samples.")
         # ray.shutdown()
         return len(ids) - chunks_submit
 
