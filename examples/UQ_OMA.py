@@ -31,44 +31,49 @@ from uncertainty.polymorphic_uncertainty import MassFunction, RandomVariable, Po
 
 
 def sensitive_vars(ret_name, vars_epi):
-    sensitive_names = {'snr_db':['sensor_noise_rms',
-                                 'spectral_noise_slope',
-                                 'range_estimation_margin',
-                                 'anti_aliasing_cutoff_factor',
-                                 'quant_bit_factor', ],  # 72 hypercubes
+    sensitive_names = {'snr_db':['sensor_noise_rms',  # 4
+                                 'spectral_noise_slope',  # 1
+                                 'DAQ_noise_rms',  # 1
+                                 'anti_aliasing_cutoff_factor',  # 3
+                                 'quant_bit_factor', ],  # 36 hypercubes
                        'snr_db_est':['sensor_noise_rms',
                                  'spectral_noise_slope',
-                                 'range_estimation_margin',
+                                 'DAQ_noise_rms',
                                  'anti_aliasing_cutoff_factor',
-                                 'quant_bit_factor', ],  # 72 hypercubes
+                                 'quant_bit_factor', ],  # 36 hypercubes
                        'f_sc':[],  # 2
                        'f_cf':[],  # 3
                        'f_sd':[],  # 4
                        'd_sd':[],  # 5
-                       'sum_mc_sc':['spectral_noise_slope',
-                                    'sensor_noise_rms',
-                                    'DAQ_noise_rms',
-                                    'decimation_factor',
-                                    'duration',
-                                    'm_lags',
-                                    'estimator',
-                                    'model_order'],  #  144 hypercubes
-                       'sum_mc_cf':['spectral_noise_slope',
-                                    'sensor_noise_rms',
-                                    'DAQ_noise_rms',
-                                    'decimation_factor',
-                                    'duration',
-                                    'm_lags',
-                                    'estimator',
-                                    'model_order'],  #  144 hypercubes
-                       'sum_mc_sd':['spectral_noise_slope',
-                                    'sensor_noise_rms',
-                                    'DAQ_noise_rms',
-                                    'decimation_factor',
-                                    'duration',
-                                    'm_lags',
-                                    'estimator',
-                                    'model_order'],  # 144 hypercubes
+                       'sum_mc_sc':['model_order',  # 3
+                                    'duration',  # 3
+                                    'tau_max',  # 2
+                                    'DAQ_noise_rms',  # 1
+                                    'sensor_noise_rms',  # 4
+                                    'estimator',  # 2
+                                    ],  #  144 hypercubes
+                       'sum_mc_cf':['model_order',  # 3
+                                    'decimation_factor',  # 3
+                                    'tau_max',  # 2
+                                    'duration',  # 3
+                                    # 'sensor_noise_rms',#4
+                                    # 'spectral_noise_slope',
+                                    # 'DAQ_noise_rms',
+                                    # 'm_lags',
+                                    'estimator',  # 2
+                                    ],  #  108 hypercubes
+                       'sum_mc_sd':['sensor_noise_rms',  # 4
+                                    'spectral_noise_slope',  # 1
+                                    'model_order',  # 3
+                                    'tau_max',  # 2
+                                    'DAQ_noise_rms',  # 1
+                                    'duration',  # 3
+                                    # 'DTC',
+                                    # 'anti_aliasing_cutoff_factor',
+                                    # 'duration',
+                                    # 'm_lags',
+                                    # 'estimator'
+                                    ],  # 72 hypercubes
                        }[ret_name]
     sensitive_names.append('c_vb')
     sensitive_names.append('lamda_vb')
@@ -458,7 +463,7 @@ def _stage3mapping(m_lags, estimator,
 
     prep_signals = None
     if os.path.exists(this_result_dir / 'prep_signals.npz') and skip_existing:
-        if id_ale.startswith(('1', '2', '3','70')):
+        if id_ale.startswith(('1', '2', '3', '70')):
             logger.warning(f'The saved PreProcessSignals for {jid} might belong to the errorneous first run!')
         try:
             prep_signals = PreProcessSignals.load_state(this_result_dir / 'prep_signals.npz')
@@ -1285,7 +1290,7 @@ def vars_definition(stage=2):
     sensor_noise_rms.primary = True
 
     range_estimation_duration = MassFunction('range_estimation_duration', [(30.,), (60, 120), (300,)], [0.2, 0.5, 0.3], primary=False)
-    range_estimation_duration.pretty_name = r'$d$'
+    range_estimation_duration.pretty_name = r'$d_U$'
     range_estimation_margin = MassFunction('range_estimation_margin', [(2., 5.), (5., 10.)], [0.6, 0.4], primary=False)
     range_estimation_margin.pretty_name = r'$\sfrac{U_\mathrm{q}}{U_\mathrm{q,eff}}$'
     # Formal definition of meas_range is based on the signal itself and cannot be done using simple RandomVariabls
@@ -1326,7 +1331,7 @@ def vars_definition(stage=2):
     m_lags = MassFunction('m_lags', [(20, 1000), (50, 300)], [0.4, 0.6], primary=True)
     m_lags.pretty_name = r'$M$'
 
-    model_order = MassFunction('model_order', [(10, 100), ], [1.0, ], primary=True)
+    model_order = MassFunction('model_order', [(10, 30), (20, 60), (10, 100)], [0.4, 0.4, 0.2], primary=True)
     model_order.pretty_name = r'$n_\mathrm{ord} $'
 
     estimator = MassFunction('estimator', [(1,), (0,)], [0.6, 0.4])  # 0: welch, 1: blackman-tukey
