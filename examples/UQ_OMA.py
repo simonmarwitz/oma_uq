@@ -86,7 +86,7 @@ def sensitive_vars(ret_name, vars_epi):
 def est_imp(poly_uq, result_dir, ret_name, ret_ind):
     # from SciPy Docs: approximate average distance between nodes (which is a good start)
     epsilon_dict = {'snr_db':3.5,
-                 'snr_db_est':2,
+                 'snr_db_est':3.5,
                  'f_sc':2,
                  'f_cf':2,
                  'f_sd':2,
