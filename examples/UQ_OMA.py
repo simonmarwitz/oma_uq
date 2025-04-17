@@ -1318,7 +1318,7 @@ def vars_definition(stage=2):
 
     # will be multiplied by 4 to enable sampling 12,16,24 and nothing in between
     quant_bit_factor = MassFunction('quant_bit_factor', [(3,), (4,), (6,)], [0.1, 0.3, 0.6], primary=True)
-    quant_bit_factor.pretty_name = r'$b$'
+    quant_bit_factor.pretty_name = r'$n_\mathrm{b}$'
 
     # duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60.,), (120.*60.,)], [0.1, 0.2, 0.5, 0.2], primary=True)
     duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60., 120.*60.)], [0.1, 0.4, 0.5], primary=True)
