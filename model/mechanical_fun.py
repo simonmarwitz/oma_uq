@@ -1298,30 +1298,30 @@ def identify_student():
             print(line)
             m = 1
             if source_num == 0:
-                id, omega, zeta, R, deltat = [float(s.strip()) if j > 0 else s.strip() for j, s in enumerate(line.split(',')) ]
+                _id, omega, zeta, R, deltat = [float(s.strip()) if j > 0 else s.strip() for j, s in enumerate(line.split(',')) ]
                 k = omega ** 2 * m
                 d = zeta * (2 * np.sqrt(k * m))
-                # descr_new.write("{},\t{:1.3f},\t{:1.4f},\t{:1.5f}\n".format(id,k,d,R,deltat))
+                # descr_new.write("{},\t{:1.3f},\t{:1.4f},\t{:1.5f}\n".format(_id,k,d,R,deltat))
             elif source_num == 1:
-                id, omega, zeta, deltat = [float(s.strip()) if j > 0 else s.strip() for j, s in enumerate(line.split(',')) ]
+                _id, omega, zeta, deltat = [float(s.strip()) if j > 0 else s.strip() for j, s in enumerate(line.split(',')) ]
                 k = omega ** 2 * m
                 d = zeta * (2 * np.sqrt(k * m))
-                # descr_new.write("{},\t{:1.3f},\t{:1.4f},\t{:1.5f}\n".format(id,k,d,deltat))
+                # descr_new.write("{},\t{:1.3f},\t{:1.4f},\t{:1.5f}\n".format(_id,k,d,deltat))
             elif source_num == 2:
-                id, omega, zeta, R, deltat, nl_ity = [float(s.strip()) if j > 0 else s.strip() for j, s in enumerate(line.split(',')) ]
+                _id, omega, zeta, R, deltat, nl_ity = [float(s.strip()) if j > 0 else s.strip() for j, s in enumerate(line.split(',')) ]
                 k = omega ** 2 * m
                 d = zeta * (2 * np.sqrt(k * m))
-                # descr_new.write("{},\t{:1.3f},\t{:1.4f},\t{:1.5f},\t{:1.5f},\t{:1.3f}\n".format(id,k,d,R,deltat,nl_ity))
+                # descr_new.write("{},\t{:1.3f},\t{:1.4f},\t{:1.5f},\t{:1.5f},\t{:1.3f}\n".format(_id,k,d,R,deltat,nl_ity))
             elif source_num == 3:
-                id, omega, zeta, d_max, deltat, nl_ity = [float(s.strip()) if j > 0 else s.strip() for j, s in enumerate(line.split(',')) ]
+                _id, omega, zeta, d_max, deltat, nl_ity = [float(s.strip()) if j > 0 else s.strip() for j, s in enumerate(line.split(',')) ]
                 k = omega ** 2 * m
                 d = zeta * (2 * np.sqrt(k * m))
-                # descr_new.write("{},\t{:1.3f},\t{:1.4f},\t{:1.5f},\t{:1.5f},\t{:1.3f}\n".format(id,k,d,d_max,deltat,nl_ity))
+                # descr_new.write("{},\t{:1.3f},\t{:1.4f},\t{:1.5f},\t{:1.5f},\t{:1.3f}\n".format(_id,k,d,d_max,deltat,nl_ity))
 
         # continue
 
             # print(f'zeta: {zeta*100} \%, omega: {omega} Hz')
-            ty = np.loadtxt(f'{source_folder}{id}.csv')
+            ty = np.loadtxt(f'{source_folder}{_id}.csv')
             # print(deltat, ty[2,0]-ty[1,0])
             if snr:
                 # SNR=u_eff,sig^2/u_eff,noise^2 (wikipedia: Signal-Rausch-Verhältnis: Rauschspannungsverhältnis)
@@ -1519,7 +1519,7 @@ def generate_mdof_time_hist(ansys, num_nodes=None, damping=None, nl_stiff=None, 
 
                 ax.plot(time_fine, free_decay(time_fine, 1, damping[mode], frequencies[mode] * 2 * np.pi, 0), label='ex')
                 ax.plot(time_fine, free_decay(time_fine, 1, damping_n, frequencies_n * 2 * np.pi, 0), label='est')
-                ax.plot(time_fine, free_decay(time_fine, *popt), label='id')
+                ax.plot(time_fine, free_decay(time_fine, *popt), label='_id')
 
                 ax.legend(loc=1)
                 ax2.legend(loc=1)
@@ -1602,7 +1602,7 @@ def generate_mdof_time_hist(ansys, num_nodes=None, damping=None, nl_stiff=None, 
             except Exception as e:
                 popt = [0, 0, 0, 0]
                 print(e)
-            ax.plot(t_vals_fine, free_decay(t_vals_fine, *popt), label=f'id f={popt[2]/2/np.pi:.5f} \t d={popt[1]:.5f}')
+            ax.plot(t_vals_fine, free_decay(t_vals_fine, *popt), label=f'_id f={popt[2]/2/np.pi:.5f} \t d={popt[1]:.5f}')
             ax.legend()
 
         ax.set_ylim((-4, 4))

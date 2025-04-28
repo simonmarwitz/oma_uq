@@ -30,6 +30,126 @@ global ansys
 from uncertainty.polymorphic_uncertainty import MassFunction, RandomVariable, PolyUQ
 
 
+def cluster_modes(_id, meth, N_max, N_start):
+    from uncertainty.data_manager import DataManager
+    from sklearn.cluster import OPTICS, cluster_optics_dbscan
+
+    import pickle
+
+    result_dir = Path('/scratch/sima9999/modal_uq/uq_oma_a/')
+
+    logfile = open(result_dir / (_id + '.log'), 'wt')
+    print(f'Starting clustering in {meth} with at most {N_max} samples', file=logfile)
+
+    dm_grid = None
+    if dm_grid is None:
+        dm_grid = DataManager.from_existing('dm_oma_a.nc',
+                                            result_dir=result_dir / 'samples',
+                                            working_dir='/dev/shm/womo1998/')
+
+    with dm_grid.get_database('out', False) as out_ds:
+        out_ds_keep = out_ds
+    with dm_grid.get_database('in', False) as in_ds:
+        in_ds_keep = in_ds
+
+    in_ds = in_ds_keep
+    out_ds = out_ds_keep
+
+    nyq = 70 / in_ds['decimation_factor'] / 2
+
+    f_sc = out_ds[f'f_{meth}'].data
+    d_sc = out_ds[f'd_{meth}'].data
+    # filter results, with hard constraints to reduce number of datapoints
+    # filter all frequencies that exceed the nyquist frequency
+    # filter was applied at f_c = 0.1 Hz
+    # we are currently not interested in any results for f>=5 Hz, there are only a low percentage of modes above 5 Hz -> reduce clustering demands
+    ind = (f_sc.data < nyq.data[:, None]) & (f_sc > 0.1) & (f_sc < 5) & (~np.isnan(f_sc)) & (d_sc < 20)
+    f_sc = f_sc[ind]
+    d_sc = d_sc[ind]
+    print(f'Number of points to be clustered {f_sc.shape}', file=logfile)
+
+    omega_sc = f_sc * 2 * np.pi
+    zeta_sc = d_sc / 100
+    nyq_max = 35
+
+    mu = -zeta_sc * omega_sc + 1j * omega_sc * np.sqrt(1 - zeta_sc ** 2)
+    lamda = np.exp(mu / nyq_max)
+
+    # from matplotlib import ticker
+    # with matplotlib.rc_context(get_pcd('print')):
+    #     fig = plt.figure()
+    #     ax = fig.add_subplot(111, aspect='equal')  # ,projection='polar')
+    #
+    #     # plt.plot(lamda.real, lamda.imag, ls='none', marker=',')
+    #     mp = ax.hist2d(lamda.real, lamda.imag, bins=(np.linspace(-1.0, 1.0, 5000), np.linspace(0, 1.0, 2500)), cmap='Greys')  # , norm='log')
+    #     _zeta = np.linspace(0, 1)
+    #     for f in [ 0.15696927, 0.16334915, 0.17907126, 0.1797327 , 0.3154164 , 0.33520363, 0.58013491, 0.6038054 , 1.19951567, 1.2494742 , 2.01113836, 2.0974408 , 3.03492814, 3.16726121, 4.2853773 , 4.47227961,
+    #               # 5.75791544,  6.00769074,  7.44085249,  7.76186644,  9.32672286,  9.72715841, 11.41472027, 11.90226129, 13.70563292, 14.28735387, 16.19654751, 16.87903915
+    #              ]:
+    #         # continue
+    #         _omega = f * 2 * np.pi
+    #         _mu = -_zeta * _omega + 1j * _omega * np.sqrt(1 - _zeta ** 2)
+    #         _lamda = np.exp(_mu / nyq_max)
+    #         ax.plot(_lamda.real, _lamda.imag, c='dimgrey', ls='solid', alpha=0.2)
+    #
+    #     ax.set_xlabel('$\mathfrak{R}(\lambda)$')
+    #     ax.set_ylabel('$\mathfrak{I}(\lambda)$')
+    #     ax.set_xlim((0, 1))
+    #     # axp = fig.add_axes(plt.gca().get_position(), frameon = False, projection='polar',aspect='equal')
+    #     # axp.set_xlim((0,np.pi/2))
+    #     # def fmt_two_digits(x, pos):
+    #     #     return f'${x/2/np.pi*35:.2f}$ \\si{{\\hertz}}'
+    #     # axp.xaxis.set_major_formatter(ticker.FuncFormatter(fmt_two_digits))
+    #     # axp.grid(False, axis='x')
+    #     # axp.set_yticks((0,1), labels=['',''])
+    #     fig.colorbar(mp[-1])
+
+    now = time.time()
+    clust = OPTICS(min_samples=0.005,  # also identifies the mode at 4.5 Hz
+                   # min_samples=0.01, # only those modes, that were identified at least 1 % are considered
+                   xi=0.05,
+                   min_cluster_size=0.05,
+                   # max_eps=0.0015,# the manually defined cluster radius
+                   # max_eps=0.0004, # works as well
+                   max_eps=0.0004,  # works as well
+                  memory='/scratch/sima9999/tmp/',
+                   n_jobs=12
+                  )
+    X = np.hstack((lamda.real[:, np.newaxis], lamda.imag[:, np.newaxis]))
+    this_X = X[N_start:N_start + N_max,:]
+    # 2.5e6 take about 1...2 days, an increase by one order results in an increase of order 100 in computational time
+    # this_X = X
+    clust.fit(this_X)
+    print(f'{time.time()-now} seconds progressed', file=logfile)
+
+    with open(result_dir / (_id + '.pkl'), 'wb') as f:
+        pickle.dump(clust, f)
+    np.savez(result_dir / (_id + '.npz'), this_X)
+
+    space = np.arange(len(this_X))
+    reachability = clust.reachability_[clust.ordering_]
+    labels = clust.labels_[clust.ordering_]
+
+    labels = cluster_optics_dbscan(
+        reachability=clust.reachability_,
+        core_distances=clust.core_distances_,
+        ordering=clust.ordering_,
+        # eps=0.0004 #needed to separate the two lowest order modes
+        eps=0.0003
+        # eps=1
+        )
+    print(np.unique(labels), file=logfile)
+    # sizes = []
+    # for klass in np.unique(labels)[1:]:
+    #
+    #     Xk = this_X[labels == klass]
+    #     sizes.append(Xk.shape[0])
+    #     ax.plot(Xk[:, 0], Xk[:, 1], ls='none', marker=',')
+    #
+    # print(sizes, np.min(sizes), np.mean(sizes), np.max(sizes), this_X[labels == -1].shape[0])
+    # plt.show()
+
+
 def sensitive_vars(ret_name, vars_epi):
     sensitive_names = {'snr_db':['sensor_noise_rms',  # 4
                                  'spectral_noise_slope',  # 1
@@ -1436,4 +1556,6 @@ def main():
 
 
 if __name__ == '__main__':
-    vars_definition(stage=2)
+    # vars_definition(stage=2)
+
+    cluster_modes(sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))
