@@ -1617,6 +1617,8 @@ class PolyUQ(object):
         inp_suppl_ale = self.inp_suppl_ale
 
         out_samp = self.out_samp  # Here we may choose from multiple output quantities, cluster output, etc.
+        if out_samp.dtype != np.float64:
+            logger.warning(f'The output samples are not 64-bit floats but {out_samp.dtype}, various numpy function might be inaccurate')
 
         # extract underlying numpy array in the order of vars_epi for faster indexing
         x_samp = inp_samp_prim[[var.name for var in vars_imp]].values[:N_mcs_imp,:]  # shape (S,n_vars_imp)
