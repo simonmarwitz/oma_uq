@@ -111,16 +111,46 @@ def sensitive_vars(ret_name, vars_epi):
                                  'spectral_noise_slope',  # 1
                                  'DAQ_noise_rms',  # 1
                                  'anti_aliasing_cutoff_factor',  # 3
-                                 'quant_bit_factor', ],  # 36 hypercubes
-                       'snr_db_est':['sensor_noise_rms',
-                                 'spectral_noise_slope',
-                                 'DAQ_noise_rms',
-                                 'anti_aliasing_cutoff_factor',
-                                 'quant_bit_factor', ],  # 36 hypercubes
-                       'f_sc':[],  # 2
-                       'f_cf':[],  # 3
-                       'f_sd':[],  # 4
-                       'd_sd':[],  # 5
+                                 'quant_bit_factor',  # 3
+                                 ],  # 36 hypercubes
+                       'snr_db_est':['sensor_noise_rms',  # 4
+                                 'spectral_noise_slope',  # 1
+                                 'DAQ_noise_rms',  # 1
+                                 'anti_aliasing_cutoff_factor',  # 3
+                                 'quant_bit_factor',  # 3
+                                 ],  # 36 hypercubes
+                       'f_sc':['model_order',  # 3
+                               'estimator',  # 2
+                               'duration',  # 3
+                               'tau_max',  # 2
+                               ],  # 24 hypercubes
+                       'f_cf':['tau_max',  # 2
+                               'm_lags',  # 2
+                               'estimator',  # 2
+                               'duration',  # 3
+                               'decimation_factor'  # 3
+                               ],  # 72 hypercubes
+                       'f_sd':['model_order',  # 3
+                               'duration',  # 3
+                               'decimation_factor'  # 3
+                               ],  # 27 hypercubes
+                       'd_sc':['model_order',  # 3
+                               'm_lags',  # 2
+                               'tau_max',  # 2
+                               'sensitivity_deviation',  # 3
+                               'decimation_factor'  # 3
+                               ],  # 108 hypercubes
+                       'd_cf':['estimator',  # 2
+                               'model_order',  # 3
+                               'm_lags',  # 2
+                               'tau_max',  # 2
+                                    ],  # 24 hypercubes
+                       'd_sd':['model_order',  # 3
+                               'tau_max',  # 2
+                               'm_lags',  # 2
+                               'sensitivity_deviation',  # 3
+                               'decimation_factor'  # 3
+                               ],  # 108 hypercubes
                        'sum_mc_sc':['model_order',  # 3
                                     'duration',  # 3
                                     'tau_max',  # 2
@@ -218,7 +248,7 @@ def est_imp(poly_uq, result_dir, ret_name, ret_ind):
         start_ale = end_ale
 
 
-def multi_sensi(vars_ale, vars_epi, result_dir, ret_names, method, **kwargs):
+def multi_sensi(vars_ale, vars_epi, result_dir, ret_names, method, fname=None, **kwargs):
 
     dim_ex = 'cartesian'
     ret_ind = {}
@@ -227,11 +257,15 @@ def multi_sensi(vars_ale, vars_epi, result_dir, ret_names, method, **kwargs):
     pretty_names = []
     for ret_name in ret_names:
         poly_uq = PolyUQ(vars_ale, vars_epi, dim_ex=dim_ex)
-        ret_dir = f'{ret_name}-{".".join(str(e) for e in ret_ind.values())}'
+        # ret_dir = f'{ret_name}-{".".join(str(e) for e in ret_ind.values())}'
+        ret_dir = ret_name
 
         samp_path = result_dir / 'polyuq_samp.npz'
         prop_path = result_dir / 'estimations' / f'{ret_dir}/polyuq_prop.npz'
-        sens_path = result_dir / 'estimations' / f'{ret_dir}/polyuq_sens.npz'
+        if method == 'dens':
+            sens_path = result_dir / 'estimations' / f'{ret_dir}/polyuq_sensD.npz'
+        else:
+            sens_path = result_dir / 'estimations' / f'{ret_dir}/polyuq_sens.npz'
 
         poly_uq.load_state(samp_path, differential='samp')
         poly_uq.load_state(prop_path, differential='prop')
@@ -248,49 +282,56 @@ def multi_sensi(vars_ale, vars_epi, result_dir, ret_names, method, **kwargs):
             pretty_names.append(poly_uq.pretty_out_name)
         else:
             pretty_names.append(ret_name)
-        print(poly_uq.pretty_out_name)
         s_vals.append(S)
 
-    s_vals = np.array(s_vals)
-    # print(s_vals)
-
-    im_ratio = s_vals.shape[0] / s_vals.shape[1]
-    pcd = get_pcd('print')
-    # pcd['figure.figsize'] = (pcd['figure.figsize'][0], pcd['figure.figsize'][0] * im_ratio)
     labels = [var.pretty_name for var in vars_ale if var.primary] + [var.pretty_name for var in vars_epi if var.primary]
+
+    s_vals = np.array(s_vals)
+    if 'inds' in kwargs:
+        inds = kwargs['inds']
+        s_vals = s_vals[:, inds]
+        names = np.array(names)[inds]
+        labels = np.array(labels)[inds]
+
+    # compute aspect ratio of the axes
+    im_ratio = s_vals.shape[0] / s_vals.shape[1]
+
+    # get print context dict and modify it accordingly
+    pcd = get_pcd('print')
+    figure_width = 1 * pcd['figure.figsize'][0]
+
+    # ensure figure has the same aspect ratio as the axes and labels fit into it
+    pcd['figure.figsize'] = (pcd['figure.figsize'][0] + 0.9, pcd['figure.figsize'][0] * im_ratio + 0.9)  # + 0.9 in , + 0.9 in => ylabel + yticklabels, xlabels + xticklabels
+
+    # rescale to make sure figure does not extend paper width
+    scale = pcd['figure.figsize'][0] / figure_width
+    pcd['figure.figsize'] = (pcd['figure.figsize'][0] / scale, pcd['figure.figsize'][1] / scale)
+
     with matplotlib.rc_context(pcd):
     # if True:
-        plt.figure()
-        plt.imshow(s_vals,
+        fig = plt.figure()
+        ax0 = fig.add_subplot()
+        im1 = ax0.imshow(s_vals,
                    vmin=0,
                    # vmax=0.4,
                   cmap='Greys',
                    # norm='log'
                   )
 
-        plt.colorbar(fraction=0.0465 * im_ratio, pad=0.04, label='Sensitivity $\hat{S}_1$')
         if len(ret_names) > 1:
-            plt.gca().set_yticks(np.arange(len(pretty_names)), pretty_names)
+            ax0.set_yticks(np.arange(len(pretty_names)), pretty_names)
 
-        # names_dict = {'N_wire':'$N_\mathrm{cbl}$',
-        #               'dD':'$d_\mathrm{D}$',
-        #               'ice_occ':'$\mathfrak{I}_\mathrm{occ}$',
-        #               'b':'$b$',
-        #               't':'$t$',
-        #               'add_mass':'$m_\mathrm{add}$',
-        #               'A_wire':'$A_\mathrm{cbl}$',
-        #               'zeta':'$\zeta_\mathrm{glob}$',
-        #               'ice_mass':'$\mathfrak{I}_\mathrm{m}$'}
-        # plt.gca().set_yticks(np.arange(len(names)), [names_dict[name] for name in names])
-
-        plt.gca().set_xticks(np.arange(len(labels)), labels, rotation=90)
-        plt.ylabel('Output variable')
-        plt.xlabel('Input variable')
-        plt.subplots_adjust(top=0.97, bottom=0.6, left=0.2, right=0.9, hspace=0.05)
-
-        plt.savefig('/home/sima9999/2019_OMA_UQ/tex/figures/examples/uq_oma_a/sensi_all.pdf', backend='pgf')
-        plt.savefig('/home/sima9999/2019_OMA_UQ/tex/figures/examples/uq_oma_a/sensi_all.png', backend='pgf')
-    return
+        ax0.set_xticks(np.arange(len(labels)), labels, rotation=90)
+        ax0.set_ylabel('Output variable')
+        ax0.set_xlabel('Input variable')
+        # ensure at least 0.1 in, 0.8 in, 0.8 in, 0.1 in of space around axes,
+        # expanding the axes, until either height or width is reached and positions it at the given ratio
+        w, h = fig.get_size_inches()
+        plt.subplots_adjust(top=(h - 0.1) / h, bottom=0.8 / h, left=0.8 / w, right=(w - 0.1) / w)
+        if fname is not None:
+            plt.savefig(f'/home/sima9999/2019_OMA_UQ/tex/figures/examples/uq_oma_a/{fname}.pdf', backend='pgf')
+            plt.savefig(f'/home/sima9999/2019_OMA_UQ/tex/figures/examples/uq_oma_a/{fname}.png', backend='pgf')
+        return
 
 
 def test_interpolation(vars_ale, vars_epi, result_dir, ret_name, ret_ind, N_mcs_ale, epsilon):
@@ -1398,7 +1439,6 @@ def vars_definition(stage=2):
 
     # duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60.,), (120.*60.,)], [0.1, 0.2, 0.5, 0.2], primary=True)
     duration = MassFunction('duration', [(10.*60., 20.*60.), (30.*60., 45.*60.), (60.*60., 120.*60.)], [0.1, 0.4, 0.5], primary=True)
-
     duration.pretty_name = r'$T$'
 
     tau_max = MassFunction('tau_max', [(20.0, 175.0), (60.0, 175.0)], [0.5, 0.5], primary=True)
