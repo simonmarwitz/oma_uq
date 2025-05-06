@@ -1692,17 +1692,20 @@ class PolyUQ(object):
             imp_foc[iter_ale, 0, 1] = np.max(out_samp[iter_ale,:], axis=1)
 
             iter_ale = []
-
+        logger.warning('Remember to reset refresh_secs to 240 s')
         # pbar = simplePbar(n_imp_hyc * len(iter_ale))
         if 'RAY_JOB_ID' in os.environ or plot_res:
             bar_kwargs = {
                 'force_tty':True,
-                'refresh_secs':60,  # every four minutes
+                'refresh_secs':10,  # every four minutes
                 'bar':None,
                 'spinner':None,
                 'enrich_print':False}
         else:
             bar_kwargs = {'force_tty':True}
+
+        # keyword argument to compute only the interpolator validation, in order to tune parameters
+        intp_eval = kwargs.pop('intp_eval', False)
 
         with  alive_bar(n_imp_hyc * len(iter_ale), **bar_kwargs) as pbar:
             for n_ale in iter_ale:
@@ -1803,6 +1806,11 @@ class PolyUQ(object):
                     intp_errors[n_ale] = intp_err
 
                     if logger.isEnabledFor(logging.DEBUG): logger.debug(f'Took {time.time()-now:1.2f} s to cross-validate interpolator.')
+
+                if intp_eval:
+                    for i_hyc, hypercube in enumerate(imp_hyc_foc_inds):
+                        pbar()
+                    continue
 
                 now = time.time()
                 numeric_focals = [var.numeric_focals for var in vars_imp]  # no-imp => []
