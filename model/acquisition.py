@@ -945,14 +945,15 @@ class Acquire(object):
         num_channels = self.num_channels
         self.snr = [np.mean(signal ** 2, axis=1), np.zeros((num_channels,))]
 
-    def estimate_snr(self):
+    def estimate_snr(self, n_lines_fac=1):
         _, signal = self.get_signal()
         num_timesteps = self.num_timesteps
-        n_lines = num_timesteps
+        n_lines = num_timesteps // n_lines_fac
 
         # it increase variance and does not improve the result in any other sense
         # when using less than the maximally possible number of segments
-        n_segments = max(num_timesteps // (n_lines // 2), 1)
+        # n_segments = max(num_timesteps // (n_lines // 2), 1)
+        n_segments = max(num_timesteps // (n_lines), 1)
         fs = self.sampling_rate
 
         num_channels = self.num_channels
@@ -974,8 +975,9 @@ class Acquire(object):
                 _, Pxy_den = scipy.signal.csd(signal[channel_1,:],
                                               signal[channel_2,: ],
                                               fs,
-                                              nperseg=n_lines // 2,
-                                              nfft=n_lines,
+                                              # nperseg=n_lines // 2,
+                                              nperseg=n_lines,
+                                              # nfft=n_lines,
                                               noverlap=0,
                                               return_onesided=True,
                                               scaling='density',)
@@ -990,7 +992,7 @@ class Acquire(object):
                 # compensate onesided
                 Pxy_den /= 2
                 # compensate zero-padding
-                Pxy_den /= 2
+                # Pxy_den /= 2
                 # compensate energy loss through short segments
                 Pxy_den *= n_lines
 
@@ -1281,7 +1283,7 @@ class Acquire(object):
             modal_energies = validate_array(in_dict['self.modal_energies'])
             modal_amplitudes = validate_array(in_dict['self.modal_amplitudes'])
         else:
-            if not differential in ['sensed', 'sampled', 'nosigs','blablabla']:
+            if not differential in ['sensed', 'sampled', 'nosigs', 'blablabla']:
                 logger.warning(f'Unsupported value passed for differential={differential}')
             signal = np.full(re_shape, fill_value=np.nan)
             t_vals = np.full(re_shape[-1], fill_value=np.nan)
@@ -1927,6 +1929,93 @@ def filter_example():
 
 
 if __name__ == '__main__':
+    # import sys
+    # import os
+    # sys.path.append("/home/sima9999/code/")
+    # sys.path.append("/home/sima9999/git/pyOMA/")
+    # from pathlib import Path
+    #
+    # import matplotlib
+    # import matplotlib.pyplot as plt
+    # import numpy as np
+    # import pandas as pd
+    # import scipy.signal
+    #
+    # from uncertainty.polymorphic_uncertainty import PolyUQ
+    # from uncertainty.data_manager import DataManager
+    #
+    # from model.mechanical import Mechanical, MechanicalDummy
+    # from examples.UQ_OMA import plot_response_field, vars_definition, stage2mapping
+    # from helpers import get_pcd, tex_escape
+    #
+    # result_dir = Path('/scratch/sima9999/modal_uq/uq_oma_a/')
+    # working_dir = Path('/dev/shm/womo1998/')
+    #
+    # from model.mechanical import Mechanical, MechanicalDummy
+    #
+    # if os.path.split(result_dir)[-1] != 'samples':
+    #     result_dir = result_dir / 'samples'
+    #
+    # jid = '8fdfc90a_ee1f66b6'
+    # seed = int.from_bytes(bytes(jid, 'utf-8'), 'big')
+    #
+    # # load structural model
+    # mech = MechanicalDummy.load(fpath=result_dir / f'mechanical.npz')
+    #
+    # if not isinstance(result_dir, Path):
+    #     result_dir = Path(result_dir)
+    #
+    # if not isinstance(working_dir, Path):
+    #     working_dir = Path(working_dir)
+    #
+    # # Set up directories
+    # if '_' in jid:
+    #     id_ale, id_epi = jid.split('_')
+    #     this_result_dir = result_dir / id_ale
+    #     this_result_dir = this_result_dir / id_epi
+    #
+    # # Here's the Hack
+    # if os.path.exists(result_dir / id_ale / 'response.npz'):
+    #     arr = np.load(result_dir / id_ale / 'response.npz')
+    #     t_vals = arr['t_vals']
+    #     d_freq_time = arr['d_freq_time']
+    #     v_freq_time = arr['v_freq_time']
+    #     a_freq_time = arr['a_freq_time']
+    # else:
+    #     raise RuntimeError(f'{result_dir / id_ale / "response.npz"} does not exist')
+    #
+    # # Here's the Hack
+    # mech.t_vals_amb = t_vals
+    # mech.resp_hist_amb = [d_freq_time, v_freq_time, a_freq_time]
+    # mech.deltat = t_vals[1] - t_vals[0]
+    # mech.timesteps = t_vals.shape[0]
+    # mech.state[2] = True
+    #
+    # n_locations = 9
+    #
+    # # num_nodes = mech.num_nodes
+    # num_nodes = 203
+    #
+    # setups = sensor_position(n_locations, num_nodes, 'distributed')
+    # # select a setup based on a "random" integer modulo the total number of setups
+    # i_setup = seed % setups.shape[0]
+    # sensor_nodes = setups[i_setup,:]
+    # quant = 'a'
+    # quant = ['d', 'v', 'a'].index(quant)
+    # # list of (node, dof, quant)
+    # channel_defs = []
+    # for node in sensor_nodes:
+    #     # We work around the Hack from transient_ifrf, where we omitted the x-axis in the response,
+    #     # by wrongly definining dofs ux and uy instead of uy and uz
+    #
+    #     for dof in ['ux', 'uy']:
+    #         dof = ['ux', 'uy', 'uz'].index(dof)
+    #         channel_defs.append((node, dof, quant))
+    #
+    # acqui = Acquire.init_from_mech(mech, channel_defs)
+    #
+    # acqui.estimate_snr()
+
     # N=8192
     # dec_fact=4
     # numtap_fact=41
