@@ -190,16 +190,87 @@ def sensitive_vars(ret_name, vars_epi):
 
 
 def est_imp(poly_uq, result_dir, ret_name, ret_ind):
+    os.environ["MKL_NUM_THREADS"] = "64"
+    os.environ["OMP_NUM_THREADS"] = "64"
     # from SciPy Docs: approximate average distance between nodes (which is a good start)
-    epsilon_dict = {'snr_db':3.5,
-                 'snr_db_est':3.5,
-                 'f_sc':2,
-                 'f_cf':2,
-                 'f_sd':2,
-                 'd_sd':2,
-                 'sum_mc_sc':5.5,
-                 'sum_mc_cf':5.5,
-                 'sum_mc_sd':5.5}
+    epsilon_dict = {
+         'snr_db': 3.5,
+         'snr_db_est': 3.5,
+         'f_sc-0': 25,
+         'f_sc-1': 27,
+         'f_sc-2': 25,
+         'f_sc-3': 25,
+         'f_sc-4': 27,
+         'f_sc-5': 27,
+         'f_sc-6': 25,
+         'f_sc-7': 25,
+         'f_sc-8': 25,
+         'f_sc-9': 21,
+         'f_sc-10': 21,
+         'f_sc-11': 23,
+         'f_cf-0': 13,
+         'f_cf-1': 23,
+         'f_cf-2': 23,
+         'f_cf-3': 23,
+         'f_cf-4': 17,
+         'f_cf-5': 17,
+         'f_cf-6': 27,
+         'f_cf-7': 27,
+         'f_cf-8': 27,
+         'f_cf-9': 27,
+         'f_cf-10': 25,
+         'f_cf-11': 25,
+         'f_sd-0': 23,
+         'f_sd-1': 25,
+         'f_sd-2': 23,
+         'f_sd-3': 27,
+         'f_sd-4': 21,
+         'f_sd-5': 21,
+         'f_sd-6': 25,
+         'f_sd-7': 21,
+         'f_sd-8': 25,
+         'f_sd-9': 27,
+         'f_sd-10': 25,
+         'f_sd-11': 25,
+         'd_sc-0': 15,
+         'd_sc-1': 23,
+         'd_sc-2': 21,
+         'd_sc-3': 23,
+         'd_sc-4': 23,
+         'd_sc-5': 27,
+         'd_sc-6': 25,
+         'd_sc-7': 13,
+         'd_sc-8': 15,
+         'd_sc-9': 25,
+         'd_sc-10': 27,
+         'd_sc-11': 15,
+         'd_cf-0': 19,
+         'd_cf-1': 17,
+         'd_cf-2': 19,
+         'd_cf-3': 21,
+         'd_cf-4': 15,
+         'd_cf-5': 14,
+         'd_cf-6': 15,
+         'd_cf-7': 14,
+         'd_cf-8': 14,
+         'd_cf-9': 15,
+         'd_cf-10': 14,
+         'd_cf-11': 14,
+         'd_sd-0': 23,
+         'd_sd-1': 21,
+         'd_sd-2': 19,
+         'd_sd-3': 21,
+         'd_sd-4': 23,
+         'd_sd-5': 23,
+         'd_sd-6': 25,
+         'd_sd-7': 27,
+         'd_sd-8': 23,
+         'd_sd-9': 27,
+         'd_sd-10': 19,
+         'd_sd-11': 19,
+         'sum_mc_sc': 5.5,
+         'sum_mc_cf': 5.5,
+         'sum_mc_sd': 5.5}
 
     ret_dir = f'{ret_name}-{".".join(str(e) for e in ret_ind.values())}'
 
@@ -216,16 +287,16 @@ def est_imp(poly_uq, result_dir, ret_name, ret_ind):
     if os.path.exists(imp_path):
         poly_uq.load_state(imp_path, differential='imp')
 
-        samp_fin = np.nonzero(
+        samp_unfin = np.nonzero(
                 np.any(
                     np.isnan(poly_uq.imp_foc[:,:, 0]),
                     axis=1)
             )[0]
 
-        samp_fin = samp_fin[samp_fin > start_ale]
+        samp_unfin = samp_unfin[samp_unfin > start_ale]
 
-        if len(samp_fin) > 0:
-            start_ale = np.min(samp_fin)
+        if len(samp_unfin) > 0:
+            start_ale = np.min(samp_unfin)
         else:
             start_ale = poly_uq.imp_foc.shape[0]
 
@@ -238,11 +309,11 @@ def est_imp(poly_uq, result_dir, ret_name, ret_ind):
             plot_res=False,
             plot_intp=False,
             intp_err_warn=20,
-            extrp_warn=10,
+            extrp_warn=20,
             start_ale=start_ale,
             end_ale=end_ale,
             kernel='gaussian',
-            epsilon=epsilon_dict[ret_name]
+            epsilon=epsilon_dict[ret_dir]
         )
         poly_uq.save_state(imp_path, differential='imp')
         start_ale = end_ale

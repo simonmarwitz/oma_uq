@@ -1692,12 +1692,12 @@ class PolyUQ(object):
             imp_foc[iter_ale, 0, 1] = np.max(out_samp[iter_ale,:], axis=1)
 
             iter_ale = []
-        logger.warning('Remember to reset refresh_secs to 240 s')
+        # logger.warning('Remember to reset refresh_secs to 240 s')
         # pbar = simplePbar(n_imp_hyc * len(iter_ale))
         if 'RAY_JOB_ID' in os.environ or plot_res:
             bar_kwargs = {
                 'force_tty':True,
-                'refresh_secs':10,  # every four minutes
+                'refresh_secs':240,  # every four minutes
                 'bar':None,
                 'spinner':None,
                 'enrich_print':False}
