@@ -689,7 +689,7 @@ def _stage3mapping(m_lags, estimator,
     # Fix transients resulting from close-to-DC components in spectral noise  (sensor noise)
     prep_signals.filter_signals(highpass=0.1)
     if estimator == 'blackman-tukey':
-        prep_signals.corr_blackman_tukey(m_lags, num_blocks=n_blocks)
+        prep_signals.corr_blackman_tukey(m_lags, n_segments=n_blocks)
     elif estimator == 'welch':
         prep_signals.corr_welch(m_lags, n_segments=n_blocks)
 
