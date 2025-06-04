@@ -532,7 +532,6 @@ def _stage3mapping(m_lags, estimator,
                   jid, result_dir, working_dir, skip_existing=True, **kwargs):
     # logger = logging.getLogger(__name__)
     # logger.setLevel(level=logging.INFO)
-
     '''
     p + q = m_lags          -> num_block_rows = m_lags // 2
     p = q = m_lags // 2     -> num_block_rows = m_lags // 2
@@ -610,7 +609,6 @@ def _stage3mapping(m_lags, estimator,
             f_c,f f_cf, phi_cf, mc_cf: n_r * order modal parameter from pLSCF (typically four times as many modes)
             f_sd, f_sd, phi_sd, mc_sd: order modal parameter from SSIDataCV (only order//2 are present)
     '''
-
     assert model_order + 2 < m_lags
 
     if not isinstance(result_dir, Path):
@@ -1480,7 +1478,7 @@ def vars_definition(stage=2):
     range_estimation_duration = MassFunction('range_estimation_duration', [(30.,), (60, 120), (300,)], [0.2, 0.5, 0.3], primary=False)
     range_estimation_duration.pretty_name = r'$d_U$'
     range_estimation_margin = MassFunction('range_estimation_margin', [(2., 5.), (5., 10.)], [0.6, 0.4], primary=False)
-    range_estimation_margin.pretty_name = r'$\sfrac{U_\mathrm{q}}{U_\mathrm{q,eff}}$'
+    range_estimation_margin.pretty_name = r'$R_\mathrm{q}$'
     # Formal definition of meas_range is based on the signal itself and cannot be done using simple RandomVariabls
     # Actual implementation is in Acquire.estimate_meas_range, using a seed, derived from the sample ID
     # meas_range = RandomVariable(..., primary=True)
