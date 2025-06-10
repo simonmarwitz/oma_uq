@@ -113,11 +113,11 @@ def sensitive_vars(ret_name, vars_epi):
                                  'anti_aliasing_cutoff_factor',  # 3
                                  'quant_bit_factor',  # 3
                                  ],  # 36 hypercubes
-                       'snr_db_est':['sensor_noise_rms',  # 4
+                       'scs':['sensor_noise_rms',  # 4
                                  'spectral_noise_slope',  # 1
                                  'DAQ_noise_rms',  # 1
-                                 'anti_aliasing_cutoff_factor',  # 3
-                                 'quant_bit_factor',  # 3
+                                 'decimation_factor',  # 3
+                                 'n_locations',  # 3
                                  ],  # 36 hypercubes
                        'f_sc':['model_order',  # 3
                                'estimator',  # 2
@@ -195,7 +195,7 @@ def est_imp(poly_uq, result_dir, ret_name, ret_ind):
     # from SciPy Docs: approximate average distance between nodes (which is a good start)
     epsilon_dict = {
          'snr_db': 3.5,
-         'snr_db_est': 3.5,
+         'scs-': 4,
          'f_sc-0': 25,
          'f_sc-1': 27,
          'f_sc-2': 25,
