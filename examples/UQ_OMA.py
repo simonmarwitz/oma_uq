@@ -181,8 +181,8 @@ def sensitive_vars(ret_name, vars_epi):
                                     # 'estimator'
                                     ],  # 72 hypercubes
                        }[ret_name]
-    sensitive_names.append('c_vb')
-    sensitive_names.append('lamda_vb')
+    sensitive_names.append('c_vb')  # 2
+    sensitive_names.append('lamda_vb')  # 2
 
     sensitive_vars = [var for var in vars_epi if var.name in sensitive_names]
 
