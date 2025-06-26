@@ -2,6 +2,7 @@ import sys
 import os
 sys.path.append("/home/sima9999/code/")
 sys.path.append("/vegas/users/staff/womo1998/Projects/2019_OMA_UQ/code/")
+sys.path.append('/home/sima9999/git/PolyUQ/')
 
 import logging
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
@@ -27,11 +28,11 @@ from pyOMA.core.PLSCF import PLSCF
 from pyOMA.core.StabilDiagram import StabilCalc
 global ansys
 
-from uncertainty.polymorphic_uncertainty import MassFunction, RandomVariable, PolyUQ
+from polymorphic_uncertainty import MassFunction, RandomVariable, PolyUQ
 
 
 def cluster_modes(_id, meth, N_max, N_start):
-    from uncertainty.data_manager import DataManager
+    from data_manager import DataManager
     from sklearn.cluster import OPTICS, cluster_optics_dbscan
 
     import pickle
